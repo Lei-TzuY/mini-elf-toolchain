@@ -2,6 +2,7 @@
 
 pub mod elf64;
 pub mod layout;
+pub mod link_relocations;
 pub mod link_symbols;
 pub mod object_symbols;
 pub mod rela_apply;
