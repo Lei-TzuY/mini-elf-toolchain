@@ -7,5 +7,6 @@ pub mod object_symbols;
 pub mod rela_apply;
 pub mod relocations;
 pub mod resolve;
+pub mod symbol_addresses;
 pub mod symbol_names;
 pub mod x86_64_relocations;
