@@ -64,18 +64,8 @@ fn evaluates_negative_pc32_relocation() {
 
 #[test]
 fn accepts_signed_32_bit_boundaries() {
-    let max = evaluate_relocation(
-        &relocation(R_X86_64_PC32, i64::from(i32::MAX)),
-        0,
-        0,
-    )
-    .unwrap();
-    let min = evaluate_relocation(
-        &relocation(R_X86_64_PC32, i64::from(i32::MIN)),
-        0,
-        0,
-    )
-    .unwrap();
+    let max = evaluate_relocation(&relocation(R_X86_64_PC32, i64::from(i32::MAX)), 0, 0).unwrap();
+    let min = evaluate_relocation(&relocation(R_X86_64_PC32, i64::from(i32::MIN)), 0, 0).unwrap();
 
     assert_eq!(max, RelocationValue::I32(i32::MAX));
     assert_eq!(min, RelocationValue::I32(i32::MIN));
@@ -83,12 +73,8 @@ fn accepts_signed_32_bit_boundaries() {
 
 #[test]
 fn rejects_pc32_positive_overflow() {
-    let error = evaluate_relocation(
-        &relocation(R_X86_64_PC32, i64::from(i32::MAX) + 1),
-        0,
-        0,
-    )
-    .unwrap_err();
+    let error =
+        evaluate_relocation(&relocation(R_X86_64_PC32, i64::from(i32::MAX) + 1), 0, 0).unwrap_err();
 
     assert_eq!(
         error,
@@ -100,12 +86,8 @@ fn rejects_pc32_positive_overflow() {
 
 #[test]
 fn rejects_pc32_negative_overflow() {
-    let error = evaluate_relocation(
-        &relocation(R_X86_64_PC32, i64::from(i32::MIN) - 1),
-        0,
-        0,
-    )
-    .unwrap_err();
+    let error =
+        evaluate_relocation(&relocation(R_X86_64_PC32, i64::from(i32::MIN) - 1), 0, 0).unwrap_err();
 
     assert_eq!(
         error,
