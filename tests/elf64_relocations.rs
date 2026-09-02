@@ -1,6 +1,4 @@
-use mini_elf_toolchain::elf64::{
-    Elf64SectionHeader, Elf64Symbol, Elf64SymbolTable, SHT_SYMTAB,
-};
+use mini_elf_toolchain::elf64::{Elf64SectionHeader, Elf64Symbol, Elf64SymbolTable, SHT_SYMTAB};
 use mini_elf_toolchain::relocations::{
     rela_tables, Elf64Rela, RelaError, ELF64_RELA_SIZE, SHT_RELA,
 };
