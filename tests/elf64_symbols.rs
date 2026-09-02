@@ -10,23 +10,23 @@ const STRTAB_OFFSET: usize = SECTION_TABLE_OFFSET + SECTION_TABLE_SIZE;
 const STRTAB: &[u8] = b"\0foo\0";
 const SYMTAB_OFFSET: usize = STRTAB_OFFSET + STRTAB.len();
 
-fn write_section(
-    bytes: &mut [u8],
-    index: usize,
+struct SectionSpec {
     section_type: u32,
     offset: u64,
     size: u64,
     link: u32,
     alignment: u64,
     entry_size: u64,
-) {
+}
+
+fn write_section(bytes: &mut [u8], index: usize, spec: SectionSpec) {
     let base = SECTION_TABLE_OFFSET + index * ELF64_SECTION_HEADER_SIZE as usize;
-    bytes[base + 4..base + 8].copy_from_slice(&section_type.to_le_bytes());
-    bytes[base + 24..base + 32].copy_from_slice(&offset.to_le_bytes());
-    bytes[base + 32..base + 40].copy_from_slice(&size.to_le_bytes());
-    bytes[base + 40..base + 44].copy_from_slice(&link.to_le_bytes());
-    bytes[base + 48..base + 56].copy_from_slice(&alignment.to_le_bytes());
-    bytes[base + 56..base + 64].copy_from_slice(&entry_size.to_le_bytes());
+    bytes[base + 4..base + 8].copy_from_slice(&spec.section_type.to_le_bytes());
+    bytes[base + 24..base + 32].copy_from_slice(&spec.offset.to_le_bytes());
+    bytes[base + 32..base + 40].copy_from_slice(&spec.size.to_le_bytes());
+    bytes[base + 40..base + 44].copy_from_slice(&spec.link.to_le_bytes());
+    bytes[base + 48..base + 56].copy_from_slice(&spec.alignment.to_le_bytes());
+    bytes[base + 56..base + 64].copy_from_slice(&spec.entry_size.to_le_bytes());
 }
 
 fn valid_symbol_file() -> Vec<u8> {
@@ -46,22 +46,26 @@ fn valid_symbol_file() -> Vec<u8> {
     write_section(
         &mut bytes,
         1,
-        SHT_STRTAB,
-        STRTAB_OFFSET as u64,
-        STRTAB.len() as u64,
-        0,
-        1,
-        0,
+        SectionSpec {
+            section_type: SHT_STRTAB,
+            offset: STRTAB_OFFSET as u64,
+            size: STRTAB.len() as u64,
+            link: 0,
+            alignment: 1,
+            entry_size: 0,
+        },
     );
     write_section(
         &mut bytes,
         2,
-        SHT_SYMTAB,
-        SYMTAB_OFFSET as u64,
-        ELF64_SYMBOL_SIZE * 2,
-        1,
-        8,
-        ELF64_SYMBOL_SIZE,
+        SectionSpec {
+            section_type: SHT_SYMTAB,
+            offset: SYMTAB_OFFSET as u64,
+            size: ELF64_SYMBOL_SIZE * 2,
+            link: 1,
+            alignment: 8,
+            entry_size: ELF64_SYMBOL_SIZE,
+        },
     );
     bytes[STRTAB_OFFSET..STRTAB_OFFSET + STRTAB.len()].copy_from_slice(STRTAB);
 
