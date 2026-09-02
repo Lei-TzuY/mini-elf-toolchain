@@ -91,22 +91,22 @@ where
             });
         }
 
-        let address = align_up(cursor, section.alignment).ok_or(
-            SectionLayoutError::AlignmentOverflow {
+        let address =
+            align_up(cursor, section.alignment).ok_or(SectionLayoutError::AlignmentOverflow {
                 object_index: section.object_index,
                 section_index: section.section_index,
                 address: cursor,
                 alignment: section.alignment,
-            },
-        )?;
-        cursor = address
-            .checked_add(section.size)
-            .ok_or(SectionLayoutError::SectionEndOverflow {
-                object_index: section.object_index,
-                section_index: section.section_index,
-                address,
-                size: section.size,
             })?;
+        cursor =
+            address
+                .checked_add(section.size)
+                .ok_or(SectionLayoutError::SectionEndOverflow {
+                    object_index: section.object_index,
+                    section_index: section.section_index,
+                    address,
+                    size: section.size,
+                })?;
 
         laid_out.push(LaidOutSection {
             object_index: section.object_index,
