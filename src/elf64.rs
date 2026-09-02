@@ -3,8 +3,13 @@ use core::fmt;
 pub const ELF64_HEADER_SIZE: usize = 64;
 pub const ELF64_PROGRAM_HEADER_SIZE: u16 = 56;
 pub const ELF64_SECTION_HEADER_SIZE: u16 = 64;
+pub const ELF64_SYMBOL_SIZE: u64 = 24;
 pub const EM_X86_64: u16 = 62;
+pub const SHT_SYMTAB: u32 = 2;
+pub const SHT_STRTAB: u32 = 3;
 pub const SHT_NOBITS: u32 = 8;
+pub const SHT_DYNSYM: u32 = 11;
+pub const SHN_LORESERVE: u16 = 0xff00;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Elf64Header {
@@ -34,6 +39,23 @@ pub struct Elf64SectionHeader {
     pub info: u32,
     pub address_alignment: u64,
     pub entry_size: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Elf64Symbol {
+    pub name_offset: u32,
+    pub info: u8,
+    pub other: u8,
+    pub section_index: u16,
+    pub value: u64,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Elf64SymbolTable {
+    pub section_index: u16,
+    pub string_table_index: u16,
+    pub symbols: Vec<Elf64Symbol>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +93,37 @@ pub enum ElfError {
         section_index: u16,
         end: u64,
         file_len: usize,
+    },
+    InvalidSymbolEntrySize {
+        section_index: u16,
+        entry_size: u64,
+    },
+    InvalidSymbolTableSize {
+        section_index: u16,
+        size: u64,
+        entry_size: u64,
+    },
+    InvalidSymbolStringTableIndex {
+        section_index: u16,
+        string_table_index: u32,
+        section_count: u16,
+    },
+    SymbolStringTableNotStringTable {
+        section_index: u16,
+        string_table_index: u16,
+        section_type: u32,
+    },
+    InvalidSymbolNameOffset {
+        section_index: u16,
+        symbol_index: u64,
+        name_offset: u32,
+        string_table_size: u64,
+    },
+    InvalidSymbolSectionIndex {
+        section_index: u16,
+        symbol_index: u64,
+        symbol_section_index: u16,
+        section_count: u16,
     },
 }
 
@@ -138,6 +191,55 @@ impl fmt::Display for ElfError {
             } => write!(
                 f,
                 "section {section_index} data ends at file offset {end}, beyond file length {file_len}"
+            ),
+            Self::InvalidSymbolEntrySize {
+                section_index,
+                entry_size,
+            } => write!(
+                f,
+                "symbol-table section {section_index} has entry size {entry_size}; expected {ELF64_SYMBOL_SIZE}"
+            ),
+            Self::InvalidSymbolTableSize {
+                section_index,
+                size,
+                entry_size,
+            } => write!(
+                f,
+                "symbol-table section {section_index} has size {size}, which is not a multiple of entry size {entry_size}"
+            ),
+            Self::InvalidSymbolStringTableIndex {
+                section_index,
+                string_table_index,
+                section_count,
+            } => write!(
+                f,
+                "symbol-table section {section_index} links to section {string_table_index}, outside section-header count {section_count}"
+            ),
+            Self::SymbolStringTableNotStringTable {
+                section_index,
+                string_table_index,
+                section_type,
+            } => write!(
+                f,
+                "symbol-table section {section_index} links to section {string_table_index} of type {section_type}, expected SHT_STRTAB"
+            ),
+            Self::InvalidSymbolNameOffset {
+                section_index,
+                symbol_index,
+                name_offset,
+                string_table_size,
+            } => write!(
+                f,
+                "symbol {symbol_index} in section {section_index} has name offset {name_offset}, outside string-table size {string_table_size}"
+            ),
+            Self::InvalidSymbolSectionIndex {
+                section_index,
+                symbol_index,
+                symbol_section_index,
+                section_count,
+            } => write!(
+                f,
+                "symbol {symbol_index} in section {section_index} refers to section {symbol_section_index}, outside section-header count {section_count}"
             ),
         }
     }
@@ -289,6 +391,99 @@ impl Elf64Header {
             sections.push(section);
         }
         Ok(sections)
+    }
+
+    pub fn symbol_tables(
+        &self,
+        file: &[u8],
+        sections: &[Elf64SectionHeader],
+    ) -> Result<Vec<Elf64SymbolTable>, ElfError> {
+        let mut tables = Vec::new();
+
+        for (section_index, section) in sections.iter().enumerate() {
+            if section.section_type != SHT_SYMTAB && section.section_type != SHT_DYNSYM {
+                continue;
+            }
+            let section_index = section_index as u16;
+            if section.entry_size != ELF64_SYMBOL_SIZE {
+                return Err(ElfError::InvalidSymbolEntrySize {
+                    section_index,
+                    entry_size: section.entry_size,
+                });
+            }
+            if section.size % section.entry_size != 0 {
+                return Err(ElfError::InvalidSymbolTableSize {
+                    section_index,
+                    size: section.size,
+                    entry_size: section.entry_size,
+                });
+            }
+            if section.link >= sections.len() as u32 {
+                return Err(ElfError::InvalidSymbolStringTableIndex {
+                    section_index,
+                    string_table_index: section.link,
+                    section_count: self.section_header_count,
+                });
+            }
+
+            let string_table_index = section.link as u16;
+            let string_table = &sections[usize::from(string_table_index)];
+            if string_table.section_type != SHT_STRTAB {
+                return Err(ElfError::SymbolStringTableNotStringTable {
+                    section_index,
+                    string_table_index,
+                    section_type: string_table.section_type,
+                });
+            }
+
+            let symbol_count = section.size / section.entry_size;
+            let mut symbols = Vec::with_capacity(symbol_count as usize);
+            for symbol_index in 0..symbol_count {
+                let entry_offset = section
+                    .offset
+                    .checked_add(symbol_index.checked_mul(ELF64_SYMBOL_SIZE).ok_or(
+                        ElfError::SectionDataRangeOverflow { section_index },
+                    )?)
+                    .ok_or(ElfError::SectionDataRangeOverflow { section_index })?
+                    as usize;
+                let symbol = Elf64Symbol {
+                    name_offset: read_u32(file, entry_offset),
+                    info: file[entry_offset + 4],
+                    other: file[entry_offset + 5],
+                    section_index: read_u16(file, entry_offset + 6),
+                    value: read_u64(file, entry_offset + 8),
+                    size: read_u64(file, entry_offset + 16),
+                };
+
+                if u64::from(symbol.name_offset) >= string_table.size {
+                    return Err(ElfError::InvalidSymbolNameOffset {
+                        section_index,
+                        symbol_index,
+                        name_offset: symbol.name_offset,
+                        string_table_size: string_table.size,
+                    });
+                }
+                if symbol.section_index < SHN_LORESERVE
+                    && symbol.section_index >= self.section_header_count
+                {
+                    return Err(ElfError::InvalidSymbolSectionIndex {
+                        section_index,
+                        symbol_index,
+                        symbol_section_index: symbol.section_index,
+                        section_count: self.section_header_count,
+                    });
+                }
+
+                symbols.push(symbol);
+            }
+            tables.push(Elf64SymbolTable {
+                section_index,
+                string_table_index,
+                symbols,
+            });
+        }
+
+        Ok(tables)
     }
 }
 
