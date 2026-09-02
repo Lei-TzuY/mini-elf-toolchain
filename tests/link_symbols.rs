@@ -1,5 +1,7 @@
 use mini_elf_toolchain::elf64::{Elf64SectionHeader, Elf64Symbol, Elf64SymbolTable, SHT_STRTAB};
-use mini_elf_toolchain::link_symbols::{resolve_validated_objects, LinkSymbolError, ValidatedObject};
+use mini_elf_toolchain::link_symbols::{
+    resolve_validated_objects, LinkSymbolError, ValidatedObject,
+};
 use mini_elf_toolchain::object_symbols::ObjectSymbolError;
 use mini_elf_toolchain::resolve::{ResolutionError, STB_GLOBAL, STB_WEAK};
 use mini_elf_toolchain::symbol_names::SymbolNameError;
