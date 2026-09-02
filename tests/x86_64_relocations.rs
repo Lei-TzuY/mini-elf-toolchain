@@ -1,6 +1,7 @@
 use mini_elf_toolchain::relocations::Elf64Rela;
 use mini_elf_toolchain::x86_64_relocations::{
-    evaluate_relocation, RelocationEvaluationError, RelocationValue, R_X86_64_64, R_X86_64_PC32,
+    apply_relocation, evaluate_relocation, write_relocation_value, RelocationApplyError,
+    RelocationEvaluationError, RelocationValue, R_X86_64_64, R_X86_64_PC32,
 };
 
 fn relocation(relocation_type: u32, addend: i64) -> Elf64Rela {
@@ -107,4 +108,90 @@ fn rejects_unsupported_relocation_type() {
             relocation_type: 42
         }
     );
+}
+
+#[test]
+fn writes_absolute_64_relocation_little_endian() {
+    let mut section = [0xaa; 12];
+    let mut relocation = relocation(R_X86_64_64, 1);
+    relocation.offset = 2;
+
+    apply_relocation(&mut section, &relocation, 0x0102_0304_0506_0708, 0).unwrap();
+
+    assert_eq!(&section[..2], &[0xaa, 0xaa]);
+    assert_eq!(
+        &section[2..10],
+        &0x0102_0304_0506_0709_u64.to_le_bytes()
+    );
+    assert_eq!(&section[10..], &[0xaa, 0xaa]);
+}
+
+#[test]
+fn writes_pc32_relocation_little_endian() {
+    let mut section = [0; 8];
+    let mut relocation = relocation(R_X86_64_PC32, 0);
+    relocation.offset = 4;
+
+    apply_relocation(&mut section, &relocation, 0x1000, 0x1010).unwrap();
+
+    assert_eq!(&section[4..8], &(-0x10_i32).to_le_bytes());
+}
+
+#[test]
+fn rejects_relocation_target_range_overflow_without_mutation() {
+    let mut section = [0x5a; 16];
+    let before = section;
+
+    let error = write_relocation_value(
+        &mut section,
+        u64::MAX - 3,
+        RelocationValue::U64(0x1122_3344_5566_7788),
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        RelocationApplyError::TargetRangeOverflow {
+            offset: u64::MAX - 3,
+            width: 8,
+        }
+    );
+    assert_eq!(section, before);
+}
+
+#[test]
+fn rejects_relocation_target_out_of_bounds_without_mutation() {
+    let mut section = [0x5a; 8];
+    let before = section;
+
+    let error = write_relocation_value(&mut section, 5, RelocationValue::I32(7)).unwrap_err();
+
+    assert_eq!(
+        error,
+        RelocationApplyError::TargetOutOfBounds {
+            offset: 5,
+            width: 4,
+            end: 9,
+            section_len: 8,
+        }
+    );
+    assert_eq!(section, before);
+}
+
+#[test]
+fn propagates_evaluation_error_without_mutation() {
+    let mut section = [0x5a; 8];
+    let before = section;
+    let mut relocation = relocation(R_X86_64_64, 1);
+    relocation.offset = 0;
+
+    let error = apply_relocation(&mut section, &relocation, u64::MAX, 0).unwrap_err();
+
+    assert_eq!(
+        error,
+        RelocationApplyError::Evaluation(RelocationEvaluationError::Unsigned64OutOfRange {
+            value: i128::from(u64::MAX) + 1,
+        })
+    );
+    assert_eq!(section, before);
 }
