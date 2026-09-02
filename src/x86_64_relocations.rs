@@ -60,8 +60,8 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Signed32OutOfRange { value })?;
             Ok(RelocationValue::I32(value))
         }
-        relocation_type => Err(RelocationEvaluationError::UnsupportedRelocationType {
-            relocation_type,
-        }),
+        relocation_type => {
+            Err(RelocationEvaluationError::UnsupportedRelocationType { relocation_type })
+        }
     }
 }
