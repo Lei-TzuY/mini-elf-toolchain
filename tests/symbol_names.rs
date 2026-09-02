@@ -52,7 +52,10 @@ fn preserves_non_utf8_symbol_names_as_bytes() {
     let sections = vec![section(0, 0, 0), section(SHT_STRTAB, 0, 4)];
     let table = table(&[1]);
 
-    assert_eq!(symbol_name(&file, &sections, &table, 0).unwrap(), &[0xff, 0xfe]);
+    assert_eq!(
+        symbol_name(&file, &sections, &table, 0).unwrap(),
+        &[0xff, 0xfe]
+    );
 }
 
 #[test]
