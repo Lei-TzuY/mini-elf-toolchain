@@ -119,10 +119,7 @@ fn writes_absolute_64_relocation_little_endian() {
     apply_relocation(&mut section, &relocation, 0x0102_0304_0506_0708, 0).unwrap();
 
     assert_eq!(&section[..2], &[0xaa, 0xaa]);
-    assert_eq!(
-        &section[2..10],
-        &0x0102_0304_0506_0709_u64.to_le_bytes()
-    );
+    assert_eq!(&section[2..10], &0x0102_0304_0506_0709_u64.to_le_bytes());
     assert_eq!(&section[10..], &[0xaa, 0xaa]);
 }
 
