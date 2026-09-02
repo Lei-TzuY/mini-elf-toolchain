@@ -4,6 +4,7 @@ pub const ELF64_HEADER_SIZE: usize = 64;
 pub const ELF64_PROGRAM_HEADER_SIZE: u16 = 56;
 pub const ELF64_SECTION_HEADER_SIZE: u16 = 64;
 pub const EM_X86_64: u16 = 62;
+pub const SHT_NOBITS: u32 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Elf64Header {
@@ -19,6 +20,20 @@ pub struct Elf64Header {
     pub section_header_entry_size: u16,
     pub section_header_count: u16,
     pub section_name_string_table_index: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Elf64SectionHeader {
+    pub name_offset: u32,
+    pub section_type: u32,
+    pub flags: u64,
+    pub address: u64,
+    pub offset: u64,
+    pub size: u64,
+    pub link: u32,
+    pub info: u32,
+    pub address_alignment: u64,
+    pub entry_size: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +53,22 @@ pub enum ElfError {
     TableRangeOverflow(&'static str),
     TableOutOfBounds {
         table: &'static str,
+        end: u64,
+        file_len: usize,
+    },
+    InvalidSectionNameStringTableIndex {
+        index: u16,
+        count: u16,
+    },
+    InvalidSectionAlignment {
+        section_index: u16,
+        alignment: u64,
+    },
+    SectionDataRangeOverflow {
+        section_index: u16,
+    },
+    SectionDataOutOfBounds {
+        section_index: u16,
         end: u64,
         file_len: usize,
     },
@@ -85,6 +116,28 @@ impl fmt::Display for ElfError {
             } => write!(
                 f,
                 "{table} table ends at file offset {end}, beyond file length {file_len}"
+            ),
+            Self::InvalidSectionNameStringTableIndex { index, count } => write!(
+                f,
+                "section-name string-table index {index} is outside section-header count {count}"
+            ),
+            Self::InvalidSectionAlignment {
+                section_index,
+                alignment,
+            } => write!(
+                f,
+                "section {section_index} has invalid alignment {alignment}; expected zero or a power of two"
+            ),
+            Self::SectionDataRangeOverflow { section_index } => {
+                write!(f, "section {section_index} file range overflows u64")
+            }
+            Self::SectionDataOutOfBounds {
+                section_index,
+                end,
+                file_len,
+            } => write!(
+                f,
+                "section {section_index} data ends at file offset {end}, beyond file length {file_len}"
             ),
         }
     }
@@ -149,6 +202,14 @@ impl Elf64Header {
                 header.section_header_entry_size,
             ));
         }
+        if header.section_name_string_table_index != 0
+            && header.section_name_string_table_index >= header.section_header_count
+        {
+            return Err(ElfError::InvalidSectionNameStringTableIndex {
+                index: header.section_name_string_table_index,
+                count: header.section_header_count,
+            });
+        }
 
         validate_table_span(
             "program-header",
@@ -166,6 +227,68 @@ impl Elf64Header {
         )?;
 
         Ok(header)
+    }
+
+    pub fn section_headers(&self, file: &[u8]) -> Result<Vec<Elf64SectionHeader>, ElfError> {
+        validate_table_span(
+            "section-header",
+            self.section_header_offset,
+            self.section_header_entry_size,
+            self.section_header_count,
+            file.len(),
+        )?;
+        if self.section_header_count != 0
+            && self.section_header_entry_size != ELF64_SECTION_HEADER_SIZE
+        {
+            return Err(ElfError::InvalidSectionHeaderEntrySize(
+                self.section_header_entry_size,
+            ));
+        }
+
+        let mut sections = Vec::with_capacity(usize::from(self.section_header_count));
+        for index in 0..self.section_header_count {
+            let entry_offset = self
+                .section_header_offset
+                .checked_add(u64::from(index) * u64::from(ELF64_SECTION_HEADER_SIZE))
+                .ok_or(ElfError::TableRangeOverflow("section-header"))? as usize;
+            let section = Elf64SectionHeader {
+                name_offset: read_u32(file, entry_offset),
+                section_type: read_u32(file, entry_offset + 4),
+                flags: read_u64(file, entry_offset + 8),
+                address: read_u64(file, entry_offset + 16),
+                offset: read_u64(file, entry_offset + 24),
+                size: read_u64(file, entry_offset + 32),
+                link: read_u32(file, entry_offset + 40),
+                info: read_u32(file, entry_offset + 44),
+                address_alignment: read_u64(file, entry_offset + 48),
+                entry_size: read_u64(file, entry_offset + 56),
+            };
+
+            if section.address_alignment != 0 && !section.address_alignment.is_power_of_two() {
+                return Err(ElfError::InvalidSectionAlignment {
+                    section_index: index,
+                    alignment: section.address_alignment,
+                });
+            }
+            if section.section_type != SHT_NOBITS {
+                let end = section
+                    .offset
+                    .checked_add(section.size)
+                    .ok_or(ElfError::SectionDataRangeOverflow {
+                        section_index: index,
+                    })?;
+                if end > file.len() as u64 {
+                    return Err(ElfError::SectionDataOutOfBounds {
+                        section_index: index,
+                        end,
+                        file_len: file.len(),
+                    });
+                }
+            }
+
+            sections.push(section);
+        }
+        Ok(sections)
     }
 }
 
