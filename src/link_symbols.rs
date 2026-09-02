@@ -27,7 +27,10 @@ impl fmt::Display for LinkSymbolError {
             Self::ObjectSymbols {
                 object_index,
                 source,
-            } => write!(f, "cannot read symbols from object {object_index}: {source}"),
+            } => write!(
+                f,
+                "cannot read symbols from object {object_index}: {source}"
+            ),
             Self::Resolution(source) => write!(f, "symbol resolution failed: {source:?}"),
         }
     }
@@ -52,16 +55,12 @@ pub fn resolve_validated_objects(
         tables.sort_by_key(|table| table.section_index);
 
         for table in tables {
-            let mut table_symbols = named_symbols_from_table(
-                object.file,
-                object.sections,
-                table,
-                object_index,
-            )
-            .map_err(|source| LinkSymbolError::ObjectSymbols {
-                object_index,
-                source,
-            })?;
+            let mut table_symbols =
+                named_symbols_from_table(object.file, object.sections, table, object_index)
+                    .map_err(|source| LinkSymbolError::ObjectSymbols {
+                        object_index,
+                        source,
+                    })?;
             named_symbols.append(&mut table_symbols);
         }
     }
