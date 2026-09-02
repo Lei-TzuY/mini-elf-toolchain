@@ -13,11 +13,7 @@ fn input(object_index: usize, section_index: u16, size: u64, alignment: u64) -> 
 fn lays_out_sections_in_input_order_with_alignment() {
     let layout = layout_sections(
         0x1003,
-        [
-            input(0, 1, 5, 16),
-            input(0, 2, 8, 8),
-            input(1, 1, 3, 1),
-        ],
+        [input(0, 1, 5, 16), input(0, 2, 8, 8), input(1, 1, 3, 1)],
     )
     .unwrap();
 
