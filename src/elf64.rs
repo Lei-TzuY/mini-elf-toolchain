@@ -250,7 +250,8 @@ impl Elf64Header {
             let entry_offset = self
                 .section_header_offset
                 .checked_add(u64::from(index) * u64::from(ELF64_SECTION_HEADER_SIZE))
-                .ok_or(ElfError::TableRangeOverflow("section-header"))? as usize;
+                .ok_or(ElfError::TableRangeOverflow("section-header"))?
+                as usize;
             let section = Elf64SectionHeader {
                 name_offset: read_u32(file, entry_offset),
                 section_type: read_u32(file, entry_offset + 4),
@@ -271,12 +272,11 @@ impl Elf64Header {
                 });
             }
             if section.section_type != SHT_NOBITS {
-                let end = section
-                    .offset
-                    .checked_add(section.size)
-                    .ok_or(ElfError::SectionDataRangeOverflow {
+                let end = section.offset.checked_add(section.size).ok_or(
+                    ElfError::SectionDataRangeOverflow {
                         section_index: index,
-                    })?;
+                    },
+                )?;
                 if end > file.len() as u64 {
                     return Err(ElfError::SectionDataOutOfBounds {
                         section_index: index,
