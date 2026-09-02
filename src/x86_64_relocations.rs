@@ -50,7 +50,10 @@ impl std::error::Error for RelocationEvaluationError {}
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelocationApplyError {
     Evaluation(RelocationEvaluationError),
-    TargetRangeOverflow { offset: u64, width: u64 },
+    TargetRangeOverflow {
+        offset: u64,
+        width: u64,
+    },
     TargetOutOfBounds {
         offset: u64,
         width: u64,
