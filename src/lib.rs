@@ -3,5 +3,6 @@
 pub mod elf64;
 pub mod link_symbols;
 pub mod object_symbols;
+pub mod relocations;
 pub mod resolve;
 pub mod symbol_names;
