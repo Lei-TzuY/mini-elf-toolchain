@@ -41,7 +41,9 @@ pub enum ResolutionError {
     },
 }
 
-pub fn resolve_symbols<'a, I>(symbols: I) -> Result<BTreeMap<Vec<u8>, SymbolDefinition>, ResolutionError>
+pub fn resolve_symbols<'a, I>(
+    symbols: I,
+) -> Result<BTreeMap<Vec<u8>, SymbolDefinition>, ResolutionError>
 where
     I: IntoIterator<Item = NamedSymbol<'a>>,
 {
