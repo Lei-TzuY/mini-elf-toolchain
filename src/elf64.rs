@@ -441,9 +441,11 @@ impl Elf64Header {
             for symbol_index in 0..symbol_count {
                 let entry_offset = section
                     .offset
-                    .checked_add(symbol_index.checked_mul(ELF64_SYMBOL_SIZE).ok_or(
-                        ElfError::SectionDataRangeOverflow { section_index },
-                    )?)
+                    .checked_add(
+                        symbol_index
+                            .checked_mul(ELF64_SYMBOL_SIZE)
+                            .ok_or(ElfError::SectionDataRangeOverflow { section_index })?,
+                    )
                     .ok_or(ElfError::SectionDataRangeOverflow { section_index })?
                     as usize;
                 let symbol = Elf64Symbol {
