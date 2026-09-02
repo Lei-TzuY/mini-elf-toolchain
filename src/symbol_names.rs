@@ -106,12 +106,12 @@ pub fn symbol_name<'a>(
             symbol_count: table.symbols.len(),
         })?;
 
-    let string_table = sections
-        .get(usize::from(table.string_table_index))
-        .ok_or(SymbolNameError::InvalidStringTableIndex {
+    let string_table = sections.get(usize::from(table.string_table_index)).ok_or(
+        SymbolNameError::InvalidStringTableIndex {
             string_table_index: table.string_table_index,
             section_count: sections.len(),
-        })?;
+        },
+    )?;
     if string_table.section_type != SHT_STRTAB {
         return Err(SymbolNameError::StringTableNotStringTable {
             string_table_index: table.string_table_index,
@@ -146,13 +146,12 @@ pub fn symbol_name<'a>(
             string_table_index: table.string_table_index,
         })? as usize;
     let name_region = &file[name_start..string_table_end as usize];
-    let nul = name_region
-        .iter()
-        .position(|byte| *byte == 0)
-        .ok_or(SymbolNameError::UnterminatedName {
+    let nul = name_region.iter().position(|byte| *byte == 0).ok_or(
+        SymbolNameError::UnterminatedName {
             symbol_index,
             name_offset: symbol.name_offset,
-        })?;
+        },
+    )?;
 
     Ok(&name_region[..nul])
 }
