@@ -7,7 +7,13 @@ use mini_elf_toolchain::symbol_addresses::{
     final_symbol_address, final_symbol_addresses, FinalSymbolAddressError, SHN_ABS,
 };
 
-fn definition(name: &[u8], object_index: usize, symbol_index: usize, section_index: u16, value: u64) -> SymbolDefinition {
+fn definition(
+    name: &[u8],
+    object_index: usize,
+    symbol_index: usize,
+    section_index: u16,
+    value: u64,
+) -> SymbolDefinition {
     SymbolDefinition {
         name: name.to_vec(),
         object_index,
