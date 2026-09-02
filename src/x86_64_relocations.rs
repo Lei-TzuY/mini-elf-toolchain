@@ -11,6 +11,15 @@ pub enum RelocationValue {
     I32(i32),
 }
 
+impl RelocationValue {
+    fn width(self) -> u64 {
+        match self {
+            Self::U64(_) => 8,
+            Self::I32(_) => 4,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelocationEvaluationError {
     UnsupportedRelocationType { relocation_type: u32 },
@@ -38,6 +47,54 @@ impl fmt::Display for RelocationEvaluationError {
 
 impl std::error::Error for RelocationEvaluationError {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RelocationApplyError {
+    Evaluation(RelocationEvaluationError),
+    TargetRangeOverflow { offset: u64, width: u64 },
+    TargetOutOfBounds {
+        offset: u64,
+        width: u64,
+        end: u64,
+        section_len: usize,
+    },
+}
+
+impl fmt::Display for RelocationApplyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Evaluation(error) => write!(f, "{error}"),
+            Self::TargetRangeOverflow { offset, width } => write!(
+                f,
+                "x86-64 relocation target range starting at offset {offset} with width {width} overflows u64"
+            ),
+            Self::TargetOutOfBounds {
+                offset,
+                width,
+                end,
+                section_len,
+            } => write!(
+                f,
+                "x86-64 relocation target range [{offset}, {end}) with width {width} exceeds section length {section_len}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for RelocationApplyError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Evaluation(error) => Some(error),
+            Self::TargetRangeOverflow { .. } | Self::TargetOutOfBounds { .. } => None,
+        }
+    }
+}
+
+impl From<RelocationEvaluationError> for RelocationApplyError {
+    fn from(error: RelocationEvaluationError) -> Self {
+        Self::Evaluation(error)
+    }
+}
+
 pub fn evaluate_relocation(
     relocation: &Elf64Rela,
     symbol_value: u64,
@@ -64,4 +121,42 @@ pub fn evaluate_relocation(
             Err(RelocationEvaluationError::UnsupportedRelocationType { relocation_type })
         }
     }
+}
+
+pub fn apply_relocation(
+    section: &mut [u8],
+    relocation: &Elf64Rela,
+    symbol_value: u64,
+    place: u64,
+) -> Result<(), RelocationApplyError> {
+    let value = evaluate_relocation(relocation, symbol_value, place)?;
+    write_relocation_value(section, relocation.offset, value)
+}
+
+pub fn write_relocation_value(
+    section: &mut [u8],
+    offset: u64,
+    value: RelocationValue,
+) -> Result<(), RelocationApplyError> {
+    let width = value.width();
+    let end = offset
+        .checked_add(width)
+        .ok_or(RelocationApplyError::TargetRangeOverflow { offset, width })?;
+    if end > section.len() as u64 {
+        return Err(RelocationApplyError::TargetOutOfBounds {
+            offset,
+            width,
+            end,
+            section_len: section.len(),
+        });
+    }
+
+    let start = offset as usize;
+    let end = end as usize;
+    match value {
+        RelocationValue::U64(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
+        RelocationValue::I32(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
+    }
+
+    Ok(())
 }
