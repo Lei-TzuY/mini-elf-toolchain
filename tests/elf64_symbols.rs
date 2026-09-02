@@ -43,7 +43,16 @@ fn valid_symbol_file() -> Vec<u8> {
     bytes[58..60].copy_from_slice(&ELF64_SECTION_HEADER_SIZE.to_le_bytes());
     bytes[60..62].copy_from_slice(&SECTION_COUNT.to_le_bytes());
 
-    write_section(&mut bytes, 1, SHT_STRTAB, STRTAB_OFFSET as u64, STRTAB.len() as u64, 0, 1, 0);
+    write_section(
+        &mut bytes,
+        1,
+        SHT_STRTAB,
+        STRTAB_OFFSET as u64,
+        STRTAB.len() as u64,
+        0,
+        1,
+        0,
+    );
     write_section(
         &mut bytes,
         2,
