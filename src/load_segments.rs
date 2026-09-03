@@ -231,8 +231,7 @@ where
         let starts_new = groups.last().and_then(|group| group.last()).is_some_and(
             |(previous, permissions, _)| {
                 *permissions != item.1
-                    || (previous.section_type == SHT_NOBITS
-                        && item.0.section_type != SHT_NOBITS)
+                    || (previous.section_type == SHT_NOBITS && item.0.section_type != SHT_NOBITS)
             },
         );
         if groups.is_empty() || starts_new {
