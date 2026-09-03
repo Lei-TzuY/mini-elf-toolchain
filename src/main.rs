@@ -5,7 +5,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...";
+const USAGE: &str =
+    "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -177,9 +178,7 @@ mod tests {
     fn validate_rel_requires_at_least_one_input() {
         assert_eq!(
             run([OsString::from("validate-rel")].into_iter()),
-            Err(CliError::Usage(
-                "missing relocatable input path".to_owned()
-            ))
+            Err(CliError::Usage("missing relocatable input path".to_owned()))
         );
     }
 }
