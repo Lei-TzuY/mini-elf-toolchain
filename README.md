@@ -13,7 +13,7 @@ mini-elf-toolchain link -o a.out --map a.out.map start.o support.o
 
 The optional deterministic link map records the final entry address, allocatable section provenance and addresses, resolved global/weak symbol addresses, and emitted `PT_LOAD` ranges and permissions. The initial link CLI intentionally fixes the image base at `0x400000` and page alignment at `0x1000`; linker scripts, dynamic linking, and alternate architectures remain outside the current scope.
 
-Archive work has started with a checked System V/GNU `ar` parser. It validates member headers, decimal sizes, payload bounds, even-byte padding, GNU short and long member names, string-table references, and special symbol/string-table members while preserving member provenance and borrowed payload bytes. BSD extended names are intentionally rejected for now. Lazy extraction driven by unresolved ELF symbols remains the next archive-layer milestone.
+Archive work now includes a checked System V/GNU `ar` parser plus validated `/` and `/SYM64/` archive symbol-index parsing. Member headers, sizes, payload bounds, padding, GNU short/long names, symbol counts, big-endian member offsets, symbol strings, and index-to-member references are validated with checked arithmetic and GNU binutils differential coverage. BSD extended names remain intentionally unsupported. Unresolved-symbol-driven lazy extraction remains the next archive-layer milestone.
 
 ## Core roadmap
 
@@ -24,7 +24,7 @@ Archive work has started with a checked System V/GNU `ar` parser. It validates m
 5. Section layout
 6. ELF executable emission
 7. CLI and link map
-8. Archive lazy extraction (validated System V/GNU archive parsing complete; unresolved-symbol-driven extraction remains)
+8. Archive lazy extraction (validated System V/GNU archive and symbol-index parsing complete; unresolved-symbol-driven extraction remains)
 9. Reproducibility and GNU/LLVM semantic differential harness
 
 Each new capability should include focused malformed-input tests. Offsets, sizes, addresses, alignment, and relocation arithmetic must use checked operations where overflow can make an input invalid.
