@@ -17,6 +17,7 @@ const PF_R: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadSegmentPermissions {
+    ReadOnly,
     ReadExecute,
     ReadWrite,
 }
@@ -24,6 +25,7 @@ pub enum LoadSegmentPermissions {
 impl LoadSegmentPermissions {
     fn elf_flags(self) -> u32 {
         match self {
+            Self::ReadOnly => PF_R,
             Self::ReadExecute => PF_R | PF_X,
             Self::ReadWrite => PF_R | PF_W,
         }
@@ -311,13 +313,12 @@ pub fn write_elf64_x86_64_executable_segments(
             segment.image.base_address,
             segment_alignment,
         )?;
-        let file_end =
-            file_offset
-                .checked_add(*file_size)
-                .ok_or(ExecutableWriteError::FileEndOverflow {
-                    load_file_offset: file_offset,
-                    image_size: *file_size,
-                })?;
+        let file_end = file_offset
+            .checked_add(*file_size)
+            .ok_or(ExecutableWriteError::FileEndOverflow {
+                load_file_offset: file_offset,
+                image_size: *file_size,
+            })?;
         emitted_segments.push(ExecutableLoadSegment {
             file_offset,
             virtual_address: segment.image.base_address,
