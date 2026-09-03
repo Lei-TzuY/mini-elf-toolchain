@@ -2,7 +2,7 @@ use mini_elf_toolchain::ordered_inputs::{
     prepare_ordered_link_inputs, LinkObjectOrigin, OrderedLinkInput,
 };
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -35,7 +35,7 @@ fn temp_dir(tag: &str) -> PathBuf {
     path
 }
 
-fn assemble(dir: &PathBuf, stem: &str, source: &str) {
+fn assemble(dir: &Path, stem: &str, source: &str) {
     fs::write(dir.join(format!("{stem}.s")), source).expect("write assembly source");
     let status = Command::new("as")
         .current_dir(dir)
@@ -45,7 +45,7 @@ fn assemble(dir: &PathBuf, stem: &str, source: &str) {
     assert!(status.success(), "GNU as failed for {stem}");
 }
 
-fn archive(dir: &PathBuf, name: &str, members: &[&str]) {
+fn archive(dir: &Path, name: &str, members: &[&str]) {
     let mut command = Command::new("ar");
     command.current_dir(dir).args(["rcs", name]);
     command.args(members);
@@ -82,7 +82,7 @@ fn ordered_archives_resolve_transitive_references_like_gnu_ld() {
         "foo",
         ".globl foo\n.type foo,@function\nfoo:\n  call bar\n  ret\n",
     );
-    assemble(dir.as_ref(), "bar", ".globl bar\n.type bar,@function\nbar:\n  ret\n");
+    assemble(&dir, "bar", ".globl bar\n.type bar,@function\nbar:\n  ret\n");
     assemble(
         &dir,
         "unused",
@@ -148,7 +148,7 @@ fn archive_is_not_rescanned_for_symbols_introduced_by_later_object() {
         "root",
         ".globl _start\n.type _start,@function\n_start:\n  call foo\n  ret\n",
     );
-    assemble(dir.as_ref(), "foo", ".globl foo\n.type foo,@function\nfoo:\n  ret\n");
+    assemble(&dir, "foo", ".globl foo\n.type foo,@function\nfoo:\n  ret\n");
     archive(&dir, "libfoo.a", &["foo.o"]);
 
     let root = fs::read(dir.join("root.o")).expect("read root object");
@@ -197,8 +197,16 @@ fn earlier_regular_definition_prevents_redundant_archive_member_extraction() {
         "foo",
         ".globl foo\n.type foo,@function\nfoo:\n  call bar\n  ret\n",
     );
-    assemble(dir.as_ref(), "bar_archive", ".globl bar\n.type bar,@function\nbar:\n  ret\n");
-    assemble(dir.as_ref(), "bar_regular", ".globl bar\n.type bar,@function\nbar:\n  ret\n");
+    assemble(
+        &dir,
+        "bar_archive",
+        ".globl bar\n.type bar,@function\nbar:\n  ret\n",
+    );
+    assemble(
+        &dir,
+        "bar_regular",
+        ".globl bar\n.type bar,@function\nbar:\n  ret\n",
+    );
     archive(&dir, "libchain.a", &["foo.o", "bar_archive.o"]);
 
     let root = fs::read(dir.join("root.o")).expect("read root object");
