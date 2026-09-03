@@ -107,21 +107,28 @@ impl std::error::Error for ArchiveExtractionError {
     }
 }
 
-pub fn extract_indexed_archive_members<I, S>(
+pub fn extract_indexed_archive_members<I, S, D, T>(
     archive: &Archive<'_>,
     index: &ArchiveSymbolIndex<'_>,
     initial_unresolved: I,
+    initial_defined: D,
 ) -> Result<ArchiveExtraction, ArchiveExtractionError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<[u8]>,
+    D: IntoIterator<Item = T>,
+    T: AsRef<[u8]>,
 {
-    let mut unresolved = initial_unresolved
+    let mut defined = initial_defined
         .into_iter()
         .map(|name| name.as_ref().to_vec())
         .filter(|name| !name.is_empty())
         .collect::<BTreeSet<_>>();
-    let mut defined = BTreeSet::new();
+    let mut unresolved = initial_unresolved
+        .into_iter()
+        .map(|name| name.as_ref().to_vec())
+        .filter(|name| !name.is_empty() && !defined.contains(name))
+        .collect::<BTreeSet<_>>();
     let mut extracted_indices = BTreeSet::new();
     let mut extracted = Vec::new();
 
