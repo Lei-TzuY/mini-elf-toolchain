@@ -1,5 +1,8 @@
 use mini_elf_toolchain::elf64::Elf64Header;
-use mini_elf_toolchain::executable_writer::{write_elf64_x86_64_executable, ExecutableWriteError};
+use mini_elf_toolchain::executable_writer::{
+    write_elf64_x86_64_executable, write_elf64_x86_64_executable_with_memory_size,
+    ExecutableWriteError,
+};
 use mini_elf_toolchain::output_image::OutputSectionImage;
 use std::fs;
 use std::process::Command;
@@ -50,6 +53,7 @@ fn emits_elf64_x86_64_header_and_single_load_segment() {
     assert_eq!(read_u64(&executable.bytes, ph + 32), 3);
     assert_eq!(read_u64(&executable.bytes, ph + 40), 3);
     assert_eq!(read_u64(&executable.bytes, ph + 48), 0x1000);
+    assert_eq!(executable.load_memory_size, 3);
     assert_eq!(&executable.bytes[0x1000..], &[0x90, 0x90, 0xc3]);
 
     let parsed = Elf64Header::parse(&executable.bytes).unwrap();
@@ -57,6 +61,20 @@ fn emits_elf64_x86_64_header_and_single_load_segment() {
     assert_eq!(parsed.entry, 0x401000);
     assert_eq!(parsed.program_header_count, 1);
     assert_eq!(parsed.section_header_count, 0);
+}
+
+#[test]
+fn emits_load_segment_with_zero_fill_memory_tail() {
+    let input = image(0x401000, &[0x90, 0xc3]);
+    let executable =
+        write_elf64_x86_64_executable_with_memory_size(&input, 0x401000, 0x1000, 0x102).unwrap();
+
+    let ph = 64;
+    assert_eq!(read_u64(&executable.bytes, ph + 32), 2);
+    assert_eq!(read_u64(&executable.bytes, ph + 40), 0x102);
+    assert_eq!(executable.load_memory_size, 0x102);
+    assert_eq!(executable.bytes.len(), 0x1002);
+    assert_eq!(&executable.bytes[0x1000..], &[0x90, 0xc3]);
 }
 
 #[test]
@@ -85,6 +103,32 @@ fn rejects_invalid_segment_alignment() {
 }
 
 #[test]
+fn rejects_memory_size_smaller_than_file_backing() {
+    let input = image(0x400000, &[0x90, 0xc3]);
+
+    assert_eq!(
+        write_elf64_x86_64_executable_with_memory_size(&input, 0x400000, 0x1000, 1),
+        Err(ExecutableWriteError::MemorySizeSmallerThanFile {
+            file_size: 2,
+            memory_size: 1,
+        })
+    );
+}
+
+#[test]
+fn rejects_memory_range_overflow() {
+    let input = image(u64::MAX - 1, &[0xc3]);
+
+    assert_eq!(
+        write_elf64_x86_64_executable_with_memory_size(&input, u64::MAX - 1, 1, 2),
+        Err(ExecutableWriteError::MemoryEndOverflow {
+            base_address: u64::MAX - 1,
+            memory_size: 2,
+        })
+    );
+}
+
+#[test]
 fn rejects_entry_outside_file_backed_image() {
     let input = image(0x400000, &[0x90, 0xc3]);
 
@@ -98,6 +142,20 @@ fn rejects_entry_outside_file_backed_image() {
     );
     assert_eq!(
         write_elf64_x86_64_executable(&input, 0x400002, 0x1000),
+        Err(ExecutableWriteError::EntryOutsideImage {
+            entry_address: 0x400002,
+            base_address: 0x400000,
+            image_size: 2,
+        })
+    );
+}
+
+#[test]
+fn rejects_entry_in_memory_only_tail() {
+    let input = image(0x400000, &[0x90, 0xc3]);
+
+    assert_eq!(
+        write_elf64_x86_64_executable_with_memory_size(&input, 0x400002, 0x1000, 0x100),
         Err(ExecutableWriteError::EntryOutsideImage {
             entry_address: 0x400002,
             base_address: 0x400000,
@@ -126,7 +184,8 @@ fn gnu_readelf_accepts_emitted_header_and_program_header() {
     }
 
     let input = image(0x401000, &[0x90, 0xc3]);
-    let executable = write_elf64_x86_64_executable(&input, 0x401000, 0x1000).unwrap();
+    let executable =
+        write_elf64_x86_64_executable_with_memory_size(&input, 0x401000, 0x1000, 0x102).unwrap();
     let path = std::env::temp_dir().join(format!(
         "mini-elf-toolchain-{}-writer-test.elf",
         std::process::id()
@@ -152,4 +211,5 @@ fn gnu_readelf_accepts_emitted_header_and_program_header() {
     assert!(stdout.contains("Advanced Micro Devices X86-64"));
     assert!(stdout.contains("LOAD"));
     assert!(stdout.contains("0x0000000000401000"));
+    assert!(stdout.contains("0x0000000000000002 0x0000000000000102"));
 }
