@@ -230,8 +230,8 @@ pub fn write_elf64_x86_64_executable_segments(
     if segments.is_empty() {
         return Err(ExecutableWriteError::NoLoadSegments);
     }
-    let program_header_count = u16::try_from(segments.len())
-        .map_err(|_| ExecutableWriteError::TooManyLoadSegments {
+    let program_header_count =
+        u16::try_from(segments.len()).map_err(|_| ExecutableWriteError::TooManyLoadSegments {
             count: segments.len(),
         })?;
     if segment_alignment == 0 || !segment_alignment.is_power_of_two() {
@@ -256,12 +256,14 @@ pub fn write_elf64_x86_64_executable_segments(
                 memory_size: segment.memory_size,
             });
         }
-        let memory_end = segment.image.base_address.checked_add(segment.memory_size).ok_or(
-            ExecutableWriteError::MemoryEndOverflow {
+        let memory_end = segment
+            .image
+            .base_address
+            .checked_add(segment.memory_size)
+            .ok_or(ExecutableWriteError::MemoryEndOverflow {
                 base_address: segment.image.base_address,
                 memory_size: segment.memory_size,
-            },
-        )?;
+            })?;
 
         if let Some((previous_base, previous_end)) = previous_memory_range {
             if segment.memory_size != 0 && segment.image.base_address < previous_end {
@@ -309,12 +311,13 @@ pub fn write_elf64_x86_64_executable_segments(
             segment.image.base_address,
             segment_alignment,
         )?;
-        let file_end = file_offset
-            .checked_add(*file_size)
-            .ok_or(ExecutableWriteError::FileEndOverflow {
-                load_file_offset: file_offset,
-                image_size: *file_size,
-            })?;
+        let file_end =
+            file_offset
+                .checked_add(*file_size)
+                .ok_or(ExecutableWriteError::FileEndOverflow {
+                    load_file_offset: file_offset,
+                    image_size: *file_size,
+                })?;
         emitted_segments.push(ExecutableLoadSegment {
             file_offset,
             virtual_address: segment.image.base_address,
