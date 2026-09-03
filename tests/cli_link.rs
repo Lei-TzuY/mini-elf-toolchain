@@ -86,7 +86,9 @@ fn cli_links_gnu_object_and_readelf_accepts_result() {
     assert!(header.status.success());
     let header_stdout = String::from_utf8_lossy(&header.stdout);
     assert!(header_stdout.contains("Type:                              EXEC"));
-    assert!(header_stdout.contains("Machine:                           Advanced Micro Devices X86-64"));
+    assert!(
+        header_stdout.contains("Machine:                           Advanced Micro Devices X86-64")
+    );
     assert!(header_stdout.contains("Entry point address:               0x400000"));
 
     let program_headers = Command::new("readelf")
