@@ -189,7 +189,9 @@ fn rejects_missing_unterminated_empty_and_trailing_symbol_names() {
         append_member(&mut bytes, "a.o/", b"X");
         let mut patched = bytes;
         let table_data = 68;
-        let raw = u32::try_from(target).expect("test offset fits u32").to_be_bytes();
+        let raw = u32::try_from(target)
+            .expect("test offset fits u32")
+            .to_be_bytes();
         patched[table_data + 4..table_data + 8].copy_from_slice(&raw);
         let archive = Archive::parse(&patched).expect("archive framing valid");
         assert_eq!(parse_archive_symbol_index(&archive), Err(expected));
@@ -203,7 +205,9 @@ fn rejects_missing_unterminated_empty_and_trailing_symbol_names() {
     append_member(&mut empty, "/", &index);
     let target = empty.len();
     append_member(&mut empty, "a.o/", b"X");
-    let raw = u32::try_from(target).expect("test offset fits u32").to_be_bytes();
+    let raw = u32::try_from(target)
+        .expect("test offset fits u32")
+        .to_be_bytes();
     empty[72..76].copy_from_slice(&raw);
     let archive = Archive::parse(&empty).expect("archive framing valid");
     assert_eq!(
@@ -222,7 +226,9 @@ fn rejects_missing_unterminated_empty_and_trailing_symbol_names() {
     append_member(&mut trailing, "/", &index);
     let target = trailing.len();
     append_member(&mut trailing, "a.o/", b"X");
-    let raw = u32::try_from(target).expect("test offset fits u32").to_be_bytes();
+    let raw = u32::try_from(target)
+        .expect("test offset fits u32")
+        .to_be_bytes();
     trailing[72..76].copy_from_slice(&raw);
     let archive = Archive::parse(&trailing).expect("archive framing valid");
     assert_eq!(
