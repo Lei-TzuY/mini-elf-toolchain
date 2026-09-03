@@ -134,13 +134,9 @@ fn preexisting_definition_prevents_redundant_transitive_extraction() {
     let index = parse_archive_symbol_index(&archive)
         .expect("parse symbol index")
         .expect("archive should have symbol index");
-    let extraction = extract_indexed_archive_members(
-        &archive,
-        &index,
-        [b"foo".as_slice()],
-        [b"bar".as_slice()],
-    )
-    .expect("preexisting bar definition should satisfy foo's reference");
+    let extraction =
+        extract_indexed_archive_members(&archive, &index, [b"foo".as_slice()], [b"bar".as_slice()])
+            .expect("preexisting bar definition should satisfy foo's reference");
 
     let actual_names = extraction
         .members
