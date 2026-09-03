@@ -2,13 +2,9 @@ use core::fmt;
 
 use crate::executable_pipeline::ExecutableSectionInput;
 use crate::layout::LaidOutSection;
-use crate::link_context::{
-    build_link_context, LinkContextBuildError, LinkContextRelocationError,
-};
+use crate::link_context::{build_link_context, LinkContextBuildError, LinkContextRelocationError};
 use crate::linker_input::{LinkerInputError, LinkerInputObject};
-use crate::permission_layout::{
-    layout_sections_by_permissions, PermissionLayoutError,
-};
+use crate::permission_layout::{layout_sections_by_permissions, PermissionLayoutError};
 use crate::relocations::Elf64RelaTable;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,7 +140,9 @@ pub fn relocate_allocatable_sections(
     let layout = layout_sections_by_permissions(
         start_address,
         page_alignment,
-        sections.iter().map(|section| section.permission_layout_input()),
+        sections
+            .iter()
+            .map(|section| section.permission_layout_input()),
     )
     .map_err(RelocatedSectionError::Layout)?;
 
@@ -158,11 +156,13 @@ pub fn relocate_allocatable_sections(
     sections
         .into_iter()
         .map(|section| {
-            let section_layout = matching_layout(&layout, section.object_index, section.section_index)
-                .ok_or(RelocatedSectionError::MissingLayout {
-                    object_index: section.object_index,
-                    section_index: section.section_index,
-                })?;
+            let section_layout =
+                matching_layout(&layout, section.object_index, section.section_index).ok_or(
+                    RelocatedSectionError::MissingLayout {
+                        object_index: section.object_index,
+                        section_index: section.section_index,
+                    },
+                )?;
             let mut bytes = section.bytes.to_vec();
 
             for table in &section.rela_tables {
@@ -225,8 +225,8 @@ fn reject_memory_only_relocation(
 mod tests {
     use super::*;
     use crate::elf64::{
-        Elf64Header, Elf64SectionHeader, Elf64Symbol, Elf64SymbolTable, EM_X86_64,
-        SHT_NOBITS, SHT_STRTAB, SHT_SYMTAB,
+        Elf64Header, Elf64SectionHeader, Elf64Symbol, Elf64SymbolTable, EM_X86_64, SHT_NOBITS,
+        SHT_STRTAB, SHT_SYMTAB,
     };
     use crate::input_object::{RelocatableObject, ET_REL};
     use crate::load_segments::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE};
@@ -351,7 +351,10 @@ mod tests {
         let relocated = relocate_allocatable_sections(&[input], 0x400000, 0x1000).unwrap();
 
         assert_eq!(
-            relocated.iter().map(|section| section.address).collect::<Vec<_>>(),
+            relocated
+                .iter()
+                .map(|section| section.address)
+                .collect::<Vec<_>>(),
             vec![0x400000, 0x401000, 0x402000]
         );
         assert_eq!(relocated[0].bytes, vec![1]);
