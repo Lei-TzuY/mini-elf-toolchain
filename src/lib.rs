@@ -14,6 +14,7 @@ pub mod object_symbols;
 pub mod output_image;
 pub mod permission_layout;
 pub mod rela_apply;
+pub mod relocated_sections;
 pub mod relocations;
 pub mod resolve;
 pub mod symbol_addresses;
