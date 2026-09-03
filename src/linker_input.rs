@@ -322,14 +322,15 @@ mod tests {
         input.object.sections[1].offset = 3;
         input.object.sections[1].size = 2;
 
+        let error = input.allocatable_sections().unwrap_err();
         assert_eq!(
-            input.allocatable_sections(),
-            Err(LinkerInputError::SectionDataOutOfBounds {
+            error,
+            LinkerInputError::SectionDataOutOfBounds {
                 object_index: 7,
                 section_index: 1,
                 end: 5,
                 file_len: 4,
-            })
+            }
         );
     }
 
@@ -340,14 +341,15 @@ mod tests {
         input.object.sections[1].offset = u64::MAX;
         input.object.sections[1].size = 2;
 
+        let error = input.allocatable_sections().unwrap_err();
         assert_eq!(
-            input.allocatable_sections(),
-            Err(LinkerInputError::SectionDataRangeOverflow {
+            error,
+            LinkerInputError::SectionDataRangeOverflow {
                 object_index: 7,
                 section_index: 1,
                 offset: u64::MAX,
                 size: 2,
-            })
+            }
         );
     }
 }
