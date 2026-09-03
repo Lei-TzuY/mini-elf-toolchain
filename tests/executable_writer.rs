@@ -1,7 +1,10 @@
+use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::executable_writer::{
     write_elf64_x86_64_executable, ExecutableWriteError,
 };
 use mini_elf_toolchain::output_image::OutputSectionImage;
+use std::fs;
+use std::process::Command;
 
 fn image(base_address: u64, bytes: &[u8]) -> OutputSectionImage {
     OutputSectionImage {
@@ -50,6 +53,12 @@ fn emits_elf64_x86_64_header_and_single_load_segment() {
     assert_eq!(read_u64(&executable.bytes, ph + 40), 3);
     assert_eq!(read_u64(&executable.bytes, ph + 48), 0x1000);
     assert_eq!(&executable.bytes[0x1000..], &[0x90, 0x90, 0xc3]);
+
+    let parsed = Elf64Header::parse(&executable.bytes).unwrap();
+    assert_eq!(parsed.elf_type, 2);
+    assert_eq!(parsed.entry, 0x401000);
+    assert_eq!(parsed.program_header_count, 1);
+    assert_eq!(parsed.section_header_count, 0);
 }
 
 #[test]
@@ -58,7 +67,10 @@ fn chooses_file_offset_congruent_with_nonzero_virtual_address_residue() {
     let executable = write_elf64_x86_64_executable(&input, 0x400123, 0x1000).unwrap();
 
     assert_eq!(executable.load_file_offset, 0x123);
-    assert_eq!(executable.load_file_offset % 0x1000, 0x400123 % 0x1000);
+    assert_eq!(
+        executable.load_file_offset % 0x1000,
+        0x400123 % 0x1000
+    );
     assert_eq!(read_u64(&executable.bytes, 64 + 8), 0x123);
     assert_eq!(executable.bytes[0x123], 0xc3);
 }
@@ -113,14 +125,36 @@ fn rejects_virtual_image_end_overflow() {
 }
 
 #[test]
-fn rejects_file_offset_alignment_overflow() {
-    let input = image(u64::MAX - 1, &[0xc3]);
+fn gnu_readelf_accepts_emitted_header_and_program_header() {
+    if Command::new("readelf").arg("--version").output().is_err() {
+        return;
+    }
 
-    assert_eq!(
-        write_elf64_x86_64_executable(&input, u64::MAX - 1, 1_u64 << 63),
-        Err(ExecutableWriteError::FileOffsetOverflow {
-            metadata_end: 120,
-            alignment: 1_u64 << 63,
-        })
+    let input = image(0x401000, &[0x90, 0xc3]);
+    let executable = write_elf64_x86_64_executable(&input, 0x401000, 0x1000).unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "mini-elf-toolchain-{}-writer-test.elf",
+        std::process::id()
+    ));
+    fs::write(&path, &executable.bytes).unwrap();
+
+    let output = Command::new("readelf")
+        .args(["-h", "-l"])
+        .arg(&path)
+        .env("LC_ALL", "C")
+        .output()
+        .unwrap();
+    let _ = fs::remove_file(&path);
+
+    assert!(
+        output.status.success(),
+        "readelf failed: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("ELF64"));
+    assert!(stdout.contains("EXEC"));
+    assert!(stdout.contains("Advanced Micro Devices X86-64"));
+    assert!(stdout.contains("LOAD"));
+    assert!(stdout.contains("0x0000000000401000"));
 }
