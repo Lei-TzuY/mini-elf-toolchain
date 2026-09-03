@@ -63,10 +63,7 @@ fn resolves_cross_object_global_and_applies_relocation() {
     let definition_file = b"\0target\0";
     let reference_sections = [string_table(0, reference_file.len() as u64)];
     let definition_sections = [string_table(0, definition_file.len() as u64)];
-    let reference_tables = [table(
-        2,
-        vec![symbol(1, STB_GLOBAL, SHN_UNDEF, 0)],
-    )];
+    let reference_tables = [table(2, vec![symbol(1, STB_GLOBAL, SHN_UNDEF, 0)])];
     let definition_tables = [table(3, vec![symbol(1, STB_GLOBAL, 1, 0x20)])];
     let objects = [
         ValidatedObject {
@@ -88,7 +85,10 @@ fn resolves_cross_object_global_and_applies_relocation() {
     }];
 
     let context = build_link_context(&objects, &layout).unwrap();
-    assert_eq!(context.global_addresses().get(b"target".as_slice()), Some(&0x8020));
+    assert_eq!(
+        context.global_addresses().get(b"target".as_slice()),
+        Some(&0x8020)
+    );
     assert_eq!(context.definitions()[b"target".as_slice()].object_index, 1);
 
     let mut section = [0u8; 8];
