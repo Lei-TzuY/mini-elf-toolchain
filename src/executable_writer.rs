@@ -25,16 +25,29 @@ pub struct ExecutableImage {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutableWriteError {
-    InvalidSegmentAlignment { alignment: u64 },
-    ImageEndOverflow { base_address: u64, image_size: u64 },
+    InvalidSegmentAlignment {
+        alignment: u64,
+    },
+    ImageEndOverflow {
+        base_address: u64,
+        image_size: u64,
+    },
     EntryOutsideImage {
         entry_address: u64,
         base_address: u64,
         image_size: u64,
     },
-    FileOffsetOverflow { metadata_end: u64, alignment: u64 },
-    FileEndOverflow { load_file_offset: u64, image_size: u64 },
-    FileTooLarge { file_size: u64 },
+    FileOffsetOverflow {
+        metadata_end: u64,
+        alignment: u64,
+    },
+    FileEndOverflow {
+        load_file_offset: u64,
+        image_size: u64,
+    },
+    FileTooLarge {
+        file_size: u64,
+    },
 }
 
 impl fmt::Display for ExecutableWriteError {
@@ -94,11 +107,10 @@ pub fn write_elf64_x86_64_executable(
         });
     }
 
-    let image_size = u64::try_from(image.bytes.len()).map_err(|_| {
-        ExecutableWriteError::FileTooLarge {
+    let image_size =
+        u64::try_from(image.bytes.len()).map_err(|_| ExecutableWriteError::FileTooLarge {
             file_size: u64::MAX,
-        }
-    })?;
+        })?;
     let image_end = image.base_address.checked_add(image_size).ok_or(
         ExecutableWriteError::ImageEndOverflow {
             base_address: image.base_address,
@@ -118,22 +130,22 @@ pub fn write_elf64_x86_64_executable(
         image.base_address,
         segment_alignment,
     )?;
-    let file_size = load_file_offset
-        .checked_add(image_size)
-        .ok_or(ExecutableWriteError::FileEndOverflow {
-            load_file_offset,
-            image_size,
-        })?;
-    let file_size_usize = usize::try_from(file_size)
-        .map_err(|_| ExecutableWriteError::FileTooLarge { file_size })?;
+    let file_size =
+        load_file_offset
+            .checked_add(image_size)
+            .ok_or(ExecutableWriteError::FileEndOverflow {
+                load_file_offset,
+                image_size,
+            })?;
+    let file_size_usize =
+        usize::try_from(file_size).map_err(|_| ExecutableWriteError::FileTooLarge { file_size })?;
     let load_file_offset_usize = usize::try_from(load_file_offset)
         .map_err(|_| ExecutableWriteError::FileTooLarge { file_size })?;
 
     let mut bytes = vec![0; file_size_usize];
     write_elf_header(&mut bytes[..ELF64_HEADER_BYTES], entry_address);
     write_program_header(
-        &mut bytes[ELF64_HEADER_BYTES
-            ..ELF64_HEADER_BYTES + ELF64_PROGRAM_HEADER_BYTES],
+        &mut bytes[ELF64_HEADER_BYTES..ELF64_HEADER_BYTES + ELF64_PROGRAM_HEADER_BYTES],
         load_file_offset,
         image.base_address,
         image_size,
