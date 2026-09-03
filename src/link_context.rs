@@ -33,9 +33,14 @@ impl fmt::Display for LinkContextBuildError {
             Self::ObjectSymbols {
                 object_index,
                 source,
-            } => write!(f, "cannot read symbols from object {object_index}: {source}"),
+            } => write!(
+                f,
+                "cannot read symbols from object {object_index}: {source}"
+            ),
             Self::Resolution(source) => write!(f, "symbol resolution failed: {source:?}"),
-            Self::FinalAddress(source) => write!(f, "cannot resolve final symbol address: {source}"),
+            Self::FinalAddress(source) => {
+                write!(f, "cannot resolve final symbol address: {source}")
+            }
         }
     }
 }
@@ -108,8 +113,8 @@ pub fn build_link_context<'a>(
 
     let definitions = resolve_symbols(symbols_by_object.iter().flatten().copied())
         .map_err(LinkContextBuildError::Resolution)?;
-    let global_addresses =
-        final_symbol_addresses(&definitions, layout).map_err(LinkContextBuildError::FinalAddress)?;
+    let global_addresses = final_symbol_addresses(&definitions, layout)
+        .map_err(LinkContextBuildError::FinalAddress)?;
 
     Ok(LinkContext {
         symbols_by_object,
