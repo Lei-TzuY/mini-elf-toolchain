@@ -1,12 +1,17 @@
 use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::input_object::RelocatableObject;
+use mini_elf_toolchain::linker_input::LinkerInputObject;
+use mini_elf_toolchain::static_link::link_static_executable;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
-const USAGE: &str =
-    "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...";
+const DEFAULT_START_ADDRESS: u64 = 0x400000;
+const DEFAULT_PAGE_ALIGNMENT: u64 = 0x1000;
+const DEFAULT_ENTRY_SYMBOL: &[u8] = b"_start";
+
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> <input>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -59,6 +64,23 @@ where
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
         return validate_relocatable_files(&inputs);
+    }
+
+    if command == "link" {
+        let output_flag = args
+            .next()
+            .ok_or_else(|| CliError::Usage("missing -o <output>".to_owned()))?;
+        if output_flag != "-o" {
+            return Err(CliError::Usage("expected -o <output> after link".to_owned()));
+        }
+        let output = args
+            .next()
+            .ok_or_else(|| CliError::Usage("missing output path after -o".to_owned()))?;
+        let inputs: Vec<_> = args.collect();
+        if inputs.is_empty() {
+            return Err(CliError::Usage("missing relocatable input path".to_owned()));
+        }
+        return link_files(&output, &inputs);
     }
 
     Err(CliError::Usage(format!(
@@ -129,6 +151,56 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
     ))
 }
 
+fn link_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError> {
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        files.push(read_file(path)?);
+    }
+
+    let mut inputs = Vec::with_capacity(files.len());
+    for (object_index, (path, file)) in paths.iter().zip(files.iter()).enumerate() {
+        let input = LinkerInputObject::parse(object_index, file).map_err(|error| {
+            CliError::Failure(format!("{}: {error}", path.to_string_lossy()))
+        })?;
+        inputs.push(input);
+    }
+
+    let image = link_static_executable(
+        &inputs,
+        DEFAULT_START_ADDRESS,
+        DEFAULT_PAGE_ALIGNMENT,
+        DEFAULT_ENTRY_SYMBOL,
+    )
+    .map_err(|error| CliError::Failure(format!("link failed: {error}")))?;
+
+    fs::write(output, &image.bytes).map_err(|error| {
+        CliError::Failure(format!("{}: {error}", output.to_string_lossy()))
+    })?;
+    set_executable_permissions(output)?;
+
+    Ok(format!(
+        "linked static ELF64 x86-64: output={}, objects={}, bytes={}, entry={:#x}",
+        output.to_string_lossy(),
+        paths.len(),
+        image.bytes.len(),
+        image.entry_address
+    ))
+}
+
+#[cfg(unix)]
+fn set_executable_permissions(path: &OsString) -> Result<(), CliError> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let permissions = fs::Permissions::from_mode(0o755);
+    fs::set_permissions(path, permissions)
+        .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))
+}
+
+#[cfg(not(unix))]
+fn set_executable_permissions(_path: &OsString) -> Result<(), CliError> {
+    Ok(())
+}
+
 fn read_file(path: &OsString) -> Result<Vec<u8>, CliError> {
     fs::read(path)
         .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))
@@ -156,8 +228,8 @@ mod tests {
     #[test]
     fn unknown_command_is_usage_error() {
         assert_eq!(
-            run([OsString::from("link")].into_iter()),
-            Err(CliError::Usage("unknown command 'link'".to_owned()))
+            run([OsString::from("frobnicate")].into_iter()),
+            Err(CliError::Usage("unknown command 'frobnicate'".to_owned()))
         );
     }
 
@@ -178,6 +250,30 @@ mod tests {
     fn validate_rel_requires_at_least_one_input() {
         assert_eq!(
             run([OsString::from("validate-rel")].into_iter()),
+            Err(CliError::Usage("missing relocatable input path".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_requires_output_flag_before_io() {
+        let args = [OsString::from("link"), OsString::from("input.o")];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage(
+                "expected -o <output> after link".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn link_requires_at_least_one_input_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
             Err(CliError::Usage("missing relocatable input path".to_owned()))
         );
     }
