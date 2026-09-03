@@ -1,7 +1,7 @@
 use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::input_object::RelocatableObject;
 use mini_elf_toolchain::linker_input::LinkerInputObject;
-use mini_elf_toolchain::static_link::link_static_executable;
+use mini_elf_toolchain::static_link::link_static_executable_with_map;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -11,7 +11,7 @@ const DEFAULT_START_ADDRESS: u64 = 0x400000;
 const DEFAULT_PAGE_ALIGNMENT: u64 = 0x1000;
 const DEFAULT_ENTRY_SYMBOL: &[u8] = b"_start";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> <input>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] <input>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -78,11 +78,21 @@ where
         let output = args
             .next()
             .ok_or_else(|| CliError::Usage("missing output path after -o".to_owned()))?;
-        let inputs: Vec<_> = args.collect();
-        if inputs.is_empty() {
+        let mut remaining: Vec<_> = args.collect();
+        let map_output = if remaining.first().is_some_and(|argument| argument == "--map") {
+            if remaining.len() < 2 {
+                return Err(CliError::Usage("missing map path after --map".to_owned()));
+            }
+            let map_output = remaining[1].clone();
+            remaining.drain(0..2);
+            Some(map_output)
+        } else {
+            None
+        };
+        if remaining.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
-        return link_files(&output, &inputs);
+        return link_files(&output, map_output.as_ref(), &remaining);
     }
 
     Err(CliError::Usage(format!(
@@ -153,7 +163,11 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
     ))
 }
 
-fn link_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError> {
+fn link_files(
+    output: &OsString,
+    map_output: Option<&OsString>,
+    paths: &[OsString],
+) -> Result<String, CliError> {
     let mut files = Vec::with_capacity(paths.len());
     for path in paths {
         files.push(read_file(path)?);
@@ -166,7 +180,7 @@ fn link_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError>
         inputs.push(input);
     }
 
-    let image = link_static_executable(
+    let linked = link_static_executable_with_map(
         &inputs,
         DEFAULT_START_ADDRESS,
         DEFAULT_PAGE_ALIGNMENT,
@@ -174,16 +188,22 @@ fn link_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError>
     )
     .map_err(|error| CliError::Failure(format!("link failed: {error}")))?;
 
-    fs::write(output, &image.bytes)
+    fs::write(output, &linked.image.bytes)
         .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
     set_executable_permissions(output)?;
+
+    if let Some(map_output) = map_output {
+        fs::write(map_output, linked.link_map.render()).map_err(|error| {
+            CliError::Failure(format!("{}: {error}", map_output.to_string_lossy()))
+        })?;
+    }
 
     Ok(format!(
         "linked static ELF64 x86-64: output={}, objects={}, bytes={}, entry={:#x}",
         output.to_string_lossy(),
         paths.len(),
-        image.bytes.len(),
-        image.entry_address
+        linked.image.bytes.len(),
+        linked.image.entry_address
     ))
 }
 
@@ -275,6 +295,20 @@ mod tests {
         assert_eq!(
             run(args.into_iter()),
             Err(CliError::Usage("missing relocatable input path".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_map_requires_map_path_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--map"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("missing map path after --map".to_owned()))
         );
     }
 }
