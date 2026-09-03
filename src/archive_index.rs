@@ -300,7 +300,7 @@ pub fn parse_archive_symbol_index<'a>(
         });
     }
 
-    if cursor != data.len() {
+    if data[cursor..].iter().any(|byte| *byte != 0) {
         return Err(ArchiveSymbolIndexError::TrailingData {
             offset: table_offset,
             trailing_bytes: data.len() - cursor,
