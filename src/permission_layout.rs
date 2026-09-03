@@ -13,7 +13,9 @@ pub struct PermissionLayoutInput {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionLayoutError {
-    InvalidPageAlignment { alignment: u64 },
+    InvalidPageAlignment {
+        alignment: u64,
+    },
     InvalidSectionAlignment {
         object_index: usize,
         section_index: u16,
@@ -131,14 +133,15 @@ where
                 alignment: required_alignment,
             },
         )?;
-        cursor = address.checked_add(section.size).ok_or(
-            PermissionLayoutError::SectionEndOverflow {
-                object_index: section.object_index,
-                section_index: section.section_index,
-                address,
-                size: section.size,
-            },
-        )?;
+        cursor =
+            address
+                .checked_add(section.size)
+                .ok_or(PermissionLayoutError::SectionEndOverflow {
+                    object_index: section.object_index,
+                    section_index: section.section_index,
+                    address,
+                    size: section.size,
+                })?;
 
         laid_out.push(LaidOutSection {
             object_index: section.object_index,
