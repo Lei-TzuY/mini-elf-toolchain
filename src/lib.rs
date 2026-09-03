@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+pub mod archive;
 pub mod elf64;
 pub mod executable_pipeline;
 pub mod executable_writer;
