@@ -79,8 +79,13 @@ fn extraction_reaches_fixed_point_without_extracting_unused_members() {
     let index = parse_archive_symbol_index(&archive)
         .expect("parse symbol index")
         .expect("archive should have symbol index");
-    let extraction = extract_indexed_archive_members(&archive, &index, [b"foo".as_slice()])
-        .expect("lazy extraction should succeed");
+    let extraction = extract_indexed_archive_members(
+        &archive,
+        &index,
+        [b"foo".as_slice()],
+        std::iter::empty::<&[u8]>(),
+    )
+    .expect("lazy extraction should succeed");
 
     let actual_names = extraction
         .members
@@ -116,6 +121,39 @@ fn extraction_reaches_fixed_point_without_extracting_unused_members() {
 }
 
 #[test]
+fn preexisting_definition_prevents_redundant_transitive_extraction() {
+    if !have_gnu_binutils() {
+        return;
+    }
+
+    let dir = temp_dir("predefined");
+    make_chain_archive(&dir);
+
+    let bytes = fs::read(dir.join("libchain.a")).expect("read archive");
+    let archive = Archive::parse(&bytes).expect("parse archive");
+    let index = parse_archive_symbol_index(&archive)
+        .expect("parse symbol index")
+        .expect("archive should have symbol index");
+    let extraction = extract_indexed_archive_members(
+        &archive,
+        &index,
+        [b"foo".as_slice()],
+        [b"bar".as_slice()],
+    )
+    .expect("preexisting bar definition should satisfy foo's reference");
+
+    let actual_names = extraction
+        .members
+        .iter()
+        .map(|member| String::from_utf8(member.name.clone()).expect("member name must be UTF-8"))
+        .collect::<Vec<_>>();
+    assert_eq!(actual_names, vec!["foo.o"]);
+    assert!(extraction.unresolved.is_empty());
+
+    fs::remove_dir_all(dir).expect("remove temporary test directory");
+}
+
+#[test]
 fn unresolved_weak_reference_does_not_trigger_transitive_extraction() {
     if !have_gnu_binutils() {
         return;
@@ -125,7 +163,7 @@ fn unresolved_weak_reference_does_not_trigger_transitive_extraction() {
     assemble(
         &dir,
         "foo",
-        ".weak weakdep\n.globl foo\n.type foo,@function\nfoo:\n  mov weakdep@GOTPCREL(%rip),%rax\n  ret\n",
+        ".weak weakdep\n.globl foo\n.type foo,@function\nfoo:\n  call weakdep\n  ret\n",
     );
     assemble(
         &dir,
@@ -144,8 +182,13 @@ fn unresolved_weak_reference_does_not_trigger_transitive_extraction() {
     let index = parse_archive_symbol_index(&archive)
         .expect("parse symbol index")
         .expect("archive should have symbol index");
-    let extraction = extract_indexed_archive_members(&archive, &index, [b"foo".as_slice()])
-        .expect("lazy extraction should succeed");
+    let extraction = extract_indexed_archive_members(
+        &archive,
+        &index,
+        [b"foo".as_slice()],
+        std::iter::empty::<&[u8]>(),
+    )
+    .expect("lazy extraction should succeed");
 
     let actual_names = extraction
         .members
@@ -187,16 +230,26 @@ fn selected_malformed_member_is_rejected_but_unselected_members_are_not_parsed()
         .expect("symbol index remains structurally valid")
         .expect("archive should have symbol index");
 
-    let missing = extract_indexed_archive_members(&archive, &index, [b"missing".as_slice()])
-        .expect("unselected malformed member must remain lazy");
+    let missing = extract_indexed_archive_members(
+        &archive,
+        &index,
+        [b"missing".as_slice()],
+        std::iter::empty::<&[u8]>(),
+    )
+    .expect("unselected malformed member must remain lazy");
     assert!(missing.members.is_empty());
     assert_eq!(
         missing.unresolved.into_iter().collect::<Vec<_>>(),
         vec![b"missing".to_vec()]
     );
 
-    let error = extract_indexed_archive_members(&archive, &index, [b"foo".as_slice()])
-        .expect_err("selected malformed member must fail");
+    let error = extract_indexed_archive_members(
+        &archive,
+        &index,
+        [b"foo".as_slice()],
+        std::iter::empty::<&[u8]>(),
+    )
+    .expect_err("selected malformed member must fail");
     assert!(matches!(
         error,
         ArchiveExtractionError::InvalidObject { .. }
