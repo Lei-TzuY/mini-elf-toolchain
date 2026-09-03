@@ -1,7 +1,8 @@
 use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::executable_writer::{
-    write_elf64_x86_64_executable, write_elf64_x86_64_executable_with_memory_size,
-    ExecutableWriteError,
+    write_elf64_x86_64_executable, write_elf64_x86_64_executable_segments,
+    write_elf64_x86_64_executable_with_memory_size, ExecutableWriteError, LoadSegmentInput,
+    LoadSegmentPermissions,
 };
 use mini_elf_toolchain::output_image::OutputSectionImage;
 use std::fs;
@@ -54,6 +55,7 @@ fn emits_elf64_x86_64_header_and_single_load_segment() {
     assert_eq!(read_u64(&executable.bytes, ph + 40), 3);
     assert_eq!(read_u64(&executable.bytes, ph + 48), 0x1000);
     assert_eq!(executable.load_memory_size, 3);
+    assert_eq!(executable.load_segments.len(), 1);
     assert_eq!(&executable.bytes[0x1000..], &[0x90, 0x90, 0xc3]);
 
     let parsed = Elf64Header::parse(&executable.bytes).unwrap();
@@ -75,6 +77,102 @@ fn emits_load_segment_with_zero_fill_memory_tail() {
     assert_eq!(executable.load_memory_size, 0x102);
     assert_eq!(executable.bytes.len(), 0x1002);
     assert_eq!(&executable.bytes[0x1000..], &[0x90, 0xc3]);
+}
+
+#[test]
+fn emits_checked_rx_and_rw_load_segments_in_virtual_address_order() {
+    let text = image(0x401000, &[0x90, 0xc3]);
+    let data = image(0x403000, &[1, 2, 3, 4]);
+    let inputs = [
+        LoadSegmentInput {
+            image: &data,
+            memory_size: 0x104,
+            permissions: LoadSegmentPermissions::ReadWrite,
+        },
+        LoadSegmentInput {
+            image: &text,
+            memory_size: 2,
+            permissions: LoadSegmentPermissions::ReadExecute,
+        },
+    ];
+
+    let executable =
+        write_elf64_x86_64_executable_segments(&inputs, 0x401000, 0x1000).unwrap();
+
+    assert_eq!(read_u16(&executable.bytes, 56), 2);
+    assert_eq!(executable.load_segments.len(), 2);
+
+    let text_ph = 64;
+    let data_ph = 64 + 56;
+    assert_eq!(read_u32(&executable.bytes, text_ph + 4), 5);
+    assert_eq!(read_u64(&executable.bytes, text_ph + 16), 0x401000);
+    assert_eq!(read_u64(&executable.bytes, text_ph + 32), 2);
+    assert_eq!(read_u64(&executable.bytes, text_ph + 40), 2);
+
+    assert_eq!(read_u32(&executable.bytes, data_ph + 4), 6);
+    assert_eq!(read_u64(&executable.bytes, data_ph + 16), 0x403000);
+    assert_eq!(read_u64(&executable.bytes, data_ph + 32), 4);
+    assert_eq!(read_u64(&executable.bytes, data_ph + 40), 0x104);
+
+    let text_offset = read_u64(&executable.bytes, text_ph + 8) as usize;
+    let data_offset = read_u64(&executable.bytes, data_ph + 8) as usize;
+    assert_eq!(text_offset as u64 % 0x1000, 0x401000 % 0x1000);
+    assert_eq!(data_offset as u64 % 0x1000, 0x403000 % 0x1000);
+    assert!(data_offset >= text_offset + 2);
+    assert_eq!(&executable.bytes[text_offset..text_offset + 2], &[0x90, 0xc3]);
+    assert_eq!(&executable.bytes[data_offset..data_offset + 4], &[1, 2, 3, 4]);
+}
+
+#[test]
+fn rejects_overlapping_load_segment_memory_ranges() {
+    let text = image(0x401000, &[0x90, 0xc3]);
+    let data = image(0x401100, &[1, 2]);
+    let inputs = [
+        LoadSegmentInput {
+            image: &text,
+            memory_size: 0x200,
+            permissions: LoadSegmentPermissions::ReadExecute,
+        },
+        LoadSegmentInput {
+            image: &data,
+            memory_size: 2,
+            permissions: LoadSegmentPermissions::ReadWrite,
+        },
+    ];
+
+    assert_eq!(
+        write_elf64_x86_64_executable_segments(&inputs, 0x401000, 0x1000),
+        Err(ExecutableWriteError::SegmentAddressOverlap {
+            previous_base: 0x401000,
+            previous_memory_size: 0x200,
+            next_base: 0x401100,
+        })
+    );
+}
+
+#[test]
+fn rejects_entry_point_in_non_executable_load_segment() {
+    let text = image(0x401000, &[0x90, 0xc3]);
+    let data = image(0x403000, &[1, 2]);
+    let inputs = [
+        LoadSegmentInput {
+            image: &text,
+            memory_size: 2,
+            permissions: LoadSegmentPermissions::ReadExecute,
+        },
+        LoadSegmentInput {
+            image: &data,
+            memory_size: 2,
+            permissions: LoadSegmentPermissions::ReadWrite,
+        },
+    ];
+
+    assert_eq!(
+        write_elf64_x86_64_executable_segments(&inputs, 0x403000, 0x1000),
+        Err(ExecutableWriteError::EntryOutsideExecutableSegment {
+            entry_address: 0x403000,
+        })
+    );
 }
 
 #[test]
@@ -183,9 +281,22 @@ fn gnu_readelf_accepts_emitted_header_and_program_header() {
         return;
     }
 
-    let input = image(0x401000, &[0x90, 0xc3]);
+    let text = image(0x401000, &[0x90, 0xc3]);
+    let data = image(0x403000, &[1, 2]);
+    let inputs = [
+        LoadSegmentInput {
+            image: &text,
+            memory_size: 2,
+            permissions: LoadSegmentPermissions::ReadExecute,
+        },
+        LoadSegmentInput {
+            image: &data,
+            memory_size: 0x102,
+            permissions: LoadSegmentPermissions::ReadWrite,
+        },
+    ];
     let executable =
-        write_elf64_x86_64_executable_with_memory_size(&input, 0x401000, 0x1000, 0x102).unwrap();
+        write_elf64_x86_64_executable_segments(&inputs, 0x401000, 0x1000).unwrap();
     let path = std::env::temp_dir().join(format!(
         "mini-elf-toolchain-{}-writer-test.elf",
         std::process::id()
@@ -209,7 +320,10 @@ fn gnu_readelf_accepts_emitted_header_and_program_header() {
     assert!(stdout.contains("ELF64"));
     assert!(stdout.contains("EXEC"));
     assert!(stdout.contains("Advanced Micro Devices X86-64"));
-    assert!(stdout.contains("LOAD"));
+    assert_eq!(stdout.matches("LOAD").count(), 2);
     assert!(stdout.contains("0x0000000000401000"));
+    assert!(stdout.contains("0x0000000000403000"));
+    assert!(stdout.contains("R E"));
+    assert!(stdout.contains("RW"));
     assert!(stdout.contains("0x0000000000000002 0x0000000000000102"));
 }
