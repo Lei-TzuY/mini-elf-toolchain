@@ -31,25 +31,31 @@ fn section<'a>(
 }
 
 #[test]
-fn builds_deterministic_rx_and_rw_segments_with_trailing_bss() {
+fn builds_deterministic_rx_r_and_rw_segments_with_trailing_bss() {
     let text = [0x90, 0xc3];
+    let rodata = [b'o', b'k'];
     let data = [1, 2, 3, 4];
     let inputs = [
-        section(1, 3, 0x402004, 0x20, SHT_NOBITS, SHF_ALLOC | SHF_WRITE, &[]),
+        section(1, 4, 0x403004, 0x20, SHT_NOBITS, SHF_ALLOC | SHF_WRITE, &[]),
         section(0, 1, 0x401000, 2, 1, SHF_ALLOC | SHF_EXECINSTR, &text),
-        section(1, 2, 0x402000, 4, 1, SHF_ALLOC | SHF_WRITE, &data),
+        section(0, 2, 0x402000, 2, 1, SHF_ALLOC, &rodata),
+        section(1, 3, 0x403000, 4, 1, SHF_ALLOC | SHF_WRITE, &data),
     ];
 
     let segments = build_load_segments(inputs).unwrap();
-    assert_eq!(segments.len(), 2);
+    assert_eq!(segments.len(), 3);
     assert_eq!(segments[0].permissions, LoadSegmentPermissions::ReadExecute);
     assert_eq!(segments[0].image.base_address, 0x401000);
     assert_eq!(segments[0].image.bytes, text);
     assert_eq!(segments[0].memory_size, 2);
-    assert_eq!(segments[1].permissions, LoadSegmentPermissions::ReadWrite);
+    assert_eq!(segments[1].permissions, LoadSegmentPermissions::ReadOnly);
     assert_eq!(segments[1].image.base_address, 0x402000);
-    assert_eq!(segments[1].image.bytes, data);
-    assert_eq!(segments[1].memory_size, 0x24);
+    assert_eq!(segments[1].image.bytes, rodata);
+    assert_eq!(segments[1].memory_size, 2);
+    assert_eq!(segments[2].permissions, LoadSegmentPermissions::ReadWrite);
+    assert_eq!(segments[2].image.base_address, 0x403000);
+    assert_eq!(segments[2].image.bytes, data);
+    assert_eq!(segments[2].memory_size, 0x24);
 }
 
 #[test]
@@ -89,17 +95,20 @@ fn rejects_writable_executable_sections() {
 }
 
 #[test]
-fn rejects_read_only_alloc_section_until_r_segment_exists() {
-    let bytes = [0u8; 1];
-    let error =
-        build_load_segments([section(0, 4, 0x401100, 1, 1, SHF_ALLOC, &bytes)]).unwrap_err();
-    assert_eq!(
-        error,
-        LoadSegmentBuildError::UnsupportedReadOnlySection {
-            object_index: 0,
-            section_index: 4,
-        }
-    );
+fn groups_adjacent_read_only_sections_into_one_segment() {
+    let first = [1u8, 2];
+    let second = [3u8, 4];
+    let segments = build_load_segments([
+        section(0, 4, 0x402000, 2, 1, SHF_ALLOC, &first),
+        section(0, 5, 0x402002, 2, 1, SHF_ALLOC, &second),
+    ])
+    .unwrap();
+
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].permissions, LoadSegmentPermissions::ReadOnly);
+    assert_eq!(segments[0].image.base_address, 0x402000);
+    assert_eq!(segments[0].image.bytes, [1, 2, 3, 4]);
+    assert_eq!(segments[0].memory_size, 4);
 }
 
 #[test]
@@ -169,17 +178,19 @@ fn rejects_section_end_overflow() {
 }
 
 #[test]
-fn built_segments_feed_writer_and_readelf() {
+fn built_segments_feed_writer_and_readelf_with_r_rx_rw_permissions() {
     if Command::new("readelf").arg("--version").output().is_err() {
         return;
     }
 
     let text = [0x90, 0xc3];
+    let rodata = [b'o', b'k'];
     let data = [1, 2, 3, 4];
     let built = build_load_segments([
         section(0, 1, 0x401000, 2, 1, SHF_ALLOC | SHF_EXECINSTR, &text),
-        section(0, 2, 0x402000, 4, 1, SHF_ALLOC | SHF_WRITE, &data),
-        section(0, 3, 0x402004, 0x20, SHT_NOBITS, SHF_ALLOC | SHF_WRITE, &[]),
+        section(0, 2, 0x402000, 2, 1, SHF_ALLOC, &rodata),
+        section(0, 3, 0x403000, 4, 1, SHF_ALLOC | SHF_WRITE, &data),
+        section(0, 4, 0x403004, 0x20, SHT_NOBITS, SHF_ALLOC | SHF_WRITE, &[]),
     ])
     .unwrap();
     let inputs = built
@@ -203,7 +214,14 @@ fn built_segments_feed_writer_and_readelf() {
     let _ = std::fs::remove_file(&path);
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert_eq!(stdout.matches(" LOAD ").count(), 2);
-    assert!(stdout.contains("R E"));
-    assert!(stdout.contains("RW"));
+    let load_lines = stdout
+        .lines()
+        .filter(|line| line.contains(" LOAD "))
+        .collect::<Vec<_>>();
+    assert_eq!(load_lines.len(), 3);
+    assert!(load_lines[0].contains("R E"));
+    assert!(load_lines[1].contains(" R "));
+    assert!(!load_lines[1].contains(" E "));
+    assert!(!load_lines[1].contains(" W "));
+    assert!(load_lines[2].contains("RW"));
 }
