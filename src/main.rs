@@ -79,7 +79,10 @@ where
             .next()
             .ok_or_else(|| CliError::Usage("missing output path after -o".to_owned()))?;
         let mut remaining: Vec<_> = args.collect();
-        let map_output = if remaining.first().is_some_and(|argument| argument == "--map") {
+        let map_output = if remaining
+            .first()
+            .is_some_and(|argument| argument == "--map")
+        {
             if remaining.len() < 2 {
                 return Err(CliError::Usage("missing map path after --map".to_owned()));
             }
