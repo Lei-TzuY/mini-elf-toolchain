@@ -1,7 +1,5 @@
 use mini_elf_toolchain::elf64::Elf64Header;
-use mini_elf_toolchain::executable_writer::{
-    write_elf64_x86_64_executable, ExecutableWriteError,
-};
+use mini_elf_toolchain::executable_writer::{write_elf64_x86_64_executable, ExecutableWriteError};
 use mini_elf_toolchain::output_image::OutputSectionImage;
 use std::fs;
 use std::process::Command;
@@ -67,10 +65,7 @@ fn chooses_file_offset_congruent_with_nonzero_virtual_address_residue() {
     let executable = write_elf64_x86_64_executable(&input, 0x400123, 0x1000).unwrap();
 
     assert_eq!(executable.load_file_offset, 0x123);
-    assert_eq!(
-        executable.load_file_offset % 0x1000,
-        0x400123 % 0x1000
-    );
+    assert_eq!(executable.load_file_offset % 0x1000, 0x400123 % 0x1000);
     assert_eq!(read_u64(&executable.bytes, 64 + 8), 0x123);
     assert_eq!(executable.bytes[0x123], 0xc3);
 }
