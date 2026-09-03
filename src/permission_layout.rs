@@ -87,9 +87,9 @@ impl std::error::Error for PermissionLayoutError {}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PermissionClass {
-    ReadOnly,
-    ReadExecute,
-    ReadWrite,
+    R,
+    Rx,
+    Rw,
 }
 
 pub fn layout_sections_by_permissions<I>(
@@ -165,9 +165,9 @@ fn permission_class(
             object_index: section.object_index,
             section_index: section.section_index,
         }),
-        (false, true) => Ok(PermissionClass::ReadExecute),
-        (true, false) => Ok(PermissionClass::ReadWrite),
-        (false, false) => Ok(PermissionClass::ReadOnly),
+        (false, true) => Ok(PermissionClass::Rx),
+        (true, false) => Ok(PermissionClass::Rw),
+        (false, false) => Ok(PermissionClass::R),
     }
 }
 
