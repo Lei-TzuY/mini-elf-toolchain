@@ -105,11 +105,7 @@ fn reports_page_boundary_alignment_overflow() {
 #[test]
 fn reports_section_end_overflow() {
     assert_eq!(
-        layout_sections_by_permissions(
-            u64::MAX - 3,
-            0x1000,
-            [input(9, 8, 1, SHF_EXECINSTR)],
-        ),
+        layout_sections_by_permissions(u64::MAX - 3, 0x1000, [input(9, 8, 1, SHF_EXECINSTR)],),
         Err(PermissionLayoutError::SectionEndOverflow {
             object_index: 0,
             section_index: 9,
