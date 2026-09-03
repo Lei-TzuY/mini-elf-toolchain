@@ -2,12 +2,8 @@ use core::fmt;
 use std::collections::BTreeSet;
 
 use crate::archive::{Archive, ArchiveError};
-use crate::archive_index::{
-    parse_archive_symbol_index, ArchiveSymbolIndexError,
-};
-use crate::archive_lazy::{
-    extract_indexed_archive_members, ArchiveExtractionError,
-};
+use crate::archive_index::{parse_archive_symbol_index, ArchiveSymbolIndexError};
+use crate::archive_lazy::{extract_indexed_archive_members, ArchiveExtractionError};
 use crate::input_object::RelocatableObjectError;
 use crate::linker_input::LinkerInputObject;
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
