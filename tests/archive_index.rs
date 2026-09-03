@@ -52,13 +52,13 @@ fn parses_sysv32_symbol_index_and_maps_members() {
 #[test]
 fn parses_sysv64_symbol_index() {
     let mut bytes = b"!<arch>\n".to_vec();
-    let member_header = 88u64;
+    let member_header = 90u64;
     let mut index = Vec::new();
     index.extend_from_slice(&1u64.to_be_bytes());
     index.extend_from_slice(&member_header.to_be_bytes());
     index.extend_from_slice(b"wide\0");
     append_member(&mut bytes, "/SYM64/", &index);
-    assert_eq!(append_member(&mut bytes, "wide.o/", b"ELF0"), 88);
+    assert_eq!(append_member(&mut bytes, "wide.o/", b"ELF0"), 90);
 
     let archive = Archive::parse(&bytes).expect("valid archive");
     let parsed = parse_archive_symbol_index(&archive)
@@ -67,7 +67,7 @@ fn parses_sysv64_symbol_index() {
 
     assert_eq!(parsed.kind, ArchiveSymbolIndexKind::SysV64);
     assert_eq!(parsed.entries[0].name, b"wide");
-    assert_eq!(parsed.entries[0].member_header_offset, 88);
+    assert_eq!(parsed.entries[0].member_header_offset, 90);
 }
 
 #[test]
