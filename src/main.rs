@@ -87,7 +87,7 @@ fn validate_file(path: &OsString) -> Result<String, CliError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{CliError, USAGE, run};
+    use super::{run, CliError, USAGE};
     use std::ffi::OsString;
 
     #[test]
