@@ -119,12 +119,9 @@ pub fn link_static_executable_with_map(
         })
         .collect::<Vec<_>>();
 
-    let image = write_elf64_x86_64_executable_segments(
-        &writer_segments,
-        entry_address,
-        page_alignment,
-    )
-    .map_err(StaticLinkError::Write)?;
+    let image =
+        write_elf64_x86_64_executable_segments(&writer_segments, entry_address, page_alignment)
+            .map_err(StaticLinkError::Write)?;
     let link_map = build_link_map(&relocated, &definitions, &image, entry_symbol)
         .map_err(StaticLinkError::LinkMap)?;
 
@@ -270,7 +267,10 @@ mod tests {
         assert_eq!(output.link_map.sections[0].address, 0x400000);
         assert_eq!(output.link_map.symbols[0].name, b"_start");
         assert_eq!(output.link_map.symbols[0].address, 0x400000);
-        assert_eq!(output.link_map.segments.len(), output.image.load_segments.len());
+        assert_eq!(
+            output.link_map.segments.len(),
+            output.image.load_segments.len()
+        );
     }
 
     #[test]
