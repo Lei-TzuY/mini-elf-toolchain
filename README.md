@@ -8,9 +8,10 @@ The repository now has a checked ELF64 x86-64 static-link path from validated `E
 
 ```sh
 mini-elf-toolchain link -o a.out start.o support.o
+mini-elf-toolchain link -o a.out --map a.out.map start.o support.o
 ```
 
-The initial link CLI intentionally fixes the image base at `0x400000` and page alignment at `0x1000`; linker scripts, archives, dynamic linking, and alternate architectures remain outside the current scope.
+The optional deterministic link map records the final entry address, allocatable section provenance and addresses, resolved global/weak symbol addresses, and emitted `PT_LOAD` ranges and permissions. The initial link CLI intentionally fixes the image base at `0x400000` and page alignment at `0x1000`; linker scripts, archives, dynamic linking, and alternate architectures remain outside the current scope.
 
 ## Core roadmap
 
