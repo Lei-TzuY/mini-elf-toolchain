@@ -4,7 +4,7 @@ A correctness-focused ELF64 x86-64 toolchain/linker laboratory. The project is i
 
 ## Current stage
 
-The repository currently implements a bounded ELF64 x86-64 header parser. It validates ELF identity/version/machine fields, canonical ELF64 header sizes, and program/section header table spans with checked arithmetic before any table access.
+The repository now has a checked ELF64 x86-64 static-link path from validated `ET_REL` inputs through section extraction, symbol resolution, RELA application, permission-aware layout, `PT_LOAD` construction, and executable emission. The CLI exposes validation commands and a bounded `link -o <output> <input>...` path using `_start` as the entry symbol, with focused GNU binutils differential coverage.
 
 ## Core roadmap
 
