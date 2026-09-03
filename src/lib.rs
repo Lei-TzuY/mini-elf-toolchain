@@ -6,6 +6,7 @@ pub mod executable_writer;
 pub mod input_object;
 pub mod layout;
 pub mod link_context;
+pub mod link_map;
 pub mod link_relocations;
 pub mod link_symbols;
 pub mod linker_input;
