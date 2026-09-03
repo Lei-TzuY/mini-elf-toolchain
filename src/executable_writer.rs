@@ -20,6 +20,7 @@ pub struct ExecutableImage {
     pub bytes: Vec<u8>,
     pub load_file_offset: u64,
     pub load_virtual_address: u64,
+    pub load_memory_size: u64,
     pub entry_address: u64,
 }
 
@@ -31,6 +32,14 @@ pub enum ExecutableWriteError {
     ImageEndOverflow {
         base_address: u64,
         image_size: u64,
+    },
+    MemorySizeSmallerThanFile {
+        file_size: u64,
+        memory_size: u64,
+    },
+    MemoryEndOverflow {
+        base_address: u64,
+        memory_size: u64,
     },
     EntryOutsideImage {
         entry_address: u64,
@@ -63,6 +72,20 @@ impl fmt::Display for ExecutableWriteError {
             } => write!(
                 f,
                 "output image at virtual address {base_address:#x} with size {image_size} overflows u64"
+            ),
+            Self::MemorySizeSmallerThanFile {
+                file_size,
+                memory_size,
+            } => write!(
+                f,
+                "PT_LOAD memory size {memory_size} is smaller than file-backed size {file_size}"
+            ),
+            Self::MemoryEndOverflow {
+                base_address,
+                memory_size,
+            } => write!(
+                f,
+                "PT_LOAD at virtual address {base_address:#x} with memory size {memory_size} overflows u64"
             ),
             Self::EntryOutsideImage {
                 entry_address,
@@ -101,6 +124,24 @@ pub fn write_elf64_x86_64_executable(
     entry_address: u64,
     segment_alignment: u64,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
+    let file_size =
+        u64::try_from(image.bytes.len()).map_err(|_| ExecutableWriteError::FileTooLarge {
+            file_size: u64::MAX,
+        })?;
+    write_elf64_x86_64_executable_with_memory_size(
+        image,
+        entry_address,
+        segment_alignment,
+        file_size,
+    )
+}
+
+pub fn write_elf64_x86_64_executable_with_memory_size(
+    image: &OutputSectionImage,
+    entry_address: u64,
+    segment_alignment: u64,
+    memory_size: u64,
+) -> Result<ExecutableImage, ExecutableWriteError> {
     if segment_alignment == 0 || !segment_alignment.is_power_of_two() {
         return Err(ExecutableWriteError::InvalidSegmentAlignment {
             alignment: segment_alignment,
@@ -117,6 +158,19 @@ pub fn write_elf64_x86_64_executable(
             image_size,
         },
     )?;
+    if memory_size < image_size {
+        return Err(ExecutableWriteError::MemorySizeSmallerThanFile {
+            file_size: image_size,
+            memory_size,
+        });
+    }
+    image
+        .base_address
+        .checked_add(memory_size)
+        .ok_or(ExecutableWriteError::MemoryEndOverflow {
+            base_address: image.base_address,
+            memory_size,
+        })?;
     if entry_address < image.base_address || entry_address >= image_end {
         return Err(ExecutableWriteError::EntryOutsideImage {
             entry_address,
@@ -149,6 +203,7 @@ pub fn write_elf64_x86_64_executable(
         load_file_offset,
         image.base_address,
         image_size,
+        memory_size,
         segment_alignment,
     );
     bytes[load_file_offset_usize..].copy_from_slice(&image.bytes);
@@ -157,6 +212,7 @@ pub fn write_elf64_x86_64_executable(
         bytes,
         load_file_offset,
         load_virtual_address: image.base_address,
+        load_memory_size: memory_size,
         entry_address,
     })
 }
@@ -203,7 +259,8 @@ fn write_program_header(
     out: &mut [u8],
     file_offset: u64,
     virtual_address: u64,
-    size: u64,
+    file_size: u64,
+    memory_size: u64,
     alignment: u64,
 ) {
     put_u32(out, 0, PT_LOAD);
@@ -211,8 +268,8 @@ fn write_program_header(
     put_u64(out, 8, file_offset);
     put_u64(out, 16, virtual_address);
     put_u64(out, 24, virtual_address);
-    put_u64(out, 32, size);
-    put_u64(out, 40, size);
+    put_u64(out, 32, file_size);
+    put_u64(out, 40, memory_size);
     put_u64(out, 48, alignment);
 }
 
