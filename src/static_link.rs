@@ -1,8 +1,7 @@
 use core::fmt;
 
 use crate::executable_writer::{
-    write_elf64_x86_64_executable_segments, ExecutableImage, ExecutableWriteError,
-    LoadSegmentInput,
+    write_elf64_x86_64_executable_segments, ExecutableImage, ExecutableWriteError, LoadSegmentInput,
 };
 use crate::layout::LaidOutSection;
 use crate::link_symbols::{resolve_validated_objects, LinkSymbolError};
@@ -68,11 +67,12 @@ pub fn link_static_executable(
         .collect::<Vec<_>>();
     let definitions =
         resolve_validated_objects(&validated_objects).map_err(StaticLinkError::Symbols)?;
-    let entry_definition = definitions.get(entry_symbol).ok_or_else(|| {
-        StaticLinkError::MissingEntrySymbol {
-            name: entry_symbol.to_vec(),
-        }
-    })?;
+    let entry_definition =
+        definitions
+            .get(entry_symbol)
+            .ok_or_else(|| StaticLinkError::MissingEntrySymbol {
+                name: entry_symbol.to_vec(),
+            })?;
 
     let layout = relocated_layout(&relocated);
     let entry_address =
