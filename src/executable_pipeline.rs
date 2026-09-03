@@ -1,6 +1,5 @@
 use crate::executable_writer::{
-    write_elf64_x86_64_executable_segments, ExecutableImage, ExecutableWriteError,
-    LoadSegmentInput,
+    write_elf64_x86_64_executable_segments, ExecutableImage, ExecutableWriteError, LoadSegmentInput,
 };
 use crate::load_segments::{
     build_load_segments, LoadSegmentBuildError, LoadableSectionInput, SHF_ALLOC,
@@ -84,17 +83,15 @@ where
         }),
     )?;
 
-    let load_segments = build_load_segments(
-        alloc_sections
-            .iter()
-            .zip(layout)
-            .map(|(section, layout)| LoadableSectionInput {
+    let load_segments =
+        build_load_segments(alloc_sections.iter().zip(layout).map(|(section, layout)| {
+            LoadableSectionInput {
                 layout,
                 section_type: section.section_type,
                 flags: section.flags,
                 bytes: section.bytes,
-            }),
-    )?;
+            }
+        }))?;
 
     let writer_segments = load_segments
         .iter()
@@ -245,12 +242,10 @@ mod tests {
 
         assert_eq!(
             error,
-            ExecutablePipelineError::Layout(
-                PermissionLayoutError::WritableExecutableSection {
-                    object_index: 3,
-                    section_index: 7,
-                }
-            )
+            ExecutablePipelineError::Layout(PermissionLayoutError::WritableExecutableSection {
+                object_index: 3,
+                section_index: 7,
+            })
         );
     }
 
@@ -272,14 +267,12 @@ mod tests {
 
         assert_eq!(
             error,
-            ExecutablePipelineError::LoadSegments(
-                LoadSegmentBuildError::SectionSizeMismatch {
-                    object_index: 1,
-                    section_index: 2,
-                    layout_size: 2,
-                    byte_size: 1,
-                }
-            )
+            ExecutablePipelineError::LoadSegments(LoadSegmentBuildError::SectionSizeMismatch {
+                object_index: 1,
+                section_index: 2,
+                layout_size: 2,
+                byte_size: 1,
+            })
         );
     }
 }
