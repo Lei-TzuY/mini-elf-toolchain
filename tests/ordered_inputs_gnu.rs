@@ -58,9 +58,9 @@ fn ordinary_origin_names(origins: &[LinkObjectOrigin]) -> Vec<String> {
         .iter()
         .filter_map(|origin| match origin {
             LinkObjectOrigin::Regular { .. } => None,
-            LinkObjectOrigin::ArchiveMember { member_name, .. } => Some(
-                String::from_utf8(member_name.clone()).expect("member name must be UTF-8"),
-            ),
+            LinkObjectOrigin::ArchiveMember { member_name, .. } => {
+                Some(String::from_utf8(member_name.clone()).expect("member name must be UTF-8"))
+            }
         })
         .collect()
 }
@@ -82,7 +82,11 @@ fn ordered_archives_resolve_transitive_references_like_gnu_ld() {
         "foo",
         ".globl foo\n.type foo,@function\nfoo:\n  call bar\n  ret\n",
     );
-    assemble(&dir, "bar", ".globl bar\n.type bar,@function\nbar:\n  ret\n");
+    assemble(
+        &dir,
+        "bar",
+        ".globl bar\n.type bar,@function\nbar:\n  ret\n",
+    );
     assemble(
         &dir,
         "unused",
@@ -148,7 +152,11 @@ fn archive_is_not_rescanned_for_symbols_introduced_by_later_object() {
         "root",
         ".globl _start\n.type _start,@function\n_start:\n  call foo\n  ret\n",
     );
-    assemble(&dir, "foo", ".globl foo\n.type foo,@function\nfoo:\n  ret\n");
+    assemble(
+        &dir,
+        "foo",
+        ".globl foo\n.type foo,@function\nfoo:\n  ret\n",
+    );
     archive(&dir, "libfoo.a", &["foo.o"]);
 
     let root = fs::read(dir.join("root.o")).expect("read root object");
@@ -160,10 +168,10 @@ fn archive_is_not_rescanned_for_symbols_introduced_by_later_object() {
     .expect("ordered input preparation should remain structurally valid");
 
     assert_eq!(prepared.objects.len(), 1);
-    assert!(prepared.origins.iter().all(|origin| matches!(
-        origin,
-        LinkObjectOrigin::Regular { input_index: 1 }
-    )));
+    assert!(prepared
+        .origins
+        .iter()
+        .all(|origin| matches!(origin, LinkObjectOrigin::Regular { input_index: 1 })));
     assert_eq!(
         prepared.unresolved.into_iter().collect::<Vec<_>>(),
         vec![b"foo".to_vec()]
@@ -174,7 +182,10 @@ fn archive_is_not_rescanned_for_symbols_introduced_by_later_object() {
         .args(["-o", "gnu.out", "libfoo.a", "root.o"])
         .output()
         .expect("run GNU ld");
-    assert!(!output.status.success(), "GNU ld unexpectedly rescanned archive");
+    assert!(
+        !output.status.success(),
+        "GNU ld unexpectedly rescanned archive"
+    );
     assert!(String::from_utf8_lossy(&output.stderr).contains("foo"));
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
