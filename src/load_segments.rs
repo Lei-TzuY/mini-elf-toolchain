@@ -30,10 +30,6 @@ pub enum LoadSegmentBuildError {
         object_index: usize,
         section_index: u16,
     },
-    UnsupportedReadOnlySection {
-        object_index: usize,
-        section_index: u16,
-    },
     WritableExecutableSection {
         object_index: usize,
         section_index: u16,
@@ -76,13 +72,6 @@ impl fmt::Display for LoadSegmentBuildError {
             } => write!(
                 f,
                 "object {object_index} section {section_index} appears more than once"
-            ),
-            Self::UnsupportedReadOnlySection {
-                object_index,
-                section_index,
-            } => write!(
-                f,
-                "object {object_index} section {section_index} is allocatable but neither executable nor writable; read-only PT_LOAD construction is not supported yet"
             ),
             Self::WritableExecutableSection {
                 object_index,
@@ -169,12 +158,7 @@ where
             }
             (false, true) => LoadSegmentPermissions::ReadExecute,
             (true, false) => LoadSegmentPermissions::ReadWrite,
-            (false, false) => {
-                return Err(LoadSegmentBuildError::UnsupportedReadOnlySection {
-                    object_index: input.layout.object_index,
-                    section_index: input.layout.section_index,
-                })
-            }
+            (false, false) => LoadSegmentPermissions::ReadOnly,
         };
         if input.section_type == SHT_NOBITS {
             if !input.bytes.is_empty() {
