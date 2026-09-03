@@ -1,8 +1,6 @@
 use mini_elf_toolchain::archive::Archive;
 use mini_elf_toolchain::archive_index::parse_archive_symbol_index;
-use mini_elf_toolchain::archive_lazy::{
-    extract_indexed_archive_members, ArchiveExtractionError,
-};
+use mini_elf_toolchain::archive_lazy::{extract_indexed_archive_members, ArchiveExtractionError};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -53,11 +51,7 @@ fn make_chain_archive(dir: &PathBuf) {
         "foo",
         ".globl foo\n.type foo,@function\nfoo:\n  call bar\n  ret\n",
     );
-    assemble(
-        dir,
-        "bar",
-        ".globl bar\n.type bar,@function\nbar:\n  ret\n",
-    );
+    assemble(dir, "bar", ".globl bar\n.type bar,@function\nbar:\n  ret\n");
     assemble(
         dir,
         "unused",
@@ -196,7 +190,10 @@ fn selected_malformed_member_is_rejected_but_unselected_members_are_not_parsed()
     let missing = extract_indexed_archive_members(&archive, &index, [b"missing".as_slice()])
         .expect("unselected malformed member must remain lazy");
     assert!(missing.members.is_empty());
-    assert_eq!(missing.unresolved.into_iter().collect::<Vec<_>>(), vec![b"missing".to_vec()]);
+    assert_eq!(
+        missing.unresolved.into_iter().collect::<Vec<_>>(),
+        vec![b"missing".to_vec()]
+    );
 
     let error = extract_indexed_archive_members(&archive, &index, [b"foo".as_slice()])
         .expect_err("selected malformed member must fail");
