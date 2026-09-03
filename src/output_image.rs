@@ -141,12 +141,11 @@ where
     let mut identities = BTreeSet::new();
 
     for input in sections {
-        let byte_size = u64::try_from(input.bytes.len()).map_err(|_| {
-            OutputImageError::InputSizeTooLarge {
+        let byte_size =
+            u64::try_from(input.bytes.len()).map_err(|_| OutputImageError::InputSizeTooLarge {
                 object_index: input.layout.object_index,
                 section_index: input.layout.section_index,
-            }
-        })?;
+            })?;
         if byte_size != input.layout.size {
             return Err(OutputImageError::SizeMismatch {
                 object_index: input.layout.object_index,
@@ -206,16 +205,18 @@ where
         .map(|(_, end)| *end)
         .max()
         .unwrap_or(base_address);
-    let image_len_u64 = end_address.checked_sub(base_address).ok_or(
-        OutputImageError::ImageTooLarge {
+    let image_len_u64 =
+        end_address
+            .checked_sub(base_address)
+            .ok_or(OutputImageError::ImageTooLarge {
+                base_address,
+                end_address,
+            })?;
+    let image_len =
+        usize::try_from(image_len_u64).map_err(|_| OutputImageError::ImageTooLarge {
             base_address,
             end_address,
-        },
-    )?;
-    let image_len = usize::try_from(image_len_u64).map_err(|_| OutputImageError::ImageTooLarge {
-        base_address,
-        end_address,
-    })?;
+        })?;
 
     let mut bytes = vec![0; image_len];
     let mut materialized = Vec::with_capacity(inputs.len());
