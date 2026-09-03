@@ -26,34 +26,122 @@ pub struct BuiltLoadSegment {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadSegmentBuildError {
-    DuplicateSection { object_index: usize, section_index: u16 },
-    UnsupportedReadOnlySection { object_index: usize, section_index: u16 },
-    WritableExecutableSection { object_index: usize, section_index: u16 },
-    NobitsHasFileData { object_index: usize, section_index: u16, byte_size: usize },
-    SectionSizeMismatch { object_index: usize, section_index: u16, layout_size: u64, byte_size: u64 },
-    SectionEndOverflow { object_index: usize, section_index: u16, address: u64, size: u64 },
-    OverlappingSections { first_object_index: usize, first_section_index: u16, second_object_index: usize, second_section_index: u16 },
-    SegmentTooLarge { base_address: u64, end_address: u64 },
+    DuplicateSection {
+        object_index: usize,
+        section_index: u16,
+    },
+    UnsupportedReadOnlySection {
+        object_index: usize,
+        section_index: u16,
+    },
+    WritableExecutableSection {
+        object_index: usize,
+        section_index: u16,
+    },
+    NobitsHasFileData {
+        object_index: usize,
+        section_index: u16,
+        byte_size: usize,
+    },
+    SectionSizeMismatch {
+        object_index: usize,
+        section_index: u16,
+        layout_size: u64,
+        byte_size: u64,
+    },
+    SectionEndOverflow {
+        object_index: usize,
+        section_index: u16,
+        address: u64,
+        size: u64,
+    },
+    OverlappingSections {
+        first_object_index: usize,
+        first_section_index: u16,
+        second_object_index: usize,
+        second_section_index: u16,
+    },
+    SegmentTooLarge {
+        base_address: u64,
+        end_address: u64,
+    },
 }
 
 impl fmt::Display for LoadSegmentBuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DuplicateSection { object_index, section_index } => write!(f, "object {object_index} section {section_index} appears more than once"),
-            Self::UnsupportedReadOnlySection { object_index, section_index } => write!(f, "object {object_index} section {section_index} is allocatable but neither executable nor writable; read-only PT_LOAD construction is not supported yet"),
-            Self::WritableExecutableSection { object_index, section_index } => write!(f, "object {object_index} section {section_index} requests both SHF_WRITE and SHF_EXECINSTR"),
-            Self::NobitsHasFileData { object_index, section_index, byte_size } => write!(f, "object {object_index} SHT_NOBITS section {section_index} unexpectedly has {byte_size} file bytes"),
-            Self::SectionSizeMismatch { object_index, section_index, layout_size, byte_size } => write!(f, "object {object_index} section {section_index} has layout size {layout_size} but {byte_size} bytes were provided"),
-            Self::SectionEndOverflow { object_index, section_index, address, size } => write!(f, "object {object_index} section {section_index} at {address:#x} with size {size} overflows u64"),
-            Self::OverlappingSections { first_object_index, first_section_index, second_object_index, second_section_index } => write!(f, "object {first_object_index} section {first_section_index} overlaps object {second_object_index} section {second_section_index}"),
-            Self::SegmentTooLarge { base_address, end_address } => write!(f, "load segment from {base_address:#x} through {end_address:#x} cannot be represented in memory"),
+            Self::DuplicateSection {
+                object_index,
+                section_index,
+            } => write!(
+                f,
+                "object {object_index} section {section_index} appears more than once"
+            ),
+            Self::UnsupportedReadOnlySection {
+                object_index,
+                section_index,
+            } => write!(
+                f,
+                "object {object_index} section {section_index} is allocatable but neither executable nor writable; read-only PT_LOAD construction is not supported yet"
+            ),
+            Self::WritableExecutableSection {
+                object_index,
+                section_index,
+            } => write!(
+                f,
+                "object {object_index} section {section_index} requests both SHF_WRITE and SHF_EXECINSTR"
+            ),
+            Self::NobitsHasFileData {
+                object_index,
+                section_index,
+                byte_size,
+            } => write!(
+                f,
+                "object {object_index} SHT_NOBITS section {section_index} unexpectedly has {byte_size} file bytes"
+            ),
+            Self::SectionSizeMismatch {
+                object_index,
+                section_index,
+                layout_size,
+                byte_size,
+            } => write!(
+                f,
+                "object {object_index} section {section_index} has layout size {layout_size} but {byte_size} bytes were provided"
+            ),
+            Self::SectionEndOverflow {
+                object_index,
+                section_index,
+                address,
+                size,
+            } => write!(
+                f,
+                "object {object_index} section {section_index} at {address:#x} with size {size} overflows u64"
+            ),
+            Self::OverlappingSections {
+                first_object_index,
+                first_section_index,
+                second_object_index,
+                second_section_index,
+            } => write!(
+                f,
+                "object {first_object_index} section {first_section_index} overlaps object {second_object_index} section {second_section_index}"
+            ),
+            Self::SegmentTooLarge {
+                base_address,
+                end_address,
+            } => write!(
+                f,
+                "load segment from {base_address:#x} through {end_address:#x} cannot be represented in memory"
+            ),
         }
     }
 }
 
 impl std::error::Error for LoadSegmentBuildError {}
 
-pub fn build_load_segments<'a, I>(sections: I) -> Result<Vec<BuiltLoadSegment>, LoadSegmentBuildError>
+pub fn build_load_segments<'a, I>(
+    sections: I,
+) -> Result<Vec<BuiltLoadSegment>, LoadSegmentBuildError>
 where
     I: IntoIterator<Item = LoadableSectionInput<'a>>,
 {
@@ -73,16 +161,20 @@ where
         let writable = input.flags & SHF_WRITE != 0;
         let executable = input.flags & SHF_EXECINSTR != 0;
         let permissions = match (writable, executable) {
-            (true, true) => return Err(LoadSegmentBuildError::WritableExecutableSection {
-                object_index: input.layout.object_index,
-                section_index: input.layout.section_index,
-            }),
+            (true, true) => {
+                return Err(LoadSegmentBuildError::WritableExecutableSection {
+                    object_index: input.layout.object_index,
+                    section_index: input.layout.section_index,
+                })
+            }
             (false, true) => LoadSegmentPermissions::ReadExecute,
             (true, false) => LoadSegmentPermissions::ReadWrite,
-            (false, false) => return Err(LoadSegmentBuildError::UnsupportedReadOnlySection {
-                object_index: input.layout.object_index,
-                section_index: input.layout.section_index,
-            }),
+            (false, false) => {
+                return Err(LoadSegmentBuildError::UnsupportedReadOnlySection {
+                    object_index: input.layout.object_index,
+                    section_index: input.layout.section_index,
+                })
+            }
         };
         if input.section_type == SHT_NOBITS {
             if !input.bytes.is_empty() {
@@ -114,7 +206,13 @@ where
         ordered.push((input, permissions, end));
     }
 
-    ordered.sort_by_key(|(input, _, _)| (input.layout.address, input.layout.object_index, input.layout.section_index));
+    ordered.sort_by_key(|(input, _, _)| {
+        (
+            input.layout.address,
+            input.layout.object_index,
+            input.layout.section_index,
+        )
+    });
     for pair in ordered.windows(2) {
         let (first, _, first_end) = &pair[0];
         let (second, _, _) = &pair[1];
@@ -130,9 +228,13 @@ where
 
     let mut groups: Vec<Vec<(LoadableSectionInput<'a>, LoadSegmentPermissions, u64)>> = Vec::new();
     for item in ordered {
-        let starts_new = groups.last().and_then(|group| group.last()).is_some_and(|(previous, permissions, _)| {
-            *permissions != item.1 || (previous.section_type == SHT_NOBITS && item.0.section_type != SHT_NOBITS)
-        });
+        let starts_new = groups.last().and_then(|group| group.last()).is_some_and(
+            |(previous, permissions, _)| {
+                *permissions != item.1
+                    || (previous.section_type == SHT_NOBITS
+                        && item.0.section_type != SHT_NOBITS)
+            },
+        );
         if groups.is_empty() || starts_new {
             groups.push(Vec::new());
         }
@@ -142,10 +244,16 @@ where
     groups.into_iter().map(build_group).collect()
 }
 
-fn build_group(group: Vec<(LoadableSectionInput<'_>, LoadSegmentPermissions, u64)>) -> Result<BuiltLoadSegment, LoadSegmentBuildError> {
+fn build_group(
+    group: Vec<(LoadableSectionInput<'_>, LoadSegmentPermissions, u64)>,
+) -> Result<BuiltLoadSegment, LoadSegmentBuildError> {
     let base_address = group[0].0.layout.address;
     let permissions = group[0].1;
-    let memory_end = group.iter().map(|(_, _, end)| *end).max().unwrap_or(base_address);
+    let memory_end = group
+        .iter()
+        .map(|(_, _, end)| *end)
+        .max()
+        .unwrap_or(base_address);
     let file_end = group
         .iter()
         .filter(|(input, _, _)| input.section_type != SHT_NOBITS)
@@ -153,7 +261,11 @@ fn build_group(group: Vec<(LoadableSectionInput<'_>, LoadSegmentPermissions, u64
         .max()
         .unwrap_or(base_address);
     let file_len_u64 = file_end - base_address;
-    let file_len = usize::try_from(file_len_u64).map_err(|_| LoadSegmentBuildError::SegmentTooLarge { base_address, end_address: file_end })?;
+    let file_len =
+        usize::try_from(file_len_u64).map_err(|_| LoadSegmentBuildError::SegmentTooLarge {
+            base_address,
+            end_address: file_end,
+        })?;
     let memory_size = memory_end - base_address;
     let mut bytes = vec![0; file_len];
     let mut materialized = Vec::new();
@@ -163,8 +275,18 @@ fn build_group(group: Vec<(LoadableSectionInput<'_>, LoadSegmentPermissions, u64
             continue;
         }
         let image_offset = input.layout.address - base_address;
-        let start = usize::try_from(image_offset).map_err(|_| LoadSegmentBuildError::SegmentTooLarge { base_address, end_address: file_end })?;
-        let end = start.checked_add(input.bytes.len()).ok_or(LoadSegmentBuildError::SegmentTooLarge { base_address, end_address: file_end })?;
+        let start =
+            usize::try_from(image_offset).map_err(|_| LoadSegmentBuildError::SegmentTooLarge {
+                base_address,
+                end_address: file_end,
+            })?;
+        let end =
+            start
+                .checked_add(input.bytes.len())
+                .ok_or(LoadSegmentBuildError::SegmentTooLarge {
+                    base_address,
+                    end_address: file_end,
+                })?;
         bytes[start..end].copy_from_slice(input.bytes);
         materialized.push(MaterializedSection {
             object_index: input.layout.object_index,
@@ -176,7 +298,11 @@ fn build_group(group: Vec<(LoadableSectionInput<'_>, LoadSegmentPermissions, u64
     }
 
     Ok(BuiltLoadSegment {
-        image: OutputSectionImage { base_address, bytes, sections: materialized },
+        image: OutputSectionImage {
+            base_address,
+            bytes,
+            sections: materialized,
+        },
         memory_size,
         permissions,
     })
