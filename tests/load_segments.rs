@@ -33,7 +33,7 @@ fn section<'a>(
 #[test]
 fn builds_deterministic_rx_r_and_rw_segments_with_trailing_bss() {
     let text = [0x90, 0xc3];
-    let rodata = [b'o', b'k'];
+    let rodata = *b"ok";
     let data = [1, 2, 3, 4];
     let inputs = [
         section(1, 4, 0x403004, 0x20, SHT_NOBITS, SHF_ALLOC | SHF_WRITE, &[]),
@@ -184,7 +184,7 @@ fn built_segments_feed_writer_and_readelf_with_r_rx_rw_permissions() {
     }
 
     let text = [0x90, 0xc3];
-    let rodata = [b'o', b'k'];
+    let rodata = *b"ok";
     let data = [1, 2, 3, 4];
     let built = build_load_segments([
         section(0, 1, 0x401000, 2, 1, SHF_ALLOC | SHF_EXECINSTR, &text),
