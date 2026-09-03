@@ -199,7 +199,10 @@ fn cli_links_needed_member_from_ordered_gnu_archive() {
         let status = Command::new(&output)
             .status()
             .expect("execute archive-linked static ELF");
-        assert!(status.success(), "archive-linked executable returned {status}");
+        assert!(
+            status.success(),
+            "archive-linked executable returned {status}"
+        );
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
