@@ -4,6 +4,7 @@ use crate::executable_writer::{
     write_elf64_x86_64_executable_segments, ExecutableImage, ExecutableWriteError, LoadSegmentInput,
 };
 use crate::layout::LaidOutSection;
+use crate::link_map::{build_link_map, LinkMap};
 use crate::link_symbols::{resolve_validated_objects, LinkSymbolError};
 use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
@@ -18,6 +19,7 @@ pub enum StaticLinkError {
     Symbols(LinkSymbolError),
     MissingEntrySymbol { name: Vec<u8> },
     EntryAddress(FinalSymbolAddressError),
+    LinkMap(FinalSymbolAddressError),
     LoadSegments(LoadSegmentBuildError),
     Write(ExecutableWriteError),
 }
@@ -33,6 +35,7 @@ impl fmt::Display for StaticLinkError {
                 String::from_utf8_lossy(name)
             ),
             Self::EntryAddress(source) => write!(f, "cannot resolve entry address: {source}"),
+            Self::LinkMap(source) => write!(f, "cannot build link map: {source}"),
             Self::LoadSegments(source) => write!(f, "cannot build load segments: {source}"),
             Self::Write(source) => write!(f, "cannot emit executable: {source}"),
         }
@@ -44,12 +47,18 @@ impl std::error::Error for StaticLinkError {
         match self {
             Self::Relocation(source) => Some(source),
             Self::Symbols(source) => Some(source),
-            Self::EntryAddress(source) => Some(source),
+            Self::EntryAddress(source) | Self::LinkMap(source) => Some(source),
             Self::LoadSegments(source) => Some(source),
             Self::Write(source) => Some(source),
             Self::MissingEntrySymbol { .. } => None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticLinkOutput {
+    pub image: ExecutableImage,
+    pub link_map: LinkMap,
 }
 
 pub fn link_static_executable(
@@ -58,6 +67,16 @@ pub fn link_static_executable(
     page_alignment: u64,
     entry_symbol: &[u8],
 ) -> Result<ExecutableImage, StaticLinkError> {
+    link_static_executable_with_map(inputs, start_address, page_alignment, entry_symbol)
+        .map(|output| output.image)
+}
+
+pub fn link_static_executable_with_map(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    entry_symbol: &[u8],
+) -> Result<StaticLinkOutput, StaticLinkError> {
     let relocated = relocate_allocatable_sections(inputs, start_address, page_alignment)
         .map_err(StaticLinkError::Relocation)?;
 
@@ -100,8 +119,16 @@ pub fn link_static_executable(
         })
         .collect::<Vec<_>>();
 
-    write_elf64_x86_64_executable_segments(&writer_segments, entry_address, page_alignment)
-        .map_err(StaticLinkError::Write)
+    let image = write_elf64_x86_64_executable_segments(
+        &writer_segments,
+        entry_address,
+        page_alignment,
+    )
+    .map_err(StaticLinkError::Write)?;
+    let link_map = build_link_map(&relocated, &definitions, &image, entry_symbol)
+        .map_err(StaticLinkError::LinkMap)?;
+
+    Ok(StaticLinkOutput { image, link_map })
 }
 
 fn relocated_layout(sections: &[RelocatedSectionImage]) -> Vec<LaidOutSection> {
@@ -224,6 +251,26 @@ mod tests {
         );
         assert_eq!(image.load_segments[0].virtual_address, 0x400000);
         assert_eq!(image.load_segments[0].file_size, 1);
+    }
+
+    #[test]
+    fn returns_link_map_from_the_same_final_layout() {
+        let (file, object) = input_with_entry(SHF_ALLOC | SHF_EXECINSTR, b"_start");
+        let input = LinkerInputObject {
+            object_index: 0,
+            file: &file,
+            object,
+        };
+
+        let output =
+            link_static_executable_with_map(&[input], 0x400000, 0x1000, b"_start").unwrap();
+
+        assert_eq!(output.link_map.entry_address, output.image.entry_address);
+        assert_eq!(output.link_map.sections.len(), 1);
+        assert_eq!(output.link_map.sections[0].address, 0x400000);
+        assert_eq!(output.link_map.symbols[0].name, b"_start");
+        assert_eq!(output.link_map.symbols[0].address, 0x400000);
+        assert_eq!(output.link_map.segments.len(), output.image.load_segments.len());
     }
 
     #[test]
