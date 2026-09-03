@@ -2,6 +2,7 @@
 
 pub mod archive;
 pub mod archive_index;
+pub mod archive_lazy;
 pub mod elf64;
 pub mod executable_pipeline;
 pub mod executable_writer;
