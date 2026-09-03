@@ -232,12 +232,12 @@ impl<'a> Archive<'a> {
 
         let mut string_table = None;
         for raw in &raw_members {
-            if trimmed_name_field(raw.name_field) == b"//" {
-                if string_table.replace(raw.data).is_some() {
-                    return Err(ArchiveError::DuplicateStringTable {
-                        offset: raw.header_offset,
-                    });
-                }
+            if trimmed_name_field(raw.name_field) == b"//"
+                && string_table.replace(raw.data).is_some()
+            {
+                return Err(ArchiveError::DuplicateStringTable {
+                    offset: raw.header_offset,
+                });
             }
         }
 
