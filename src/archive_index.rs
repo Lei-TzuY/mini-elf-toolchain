@@ -205,20 +205,22 @@ pub fn parse_archive_symbol_index<'a>(
     let count = usize::try_from(count_raw).map_err(|_| ArchiveSymbolIndexError::CountOverflow {
         offset: table_offset,
     })?;
-    let offsets_size = count.checked_mul(width).ok_or(
-        ArchiveSymbolIndexError::TableSizeOverflow {
-            offset: table_offset,
-            count,
-            width,
-        },
-    )?;
-    let names_start = width.checked_add(offsets_size).ok_or(
-        ArchiveSymbolIndexError::TableSizeOverflow {
-            offset: table_offset,
-            count,
-            width,
-        },
-    )?;
+    let offsets_size =
+        count
+            .checked_mul(width)
+            .ok_or(ArchiveSymbolIndexError::TableSizeOverflow {
+                offset: table_offset,
+                count,
+                width,
+            })?;
+    let names_start =
+        width
+            .checked_add(offsets_size)
+            .ok_or(ArchiveSymbolIndexError::TableSizeOverflow {
+                offset: table_offset,
+                count,
+                width,
+            })?;
     if names_start > data.len() {
         return Err(ArchiveSymbolIndexError::TruncatedOffsets {
             offset: table_offset,
@@ -283,13 +285,14 @@ pub fn parse_archive_symbol_index<'a>(
             });
         }
         let name = &tail[..name_len];
-        cursor = cursor
-            .checked_add(name_len + 1)
-            .ok_or(ArchiveSymbolIndexError::TableSizeOverflow {
-                offset: table_offset,
-                count,
-                width,
-            })?;
+        cursor =
+            cursor
+                .checked_add(name_len + 1)
+                .ok_or(ArchiveSymbolIndexError::TableSizeOverflow {
+                    offset: table_offset,
+                    count,
+                    width,
+                })?;
         entries.push(ArchiveSymbolIndexEntry {
             name,
             member_index,
