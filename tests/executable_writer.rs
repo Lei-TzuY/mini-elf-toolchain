@@ -96,8 +96,7 @@ fn emits_checked_rx_and_rw_load_segments_in_virtual_address_order() {
         },
     ];
 
-    let executable =
-        write_elf64_x86_64_executable_segments(&inputs, 0x401000, 0x1000).unwrap();
+    let executable = write_elf64_x86_64_executable_segments(&inputs, 0x401000, 0x1000).unwrap();
 
     assert_eq!(read_u16(&executable.bytes, 56), 2);
     assert_eq!(executable.load_segments.len(), 2);
@@ -119,8 +118,14 @@ fn emits_checked_rx_and_rw_load_segments_in_virtual_address_order() {
     assert_eq!(text_offset as u64 % 0x1000, 0x401000 % 0x1000);
     assert_eq!(data_offset as u64 % 0x1000, 0x403000 % 0x1000);
     assert!(data_offset >= text_offset + 2);
-    assert_eq!(&executable.bytes[text_offset..text_offset + 2], &[0x90, 0xc3]);
-    assert_eq!(&executable.bytes[data_offset..data_offset + 4], &[1, 2, 3, 4]);
+    assert_eq!(
+        &executable.bytes[text_offset..text_offset + 2],
+        &[0x90, 0xc3]
+    );
+    assert_eq!(
+        &executable.bytes[data_offset..data_offset + 4],
+        &[1, 2, 3, 4]
+    );
 }
 
 #[test]
@@ -295,8 +300,7 @@ fn gnu_readelf_accepts_emitted_header_and_program_header() {
             permissions: LoadSegmentPermissions::ReadWrite,
         },
     ];
-    let executable =
-        write_elf64_x86_64_executable_segments(&inputs, 0x401000, 0x1000).unwrap();
+    let executable = write_elf64_x86_64_executable_segments(&inputs, 0x401000, 0x1000).unwrap();
     let path = std::env::temp_dir().join(format!(
         "mini-elf-toolchain-{}-writer-test.elf",
         std::process::id()
