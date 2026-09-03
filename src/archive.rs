@@ -319,9 +319,7 @@ fn parse_long_name_offset(field: &[u8], offset: usize) -> Result<usize, ArchiveE
 
 fn parse_decimal_usize(bytes: &[u8]) -> Option<usize> {
     bytes.iter().try_fold(0usize, |value, byte| {
-        value
-            .checked_mul(10)?
-            .checked_add(usize::from(byte - b'0'))
+        value.checked_mul(10)?.checked_add(usize::from(byte - b'0'))
     })
 }
 
@@ -351,13 +349,13 @@ fn resolve_long_name(
     }
 
     let tail = &table[string_offset..];
-    let newline = tail
-        .iter()
-        .position(|byte| *byte == b'\n')
-        .ok_or(ArchiveError::UnterminatedLongName {
-            offset: member_offset,
-            string_offset,
-        })?;
+    let newline =
+        tail.iter()
+            .position(|byte| *byte == b'\n')
+            .ok_or(ArchiveError::UnterminatedLongName {
+                offset: member_offset,
+                string_offset,
+            })?;
     let entry = &tail[..newline];
     let name = entry.strip_suffix(b"/").unwrap_or(entry);
     if name.is_empty() {
