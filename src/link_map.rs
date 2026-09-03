@@ -10,7 +10,7 @@ use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkMapSection {
     pub object_index: usize,
-    pub section_index: usize,
+    pub section_index: u16,
     pub address: u64,
     pub size: u64,
     pub flags: u64,
