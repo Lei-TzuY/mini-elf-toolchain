@@ -71,7 +71,9 @@ where
             .next()
             .ok_or_else(|| CliError::Usage("missing -o <output>".to_owned()))?;
         if output_flag != "-o" {
-            return Err(CliError::Usage("expected -o <output> after link".to_owned()));
+            return Err(CliError::Usage(
+                "expected -o <output> after link".to_owned(),
+            ));
         }
         let output = args
             .next()
@@ -159,9 +161,8 @@ fn link_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError>
 
     let mut inputs = Vec::with_capacity(files.len());
     for (object_index, (path, file)) in paths.iter().zip(files.iter()).enumerate() {
-        let input = LinkerInputObject::parse(object_index, file).map_err(|error| {
-            CliError::Failure(format!("{}: {error}", path.to_string_lossy()))
-        })?;
+        let input = LinkerInputObject::parse(object_index, file)
+            .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))?;
         inputs.push(input);
     }
 
@@ -173,9 +174,8 @@ fn link_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError>
     )
     .map_err(|error| CliError::Failure(format!("link failed: {error}")))?;
 
-    fs::write(output, &image.bytes).map_err(|error| {
-        CliError::Failure(format!("{}: {error}", output.to_string_lossy()))
-    })?;
+    fs::write(output, &image.bytes)
+        .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
     set_executable_permissions(output)?;
 
     Ok(format!(
