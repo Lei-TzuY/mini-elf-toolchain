@@ -6,6 +6,12 @@ A correctness-focused ELF64 x86-64 toolchain/linker laboratory. The project is i
 
 The repository now has a checked ELF64 x86-64 static-link path from validated `ET_REL` inputs through section extraction, symbol resolution, RELA application, permission-aware layout, `PT_LOAD` construction, and executable emission. The CLI exposes validation commands and a bounded `link -o <output> <input>...` path using `_start` as the entry symbol, with focused GNU binutils differential coverage.
 
+```sh
+mini-elf-toolchain link -o a.out start.o support.o
+```
+
+The initial link CLI intentionally fixes the image base at `0x400000` and page alignment at `0x1000`; linker scripts, archives, dynamic linking, and alternate architectures remain outside the current scope.
+
 ## Core roadmap
 
 1. ELF64 header and table-bound validation
