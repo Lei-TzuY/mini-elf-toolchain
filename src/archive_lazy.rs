@@ -125,13 +125,9 @@ where
     let mut extracted_indices = BTreeSet::new();
     let mut extracted = Vec::new();
 
-    loop {
-        let Some(entry) = index.entries.iter().find(|entry| {
-            unresolved.contains(entry.name) && !extracted_indices.contains(&entry.member_index)
-        }) else {
-            break;
-        };
-
+    while let Some(entry) = index.entries.iter().find(|entry| {
+        unresolved.contains(entry.name) && !extracted_indices.contains(&entry.member_index)
+    }) {
         let member = archive.members.get(entry.member_index).ok_or(
             ArchiveExtractionError::IndexMemberMismatch {
                 member_index: entry.member_index,
