@@ -58,18 +58,16 @@ where
 }
 
 fn validate_file(path: &OsString) -> Result<String, CliError> {
-    let file = fs::read(path).map_err(|error| {
-        CliError::Failure(format!("{}: {error}", path.to_string_lossy()))
-    })?;
-    let header = Elf64Header::parse(&file).map_err(|error| {
-        CliError::Failure(format!("{}: {error}", path.to_string_lossy()))
-    })?;
-    let sections = header.section_headers(&file).map_err(|error| {
-        CliError::Failure(format!("{}: {error}", path.to_string_lossy()))
-    })?;
-    let symbol_tables = header.symbol_tables(&file, &sections).map_err(|error| {
-        CliError::Failure(format!("{}: {error}", path.to_string_lossy()))
-    })?;
+    let file = fs::read(path)
+        .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))?;
+    let header = Elf64Header::parse(&file)
+        .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))?;
+    let sections = header
+        .section_headers(&file)
+        .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))?;
+    let symbol_tables = header
+        .symbol_tables(&file, &sections)
+        .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))?;
     let symbol_count = symbol_tables.iter().try_fold(0usize, |total, table| {
         total.checked_add(table.symbols.len())
     });
@@ -89,7 +87,7 @@ fn validate_file(path: &OsString) -> Result<String, CliError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run, CliError, USAGE};
+    use super::{CliError, USAGE, run};
     use std::ffi::OsString;
 
     #[test]
