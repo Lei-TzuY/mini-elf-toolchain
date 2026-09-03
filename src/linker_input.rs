@@ -81,10 +81,7 @@ impl fmt::Display for LinkerInputError {
 impl std::error::Error for LinkerInputError {}
 
 impl<'a> LinkerInputObject<'a> {
-    pub fn parse(
-        object_index: usize,
-        file: &'a [u8],
-    ) -> Result<Self, RelocatableObjectError> {
+    pub fn parse(object_index: usize, file: &'a [u8]) -> Result<Self, RelocatableObjectError> {
         Ok(Self {
             object_index,
             file,
@@ -297,7 +294,10 @@ mod tests {
 
         assert!(core::ptr::eq(validated.file.as_ptr(), file.as_ptr()));
         assert_eq!(validated.sections, input.object.sections.as_slice());
-        assert_eq!(validated.symbol_tables, input.object.symbol_tables.as_slice());
+        assert_eq!(
+            validated.symbol_tables,
+            input.object.symbol_tables.as_slice()
+        );
     }
 
     #[test]
