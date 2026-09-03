@@ -1,6 +1,8 @@
 use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::input_object::RelocatableObject;
-use mini_elf_toolchain::linker_input::LinkerInputObject;
+use mini_elf_toolchain::ordered_inputs::{
+    prepare_ordered_link_inputs, OrderedLinkInput, OrderedLinkInputError,
+};
 use mini_elf_toolchain::static_link::link_static_executable_with_map;
 use std::env;
 use std::ffi::OsString;
@@ -10,6 +12,7 @@ use std::process::ExitCode;
 const DEFAULT_START_ADDRESS: u64 = 0x400000;
 const DEFAULT_PAGE_ALIGNMENT: u64 = 0x1000;
 const DEFAULT_ENTRY_SYMBOL: &[u8] = b"_start";
+const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
 
 const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] <input>...";
 
@@ -176,15 +179,21 @@ fn link_files(
         files.push(read_file(path)?);
     }
 
-    let mut inputs = Vec::with_capacity(files.len());
-    for (object_index, (path, file)) in paths.iter().zip(files.iter()).enumerate() {
-        let input = LinkerInputObject::parse(object_index, file)
-            .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))?;
-        inputs.push(input);
-    }
+    let ordered_inputs = files
+        .iter()
+        .map(|file| {
+            if file.starts_with(ARCHIVE_MAGIC) {
+                OrderedLinkInput::Archive(file)
+            } else {
+                OrderedLinkInput::Object(file)
+            }
+        })
+        .collect::<Vec<_>>();
+    let prepared = prepare_ordered_link_inputs(&ordered_inputs)
+        .map_err(|error| ordered_input_failure(paths, error))?;
 
     let linked = link_static_executable_with_map(
-        &inputs,
+        &prepared.objects,
         DEFAULT_START_ADDRESS,
         DEFAULT_PAGE_ALIGNMENT,
         DEFAULT_ENTRY_SYMBOL,
@@ -204,10 +213,27 @@ fn link_files(
     Ok(format!(
         "linked static ELF64 x86-64: output={}, objects={}, bytes={}, entry={:#x}",
         output.to_string_lossy(),
-        paths.len(),
+        prepared.objects.len(),
         linked.image.bytes.len(),
         linked.image.entry_address
     ))
+}
+
+fn ordered_input_failure(paths: &[OsString], error: OrderedLinkInputError) -> CliError {
+    let input_index = match &error {
+        OrderedLinkInputError::InvalidObject { input_index, .. }
+        | OrderedLinkInputError::ObjectSymbols { input_index, .. }
+        | OrderedLinkInputError::UnsupportedBinding { input_index, .. }
+        | OrderedLinkInputError::InvalidArchive { input_index, .. }
+        | OrderedLinkInputError::InvalidArchiveIndex { input_index, .. }
+        | OrderedLinkInputError::MissingArchiveIndex { input_index }
+        | OrderedLinkInputError::ArchiveExtraction { input_index, .. } => *input_index,
+    };
+
+    match paths.get(input_index) {
+        Some(path) => CliError::Failure(format!("{}: {error}", path.to_string_lossy())),
+        None => CliError::Failure(format!("link input {input_index}: {error}")),
+    }
 }
 
 #[cfg(unix)]
