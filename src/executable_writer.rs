@@ -65,24 +65,11 @@ pub struct ExecutableImage {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutableWriteError {
     NoLoadSegments,
-    TooManyLoadSegments {
-        count: usize,
-    },
-    InvalidSegmentAlignment {
-        alignment: u64,
-    },
-    ImageEndOverflow {
-        base_address: u64,
-        image_size: u64,
-    },
-    MemorySizeSmallerThanFile {
-        file_size: u64,
-        memory_size: u64,
-    },
-    MemoryEndOverflow {
-        base_address: u64,
-        memory_size: u64,
-    },
+    TooManyLoadSegments { count: usize },
+    InvalidSegmentAlignment { alignment: u64 },
+    ImageEndOverflow { base_address: u64, image_size: u64 },
+    MemorySizeSmallerThanFile { file_size: u64, memory_size: u64 },
+    MemoryEndOverflow { base_address: u64, memory_size: u64 },
     SegmentAddressOverlap {
         previous_base: u64,
         previous_memory_size: u64,
@@ -93,93 +80,27 @@ pub enum ExecutableWriteError {
         base_address: u64,
         image_size: u64,
     },
-    EntryOutsideExecutableSegment {
-        entry_address: u64,
-    },
-    FileOffsetOverflow {
-        metadata_end: u64,
-        alignment: u64,
-    },
-    FileEndOverflow {
-        load_file_offset: u64,
-        image_size: u64,
-    },
-    FileTooLarge {
-        file_size: u64,
-    },
+    EntryOutsideExecutableSegment { entry_address: u64 },
+    FileOffsetOverflow { metadata_end: u64, alignment: u64 },
+    FileEndOverflow { load_file_offset: u64, image_size: u64 },
+    FileTooLarge { file_size: u64 },
 }
 
 impl fmt::Display for ExecutableWriteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NoLoadSegments => write!(f, "ELF executable requires at least one PT_LOAD segment"),
-            Self::TooManyLoadSegments { count } => write!(
-                f,
-                "ELF executable has {count} PT_LOAD segments, exceeding the ELF64 program-header count limit"
-            ),
-            Self::InvalidSegmentAlignment { alignment } => write!(
-                f,
-                "ELF load-segment alignment {alignment} must be a non-zero power of two"
-            ),
-            Self::ImageEndOverflow {
-                base_address,
-                image_size,
-            } => write!(
-                f,
-                "output image at virtual address {base_address:#x} with size {image_size} overflows u64"
-            ),
-            Self::MemorySizeSmallerThanFile {
-                file_size,
-                memory_size,
-            } => write!(
-                f,
-                "PT_LOAD memory size {memory_size} is smaller than file-backed size {file_size}"
-            ),
-            Self::MemoryEndOverflow {
-                base_address,
-                memory_size,
-            } => write!(
-                f,
-                "PT_LOAD at virtual address {base_address:#x} with memory size {memory_size} overflows u64"
-            ),
-            Self::SegmentAddressOverlap {
-                previous_base,
-                previous_memory_size,
-                next_base,
-            } => write!(
-                f,
-                "PT_LOAD at {next_base:#x} overlaps previous PT_LOAD at {previous_base:#x} with memory size {previous_memory_size}"
-            ),
-            Self::EntryOutsideImage {
-                entry_address,
-                base_address,
-                image_size,
-            } => write!(
-                f,
-                "entry address {entry_address:#x} is outside output image at {base_address:#x} with size {image_size}"
-            ),
-            Self::EntryOutsideExecutableSegment { entry_address } => write!(
-                f,
-                "entry address {entry_address:#x} is outside every file-backed executable PT_LOAD segment"
-            ),
-            Self::FileOffsetOverflow {
-                metadata_end,
-                alignment,
-            } => write!(
-                f,
-                "cannot place PT_LOAD at or after file offset {metadata_end} with alignment {alignment} without overflowing u64"
-            ),
-            Self::FileEndOverflow {
-                load_file_offset,
-                image_size,
-            } => write!(
-                f,
-                "PT_LOAD at file offset {load_file_offset} with size {image_size} overflows u64"
-            ),
-            Self::FileTooLarge { file_size } => write!(
-                f,
-                "ELF executable file size {file_size} cannot be represented in memory"
-            ),
+            Self::TooManyLoadSegments { count } => write!(f, "ELF executable has {count} PT_LOAD segments, exceeding the ELF64 program-header count limit"),
+            Self::InvalidSegmentAlignment { alignment } => write!(f, "ELF load-segment alignment {alignment} must be a non-zero power of two"),
+            Self::ImageEndOverflow { base_address, image_size } => write!(f, "output image at virtual address {base_address:#x} with size {image_size} overflows u64"),
+            Self::MemorySizeSmallerThanFile { file_size, memory_size } => write!(f, "PT_LOAD memory size {memory_size} is smaller than file-backed size {file_size}"),
+            Self::MemoryEndOverflow { base_address, memory_size } => write!(f, "PT_LOAD at virtual address {base_address:#x} with memory size {memory_size} overflows u64"),
+            Self::SegmentAddressOverlap { previous_base, previous_memory_size, next_base } => write!(f, "PT_LOAD at {next_base:#x} overlaps previous PT_LOAD at {previous_base:#x} with memory size {previous_memory_size}"),
+            Self::EntryOutsideImage { entry_address, base_address, image_size } => write!(f, "entry address {entry_address:#x} is outside output image at {base_address:#x} with size {image_size}"),
+            Self::EntryOutsideExecutableSegment { entry_address } => write!(f, "entry address {entry_address:#x} is outside every file-backed executable PT_LOAD segment"),
+            Self::FileOffsetOverflow { metadata_end, alignment } => write!(f, "cannot place PT_LOAD at or after file offset {metadata_end} with alignment {alignment} without overflowing u64"),
+            Self::FileEndOverflow { load_file_offset, image_size } => write!(f, "PT_LOAD at file offset {load_file_offset} with size {image_size} overflows u64"),
+            Self::FileTooLarge { file_size } => write!(f, "ELF executable file size {file_size} cannot be represented in memory"),
         }
     }
 }
@@ -192,12 +113,7 @@ pub fn write_elf64_x86_64_executable(
     segment_alignment: u64,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
     let file_size = image_size(image)?;
-    write_elf64_x86_64_executable_with_memory_size(
-        image,
-        entry_address,
-        segment_alignment,
-        file_size,
-    )
+    write_elf64_x86_64_executable_with_memory_size(image, entry_address, segment_alignment, file_size)
 }
 
 pub fn write_elf64_x86_64_executable_with_memory_size(
@@ -232,10 +148,8 @@ pub fn write_elf64_x86_64_executable_segments(
     if segments.is_empty() {
         return Err(ExecutableWriteError::NoLoadSegments);
     }
-    let program_header_count =
-        u16::try_from(segments.len()).map_err(|_| ExecutableWriteError::TooManyLoadSegments {
-            count: segments.len(),
-        })?;
+    let program_header_count = u16::try_from(segments.len())
+        .map_err(|_| ExecutableWriteError::TooManyLoadSegments { count: segments.len() })?;
     if segment_alignment == 0 || !segment_alignment.is_power_of_two() {
         return Err(ExecutableWriteError::InvalidSegmentAlignment {
             alignment: segment_alignment,
@@ -296,14 +210,10 @@ pub fn write_elf64_x86_64_executable_segments(
 
     let program_headers_size = ELF64_PHDR_SIZE
         .checked_mul(u64::from(program_header_count))
-        .ok_or(ExecutableWriteError::FileTooLarge {
-            file_size: u64::MAX,
-        })?;
-    let metadata_end = ELF64_EHDR_SIZE.checked_add(program_headers_size).ok_or(
-        ExecutableWriteError::FileTooLarge {
-            file_size: u64::MAX,
-        },
-    )?;
+        .ok_or(ExecutableWriteError::FileTooLarge { file_size: u64::MAX })?;
+    let metadata_end = ELF64_EHDR_SIZE
+        .checked_add(program_headers_size)
+        .ok_or(ExecutableWriteError::FileTooLarge { file_size: u64::MAX })?;
 
     let mut emitted_segments = Vec::with_capacity(validated.len());
     let mut next_file_offset = metadata_end;
@@ -313,12 +223,13 @@ pub fn write_elf64_x86_64_executable_segments(
             segment.image.base_address,
             segment_alignment,
         )?;
-        let file_end = file_offset
-            .checked_add(*file_size)
-            .ok_or(ExecutableWriteError::FileEndOverflow {
-                load_file_offset: file_offset,
-                image_size: *file_size,
-            })?;
+        let file_end =
+            file_offset
+                .checked_add(*file_size)
+                .ok_or(ExecutableWriteError::FileEndOverflow {
+                    load_file_offset: file_offset,
+                    image_size: *file_size,
+                })?;
         emitted_segments.push(ExecutableLoadSegment {
             file_offset,
             virtual_address: segment.image.base_address,
@@ -367,9 +278,8 @@ pub fn write_elf64_x86_64_executable_segments(
 }
 
 fn image_size(image: &OutputSectionImage) -> Result<u64, ExecutableWriteError> {
-    u64::try_from(image.bytes.len()).map_err(|_| ExecutableWriteError::FileTooLarge {
-        file_size: u64::MAX,
-    })
+    u64::try_from(image.bytes.len())
+        .map_err(|_| ExecutableWriteError::FileTooLarge { file_size: u64::MAX })
 }
 
 fn checked_image_end(
