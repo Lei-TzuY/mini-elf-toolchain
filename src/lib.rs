@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod elf64;
+pub mod executable_pipeline;
 pub mod executable_writer;
 pub mod layout;
 pub mod link_context;
