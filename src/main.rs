@@ -1,6 +1,7 @@
 use mini_elf_toolchain::archive::{Archive, ArchiveMemberKind};
 use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::input_object::RelocatableObject;
+use mini_elf_toolchain::library_search::{resolve_static_library_arguments, LibrarySearchError};
 use mini_elf_toolchain::ordered_inputs::{
     prepare_ordered_link_inputs, OrderedLinkInput, OrderedLinkInputError,
 };
@@ -19,7 +20,7 @@ const END_GROUP: &str = "--end-group";
 const WHOLE_ARCHIVE: &str = "--whole-archive";
 const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] <input|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -121,6 +122,7 @@ where
             }
         }
 
+        let remaining = resolve_static_library_arguments(&remaining).map_err(library_search_error)?;
         if remaining.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
@@ -131,6 +133,16 @@ where
         "unknown command '{}'",
         command.to_string_lossy()
     )))
+}
+
+fn library_search_error(error: LibrarySearchError) -> CliError {
+    match error {
+        LibrarySearchError::MissingSearchPath
+        | LibrarySearchError::EmptySearchPath
+        | LibrarySearchError::MissingLibraryName
+        | LibrarySearchError::EmptyLibraryName => CliError::Usage(error.to_string()),
+        _ => CliError::Failure(format!("library search failed: {error}")),
+    }
 }
 
 fn validate_file(path: &OsString) -> Result<String, CliError> {
@@ -496,6 +508,31 @@ mod tests {
         assert_eq!(
             run(args.into_iter()),
             Err(CliError::Usage("missing relocatable input path".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_library_options_require_values_before_io() {
+        let missing_path = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("-L"),
+        ];
+        assert_eq!(
+            run(missing_path.into_iter()),
+            Err(CliError::Usage("missing directory after -L".to_owned()))
+        );
+
+        let missing_name = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("-l"),
+        ];
+        assert_eq!(
+            run(missing_name.into_iter()),
+            Err(CliError::Usage("missing library name after -l".to_owned()))
         );
     }
 
