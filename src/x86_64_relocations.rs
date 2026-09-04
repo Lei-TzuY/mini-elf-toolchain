@@ -4,6 +4,7 @@ use crate::relocations::Elf64Rela;
 
 pub const R_X86_64_64: u32 = 1;
 pub const R_X86_64_PC32: u32 = 2;
+pub const R_X86_64_PLT32: u32 = 4;
 pub const R_X86_64_32: u32 = 10;
 pub const R_X86_64_32S: u32 = 11;
 
@@ -122,7 +123,7 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Unsigned64OutOfRange { value })?;
             Ok(RelocationValue::U64(value))
         }
-        R_X86_64_PC32 => {
+        R_X86_64_PC32 | R_X86_64_PLT32 => {
             let value = symbol_value + addend - place;
             let value = i32::try_from(value)
                 .map_err(|_| RelocationEvaluationError::Signed32OutOfRange { value })?;
