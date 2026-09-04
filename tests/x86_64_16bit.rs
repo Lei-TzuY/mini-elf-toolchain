@@ -32,8 +32,8 @@ fn accepts_unsigned_16_bit_boundaries() {
 #[test]
 fn rejects_unsigned_16_bit_underflow_and_overflow() {
     let underflow = evaluate_relocation(&relocation(R_X86_64_16, -1), 0, 0).unwrap_err();
-    let overflow = evaluate_relocation(&relocation(R_X86_64_16, 0), u64::from(u16::MAX) + 1, 0)
-        .unwrap_err();
+    let overflow =
+        evaluate_relocation(&relocation(R_X86_64_16, 0), u64::from(u16::MAX) + 1, 0).unwrap_err();
 
     assert_eq!(
         underflow,
@@ -58,18 +58,8 @@ fn evaluates_positive_and_negative_pc16_relocations() {
 
 #[test]
 fn accepts_signed_16_bit_boundaries() {
-    let max = evaluate_relocation(
-        &relocation(R_X86_64_PC16, i64::from(i16::MAX)),
-        0,
-        0,
-    )
-    .unwrap();
-    let min = evaluate_relocation(
-        &relocation(R_X86_64_PC16, i64::from(i16::MIN)),
-        0,
-        0,
-    )
-    .unwrap();
+    let max = evaluate_relocation(&relocation(R_X86_64_PC16, i64::from(i16::MAX)), 0, 0).unwrap();
+    let min = evaluate_relocation(&relocation(R_X86_64_PC16, i64::from(i16::MIN)), 0, 0).unwrap();
 
     assert_eq!(max, RelocationValue::I16(i16::MAX));
     assert_eq!(min, RelocationValue::I16(i16::MIN));
@@ -77,18 +67,10 @@ fn accepts_signed_16_bit_boundaries() {
 
 #[test]
 fn rejects_pc16_positive_and_negative_overflow() {
-    let positive = evaluate_relocation(
-        &relocation(R_X86_64_PC16, 0),
-        i16::MAX as u64 + 1,
-        0,
-    )
-    .unwrap_err();
-    let negative = evaluate_relocation(
-        &relocation(R_X86_64_PC16, i64::from(i16::MIN)),
-        0,
-        1,
-    )
-    .unwrap_err();
+    let positive =
+        evaluate_relocation(&relocation(R_X86_64_PC16, 0), i16::MAX as u64 + 1, 0).unwrap_err();
+    let negative =
+        evaluate_relocation(&relocation(R_X86_64_PC16, i64::from(i16::MIN)), 0, 1).unwrap_err();
 
     assert_eq!(
         positive,
