@@ -30,13 +30,25 @@ impl fmt::Display for LibrarySearchError {
             Self::MissingLibraryName => write!(f, "missing library name after -l"),
             Self::EmptyLibraryName => write!(f, "library name cannot be empty"),
             Self::SearchPathMetadata { path, source } => {
-                write!(f, "cannot inspect library search directory '{}': {source}", path.display())
+                write!(
+                    f,
+                    "cannot inspect library search directory '{}': {source}",
+                    path.display()
+                )
             }
             Self::SearchPathNotDirectory { path } => {
-                write!(f, "library search path '{}' is not a directory", path.display())
+                write!(
+                    f,
+                    "library search path '{}' is not a directory",
+                    path.display()
+                )
             }
             Self::LibraryNotFound { name, search_paths } => {
-                write!(f, "cannot find static library 'lib{}.a'", name.to_string_lossy())?;
+                write!(
+                    f,
+                    "cannot find static library 'lib{}.a'",
+                    name.to_string_lossy()
+                )?;
                 if search_paths.is_empty() {
                     write!(f, "; no -L search directories were provided")
                 } else {
@@ -111,10 +123,11 @@ fn add_search_path(
         return Err(LibrarySearchError::EmptySearchPath);
     }
     let path = PathBuf::from(path);
-    let metadata = fs::metadata(&path).map_err(|source| LibrarySearchError::SearchPathMetadata {
-        path: path.clone(),
-        source,
-    })?;
+    let metadata =
+        fs::metadata(&path).map_err(|source| LibrarySearchError::SearchPathMetadata {
+            path: path.clone(),
+            source,
+        })?;
     if !metadata.is_dir() {
         return Err(LibrarySearchError::SearchPathNotDirectory { path });
     }
@@ -122,10 +135,7 @@ fn add_search_path(
     Ok(())
 }
 
-fn resolve_library(
-    name: &OsStr,
-    search_paths: &[PathBuf],
-) -> Result<OsString, LibrarySearchError> {
+fn resolve_library(name: &OsStr, search_paths: &[PathBuf]) -> Result<OsString, LibrarySearchError> {
     if name.is_empty() {
         return Err(LibrarySearchError::EmptyLibraryName);
     }
