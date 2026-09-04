@@ -6,6 +6,7 @@ pub mod archive_lazy;
 pub mod elf64;
 pub mod executable_pipeline;
 pub mod executable_writer;
+pub mod forced_undefined;
 pub mod input_object;
 pub mod layout;
 pub mod library_search;
