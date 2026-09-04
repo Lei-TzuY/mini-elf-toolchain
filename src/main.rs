@@ -11,10 +11,10 @@ use std::process::ExitCode;
 
 const DEFAULT_START_ADDRESS: u64 = 0x400000;
 const DEFAULT_PAGE_ALIGNMENT: u64 = 0x1000;
-const DEFAULT_ENTRY_SYMBOL: &[u8] = b"_start";
+const DEFAULT_ENTRY_SYMBOL: &str = "_start";
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] <input>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] <input>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -82,23 +82,47 @@ where
             .next()
             .ok_or_else(|| CliError::Usage("missing output path after -o".to_owned()))?;
         let mut remaining: Vec<_> = args.collect();
-        let map_output = if remaining
-            .first()
-            .is_some_and(|argument| argument == "--map")
-        {
-            if remaining.len() < 2 {
-                return Err(CliError::Usage("missing map path after --map".to_owned()));
+        let mut map_output = None;
+        let mut entry_symbol = OsString::from(DEFAULT_ENTRY_SYMBOL);
+
+        while let Some(argument) = remaining.first() {
+            if argument == "--map" {
+                if remaining.len() < 2 {
+                    return Err(CliError::Usage("missing map path after --map".to_owned()));
+                }
+                if map_output.is_some() {
+                    return Err(CliError::Usage("duplicate --map option".to_owned()));
+                }
+                map_output = Some(remaining[1].clone());
+                remaining.drain(0..2);
+            } else if argument == "--entry" {
+                if remaining.len() < 2 {
+                    return Err(CliError::Usage(
+                        "missing entry symbol after --entry".to_owned(),
+                    ));
+                }
+                if entry_symbol != DEFAULT_ENTRY_SYMBOL {
+                    return Err(CliError::Usage("duplicate --entry option".to_owned()));
+                }
+                if remaining[1].is_empty() {
+                    return Err(CliError::Usage("entry symbol cannot be empty".to_owned()));
+                }
+                entry_symbol = remaining[1].clone();
+                remaining.drain(0..2);
+            } else {
+                break;
             }
-            let map_output = remaining[1].clone();
-            remaining.drain(0..2);
-            Some(map_output)
-        } else {
-            None
-        };
+        }
+
         if remaining.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
-        return link_files(&output, map_output.as_ref(), &remaining);
+        return link_files(
+            &output,
+            map_output.as_ref(),
+            &entry_symbol,
+            &remaining,
+        );
     }
 
     Err(CliError::Usage(format!(
@@ -172,6 +196,7 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
 fn link_files(
     output: &OsString,
     map_output: Option<&OsString>,
+    entry_symbol: &OsString,
     paths: &[OsString],
 ) -> Result<String, CliError> {
     let mut files = Vec::with_capacity(paths.len());
@@ -191,12 +216,13 @@ fn link_files(
         .collect::<Vec<_>>();
     let prepared = prepare_ordered_link_inputs(&ordered_inputs)
         .map_err(|error| ordered_input_failure(paths, error))?;
+    let entry_symbol = entry_symbol.to_string_lossy();
 
     let linked = link_static_executable_with_map(
         &prepared.objects,
         DEFAULT_START_ADDRESS,
         DEFAULT_PAGE_ALIGNMENT,
-        DEFAULT_ENTRY_SYMBOL,
+        entry_symbol.as_bytes(),
     )
     .map_err(|error| CliError::Failure(format!("link failed: {error}")))?;
 
@@ -338,6 +364,38 @@ mod tests {
         assert_eq!(
             run(args.into_iter()),
             Err(CliError::Usage("missing map path after --map".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_entry_requires_symbol_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--entry"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage(
+                "missing entry symbol after --entry".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn link_entry_rejects_empty_symbol_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--entry"),
+            OsString::new(),
+            OsString::from("input.o"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("entry symbol cannot be empty".to_owned()))
         );
     }
 }
