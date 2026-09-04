@@ -7,10 +7,12 @@ pub const R_X86_64_PC32: u32 = 2;
 pub const R_X86_64_PLT32: u32 = 4;
 pub const R_X86_64_32: u32 = 10;
 pub const R_X86_64_32S: u32 = 11;
+pub const R_X86_64_PC64: u32 = 24;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelocationValue {
     U64(u64),
+    I64(i64),
     U32(u32),
     I32(i32),
 }
@@ -18,7 +20,7 @@ pub enum RelocationValue {
 impl RelocationValue {
     fn width(self) -> u64 {
         match self {
-            Self::U64(_) => 8,
+            Self::U64(_) | Self::I64(_) => 8,
             Self::U32(_) | Self::I32(_) => 4,
         }
     }
@@ -28,6 +30,7 @@ impl RelocationValue {
 pub enum RelocationEvaluationError {
     UnsupportedRelocationType { relocation_type: u32 },
     Unsigned64OutOfRange { value: i128 },
+    Signed64OutOfRange { value: i128 },
     Unsigned32OutOfRange { value: i128 },
     Signed32OutOfRange { value: i128 },
 }
@@ -41,6 +44,10 @@ impl fmt::Display for RelocationEvaluationError {
             Self::Unsigned64OutOfRange { value } => write!(
                 f,
                 "x86-64 absolute relocation result {value} is outside the unsigned 64-bit range"
+            ),
+            Self::Signed64OutOfRange { value } => write!(
+                f,
+                "x86-64 signed 64-bit relocation result {value} is outside the signed 64-bit range"
             ),
             Self::Unsigned32OutOfRange { value } => write!(
                 f,
@@ -141,6 +148,12 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Signed32OutOfRange { value })?;
             Ok(RelocationValue::I32(value))
         }
+        R_X86_64_PC64 => {
+            let value = symbol_value + addend - place;
+            let value = i64::try_from(value)
+                .map_err(|_| RelocationEvaluationError::Signed64OutOfRange { value })?;
+            Ok(RelocationValue::I64(value))
+        }
         relocation_type => {
             Err(RelocationEvaluationError::UnsupportedRelocationType { relocation_type })
         }
@@ -179,6 +192,7 @@ pub fn write_relocation_value(
     let end = end as usize;
     match value {
         RelocationValue::U64(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
+        RelocationValue::I64(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
         RelocationValue::U32(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
         RelocationValue::I32(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
     }
