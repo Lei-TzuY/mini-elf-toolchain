@@ -2,7 +2,7 @@ use mini_elf_toolchain::relocations::Elf64Rela;
 use mini_elf_toolchain::x86_64_relocations::{
     apply_relocation, evaluate_relocation, write_relocation_value, RelocationApplyError,
     RelocationEvaluationError, RelocationValue, R_X86_64_32, R_X86_64_32S, R_X86_64_64,
-    R_X86_64_PC32,
+    R_X86_64_PC32, R_X86_64_PLT32,
 };
 
 fn relocation(relocation_type: u32, addend: i64) -> Elf64Rela {
@@ -62,6 +62,51 @@ fn evaluates_negative_pc32_relocation() {
     let value = evaluate_relocation(&relocation(R_X86_64_PC32, 0), 0x1000, 0x1010).unwrap();
 
     assert_eq!(value, RelocationValue::I32(-0x10));
+}
+
+#[test]
+fn evaluates_plt32_like_pc32_for_resolved_static_symbol() {
+    let value = evaluate_relocation(&relocation(R_X86_64_PLT32, -4), 0x2200, 0x2000).unwrap();
+
+    assert_eq!(value, RelocationValue::I32(0x1fc));
+}
+
+#[test]
+fn accepts_plt32_signed_32_bit_boundaries() {
+    let max = evaluate_relocation(&relocation(R_X86_64_PLT32, i64::from(i32::MAX)), 0, 0).unwrap();
+    let min = evaluate_relocation(&relocation(R_X86_64_PLT32, i64::from(i32::MIN)), 0, 0).unwrap();
+
+    assert_eq!(max, RelocationValue::I32(i32::MAX));
+    assert_eq!(min, RelocationValue::I32(i32::MIN));
+}
+
+#[test]
+fn rejects_plt32_positive_and_negative_overflow() {
+    let positive = evaluate_relocation(
+        &relocation(R_X86_64_PLT32, i64::from(i32::MAX) + 1),
+        0,
+        0,
+    )
+    .unwrap_err();
+    let negative = evaluate_relocation(
+        &relocation(R_X86_64_PLT32, i64::from(i32::MIN) - 1),
+        0,
+        0,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        positive,
+        RelocationEvaluationError::Signed32OutOfRange {
+            value: i128::from(i32::MAX) + 1
+        }
+    );
+    assert_eq!(
+        negative,
+        RelocationEvaluationError::Signed32OutOfRange {
+            value: i128::from(i32::MIN) - 1
+        }
+    );
 }
 
 #[test]
@@ -188,6 +233,19 @@ fn writes_pc32_relocation_little_endian() {
     apply_relocation(&mut section, &relocation, 0x1000, 0x1010).unwrap();
 
     assert_eq!(&section[4..8], &(-0x10_i32).to_le_bytes());
+}
+
+#[test]
+fn writes_plt32_relocation_little_endian() {
+    let mut section = [0xaa; 8];
+    let mut relocation = relocation(R_X86_64_PLT32, -4);
+    relocation.offset = 2;
+
+    apply_relocation(&mut section, &relocation, 0x1100, 0x1000).unwrap();
+
+    assert_eq!(&section[..2], &[0xaa, 0xaa]);
+    assert_eq!(&section[2..6], &0xfc_i32.to_le_bytes());
+    assert_eq!(&section[6..], &[0xaa, 0xaa]);
 }
 
 #[test]
