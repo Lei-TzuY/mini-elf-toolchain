@@ -117,12 +117,7 @@ where
         if remaining.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
-        return link_files(
-            &output,
-            map_output.as_ref(),
-            &entry_symbol,
-            &remaining,
-        );
+        return link_files(&output, map_output.as_ref(), &entry_symbol, &remaining);
     }
 
     Err(CliError::Usage(format!(
