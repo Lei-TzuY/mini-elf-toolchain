@@ -16,8 +16,10 @@ const DEFAULT_ENTRY_SYMBOL: &str = "_start";
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
 const START_GROUP: &str = "--start-group";
 const END_GROUP: &str = "--end-group";
+const WHOLE_ARCHIVE: &str = "--whole-archive";
+const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] <input|--start-group|--end-group>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] <input|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -193,10 +195,16 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
     ))
 }
 
+#[derive(Clone, Copy)]
+struct LoadedLinkInputRef {
+    file_index: usize,
+    whole_archive: bool,
+}
+
 struct LoadedLinkInputSequence {
     files: Vec<Vec<u8>>,
     paths: Vec<OsString>,
-    sequence: Vec<usize>,
+    sequence: Vec<LoadedLinkInputRef>,
 }
 
 fn link_files(
@@ -209,10 +217,14 @@ fn link_files(
     let ordered_inputs = loaded
         .sequence
         .iter()
-        .map(|&file_index| {
-            let file = &loaded.files[file_index];
+        .map(|input| {
+            let file = &loaded.files[input.file_index];
             if file.starts_with(ARCHIVE_MAGIC) {
-                OrderedLinkInput::Archive(file)
+                if input.whole_archive {
+                    OrderedLinkInput::WholeArchive(file)
+                } else {
+                    OrderedLinkInput::Archive(file)
+                }
             } else {
                 OrderedLinkInput::Object(file)
             }
@@ -221,7 +233,7 @@ fn link_files(
     let expanded_paths = loaded
         .sequence
         .iter()
-        .map(|&file_index| loaded.paths[file_index].clone())
+        .map(|input| loaded.paths[input.file_index].clone())
         .collect::<Vec<_>>();
     let prepared = prepare_ordered_link_inputs(&ordered_inputs)
         .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
@@ -259,8 +271,19 @@ fn load_link_input_sequence(paths: &[OsString]) -> Result<LoadedLinkInputSequenc
     let mut loaded_paths = Vec::new();
     let mut sequence = Vec::new();
     let mut input_index = 0usize;
+    let mut whole_archive = false;
 
     while input_index < paths.len() {
+        if paths[input_index] == WHOLE_ARCHIVE {
+            whole_archive = true;
+            input_index += 1;
+            continue;
+        }
+        if paths[input_index] == NO_WHOLE_ARCHIVE {
+            whole_archive = false;
+            input_index += 1;
+            continue;
+        }
         if paths[input_index] == END_GROUP {
             return Err(CliError::Usage("unmatched --end-group".to_owned()));
         }
@@ -269,14 +292,17 @@ fn load_link_input_sequence(paths: &[OsString]) -> Result<LoadedLinkInputSequenc
             let file_index = files.len();
             files.push(file);
             loaded_paths.push(paths[input_index].clone());
-            sequence.push(file_index);
+            sequence.push(LoadedLinkInputRef {
+                file_index,
+                whole_archive,
+            });
             input_index += 1;
             continue;
         }
 
         input_index += 1;
-        let mut group_indices = Vec::new();
-        let mut archive_indices = Vec::new();
+        let mut group_inputs = Vec::new();
+        let mut archive_inputs = Vec::new();
         let mut ordinary_member_count = 0usize;
 
         while input_index < paths.len() && paths[input_index] != END_GROUP {
@@ -285,11 +311,21 @@ fn load_link_input_sequence(paths: &[OsString]) -> Result<LoadedLinkInputSequenc
                     "nested --start-group is not supported".to_owned(),
                 ));
             }
+            if paths[input_index] == WHOLE_ARCHIVE {
+                whole_archive = true;
+                input_index += 1;
+                continue;
+            }
+            if paths[input_index] == NO_WHOLE_ARCHIVE {
+                whole_archive = false;
+                input_index += 1;
+                continue;
+            }
 
             let path = paths[input_index].clone();
             let file = read_file(&path)?;
             let file_index = files.len();
-            if file.starts_with(ARCHIVE_MAGIC) {
+            if file.starts_with(ARCHIVE_MAGIC) && !whole_archive {
                 let archive = Archive::parse(&file).map_err(|error| {
                     CliError::Failure(format!("{}: {error}", path.to_string_lossy()))
                 })?;
@@ -300,26 +336,36 @@ fn load_link_input_sequence(paths: &[OsString]) -> Result<LoadedLinkInputSequenc
                     .count();
                 ordinary_member_count =
                     checked_total(ordinary_member_count, member_count, "archive-group member")?;
-                archive_indices.push(file_index);
+                archive_inputs.push(LoadedLinkInputRef {
+                    file_index,
+                    whole_archive: false,
+                });
             }
             files.push(file);
             loaded_paths.push(path);
-            group_indices.push(file_index);
+            group_inputs.push(LoadedLinkInputRef {
+                file_index,
+                whole_archive,
+            });
             input_index += 1;
         }
 
         if input_index == paths.len() {
             return Err(CliError::Usage("missing --end-group".to_owned()));
         }
-        if group_indices.is_empty() {
+        if group_inputs.is_empty() {
             return Err(CliError::Usage("archive group cannot be empty".to_owned()));
         }
 
-        sequence.extend(group_indices);
+        sequence.extend(group_inputs);
         for _ in 0..ordinary_member_count {
-            sequence.extend(archive_indices.iter().copied());
+            sequence.extend(archive_inputs.iter().copied());
         }
         input_index += 1;
+    }
+
+    if sequence.is_empty() {
+        return Err(CliError::Usage("missing relocatable input path".to_owned()));
     }
 
     Ok(LoadedLinkInputSequence {
@@ -337,6 +383,7 @@ fn ordered_input_failure(paths: &[OsString], error: OrderedLinkInputError) -> Cl
         | OrderedLinkInputError::InvalidArchive { input_index, .. }
         | OrderedLinkInputError::InvalidArchiveIndex { input_index, .. }
         | OrderedLinkInputError::MissingArchiveIndex { input_index }
+        | OrderedLinkInputError::InvalidArchiveMember { input_index, .. }
         | OrderedLinkInputError::ArchiveExtraction { input_index, .. } => *input_index,
     };
 
@@ -430,6 +477,21 @@ mod tests {
             OsString::from("link"),
             OsString::from("-o"),
             OsString::from("a.out"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("missing relocatable input path".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_whole_archive_markers_alone_are_not_inputs() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--whole-archive"),
+            OsString::from("--no-whole-archive"),
         ];
         assert_eq!(
             run(args.into_iter()),
