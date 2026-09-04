@@ -69,7 +69,15 @@ fn cli_forced_undefined_extracts_otherwise_unused_archive_member_like_gnu_ld() {
 
     let plain = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .current_dir(&dir)
-        .args(["link", "-o", "plain.out", "--map", "plain.map", "start.o", "libextra.a"])
+        .args([
+            "link",
+            "-o",
+            "plain.out",
+            "--map",
+            "plain.map",
+            "start.o",
+            "libextra.a",
+        ])
         .output()
         .expect("run plain link");
     assert!(plain.status.success());
