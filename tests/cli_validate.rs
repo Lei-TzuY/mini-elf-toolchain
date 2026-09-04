@@ -124,6 +124,6 @@ fn missing_input_is_a_usage_error() {
     assert!(output.stdout.is_empty());
     assert_eq!(
         String::from_utf8(output.stderr).expect("stderr must be UTF-8"),
-        "missing input path\nusage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] <input>...\n"
+        "missing input path\nusage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] <input>...\n"
     );
 }
