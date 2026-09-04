@@ -141,7 +141,10 @@ fn cli_whole_archive_forces_unindexed_members_like_gnu_ld() {
         let status = Command::new(dir.join("whole.out"))
             .status()
             .expect("execute whole-archive static ELF");
-        assert!(status.success(), "whole-archive executable returned {status}");
+        assert!(
+            status.success(),
+            "whole-archive executable returned {status}"
+        );
     }
 
     fs::write(dir.join("bad.txt"), b"not an ELF object").expect("write malformed member");
