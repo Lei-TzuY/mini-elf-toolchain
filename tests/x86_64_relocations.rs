@@ -1,7 +1,8 @@
 use mini_elf_toolchain::relocations::Elf64Rela;
 use mini_elf_toolchain::x86_64_relocations::{
     apply_relocation, evaluate_relocation, write_relocation_value, RelocationApplyError,
-    RelocationEvaluationError, RelocationValue, R_X86_64_64, R_X86_64_PC32,
+    RelocationEvaluationError, RelocationValue, R_X86_64_32, R_X86_64_32S, R_X86_64_64,
+    R_X86_64_PC32,
 };
 
 fn relocation(relocation_type: u32, addend: i64) -> Elf64Rela {
@@ -99,6 +100,70 @@ fn rejects_pc32_negative_overflow() {
 }
 
 #[test]
+fn evaluates_unsigned_32_absolute_relocation() {
+    let value = evaluate_relocation(&relocation(R_X86_64_32, -1), 0x400001, 0).unwrap();
+
+    assert_eq!(value, RelocationValue::U32(0x400000));
+}
+
+#[test]
+fn accepts_unsigned_32_absolute_boundaries() {
+    let zero = evaluate_relocation(&relocation(R_X86_64_32, 0), 0, 0).unwrap();
+    let max = evaluate_relocation(&relocation(R_X86_64_32, 0), u64::from(u32::MAX), 0).unwrap();
+
+    assert_eq!(zero, RelocationValue::U32(0));
+    assert_eq!(max, RelocationValue::U32(u32::MAX));
+}
+
+#[test]
+fn rejects_unsigned_32_absolute_underflow_and_overflow() {
+    let underflow = evaluate_relocation(&relocation(R_X86_64_32, -1), 0, 0).unwrap_err();
+    let overflow = evaluate_relocation(
+        &relocation(R_X86_64_32, 1),
+        u64::from(u32::MAX),
+        0,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        underflow,
+        RelocationEvaluationError::Unsigned32OutOfRange { value: -1 }
+    );
+    assert_eq!(
+        overflow,
+        RelocationEvaluationError::Unsigned32OutOfRange {
+            value: i128::from(u32::MAX) + 1
+        }
+    );
+}
+
+#[test]
+fn evaluates_signed_32_absolute_relocation() {
+    let positive = evaluate_relocation(&relocation(R_X86_64_32S, -1), 0x400001, 0).unwrap();
+    let negative = evaluate_relocation(&relocation(R_X86_64_32S, -2), 1, 0).unwrap();
+
+    assert_eq!(positive, RelocationValue::I32(0x400000));
+    assert_eq!(negative, RelocationValue::I32(-1));
+}
+
+#[test]
+fn rejects_signed_32_absolute_overflow() {
+    let error = evaluate_relocation(
+        &relocation(R_X86_64_32S, 1),
+        i32::MAX as u64,
+        0,
+    )
+    .unwrap_err();
+
+    assert_eq!(
+        error,
+        RelocationEvaluationError::Signed32OutOfRange {
+            value: i128::from(i32::MAX) + 1
+        }
+    );
+}
+
+#[test]
 fn rejects_unsupported_relocation_type() {
     let error = evaluate_relocation(&relocation(42, 0), 0, 0).unwrap_err();
 
@@ -132,6 +197,32 @@ fn writes_pc32_relocation_little_endian() {
     apply_relocation(&mut section, &relocation, 0x1000, 0x1010).unwrap();
 
     assert_eq!(&section[4..8], &(-0x10_i32).to_le_bytes());
+}
+
+#[test]
+fn writes_unsigned_32_absolute_relocation_little_endian() {
+    let mut section = [0xaa; 8];
+    let mut relocation = relocation(R_X86_64_32, 1);
+    relocation.offset = 2;
+
+    apply_relocation(&mut section, &relocation, 0x1234_5678, 0).unwrap();
+
+    assert_eq!(&section[..2], &[0xaa, 0xaa]);
+    assert_eq!(&section[2..6], &0x1234_5679_u32.to_le_bytes());
+    assert_eq!(&section[6..], &[0xaa, 0xaa]);
+}
+
+#[test]
+fn writes_signed_32_absolute_relocation_little_endian() {
+    let mut section = [0xaa; 8];
+    let mut relocation = relocation(R_X86_64_32S, -2);
+    relocation.offset = 1;
+
+    apply_relocation(&mut section, &relocation, 1, 0).unwrap();
+
+    assert_eq!(&section[..1], &[0xaa]);
+    assert_eq!(&section[1..5], &(-1_i32).to_le_bytes());
+    assert_eq!(&section[5..], &[0xaa, 0xaa, 0xaa]);
 }
 
 #[test]
