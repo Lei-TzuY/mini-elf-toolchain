@@ -125,7 +125,10 @@ fn cli_links_gnu_r_x86_64_plt32_cross_object_call() {
     )
     .expect("write helper assembly input");
 
-    for (source, object) in [(&start_source, &start_object), (&helper_source, &helper_object)] {
+    for (source, object) in [
+        (&start_source, &start_object),
+        (&helper_source, &helper_object),
+    ] {
         let assemble = Command::new("as")
             .args(["--64", "-o"])
             .arg(object)
