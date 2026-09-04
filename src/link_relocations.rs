@@ -7,6 +7,8 @@ use crate::relocations::Elf64RelaTable;
 use crate::resolve::{NamedSymbol, SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
 
+const R_X86_64_NONE: u32 = 0;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LinkRelocationError {
     MissingSymbolMetadata {
@@ -113,6 +115,9 @@ pub fn apply_rela_table_with_resolved_symbols(
     let mut values = BTreeMap::new();
 
     for (relocation_index, relocation) in table.relocations.iter().enumerate() {
+        if relocation.relocation_type == R_X86_64_NONE {
+            continue;
+        }
         if values.contains_key(&relocation.symbol_index) {
             continue;
         }
