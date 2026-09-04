@@ -292,11 +292,8 @@ fn load_link_input_sequence(
                     .iter()
                     .filter(|member| member.kind == ArchiveMemberKind::Ordinary)
                     .count();
-                ordinary_member_count = checked_total(
-                    ordinary_member_count,
-                    member_count,
-                    "archive-group member",
-                )?;
+                ordinary_member_count =
+                    checked_total(ordinary_member_count, member_count, "archive-group member")?;
                 archive_indices.push(file_index);
             }
             files.push(file);
