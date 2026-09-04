@@ -1,7 +1,9 @@
 use core::fmt;
 
 use crate::relocations::Elf64RelaTable;
-use crate::x86_64_relocations::{apply_relocation, RelocationApplyError, R_X86_64_NONE};
+use crate::x86_64_relocations::{apply_relocation, RelocationApplyError};
+
+const R_X86_64_NONE: u32 = 0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelaTableApplyError {
