@@ -84,6 +84,7 @@ where
         let mut remaining: Vec<_> = args.collect();
         let mut map_output = None;
         let mut entry_symbol = OsString::from(DEFAULT_ENTRY_SYMBOL);
+        let mut entry_seen = false;
 
         while let Some(argument) = remaining.first() {
             if argument == "--map" {
@@ -101,13 +102,14 @@ where
                         "missing entry symbol after --entry".to_owned(),
                     ));
                 }
-                if entry_symbol != DEFAULT_ENTRY_SYMBOL {
+                if entry_seen {
                     return Err(CliError::Usage("duplicate --entry option".to_owned()));
                 }
                 if remaining[1].is_empty() {
                     return Err(CliError::Usage("entry symbol cannot be empty".to_owned()));
                 }
                 entry_symbol = remaining[1].clone();
+                entry_seen = true;
                 remaining.drain(0..2);
             } else {
                 break;
@@ -391,6 +393,24 @@ mod tests {
         assert_eq!(
             run(args.into_iter()),
             Err(CliError::Usage("entry symbol cannot be empty".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_entry_rejects_duplicate_default_symbol_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--entry"),
+            OsString::from("_start"),
+            OsString::from("--entry"),
+            OsString::from("custom_entry"),
+            OsString::from("input.o"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("duplicate --entry option".to_owned()))
         );
     }
 }
