@@ -82,18 +82,10 @@ fn accepts_plt32_signed_32_bit_boundaries() {
 
 #[test]
 fn rejects_plt32_positive_and_negative_overflow() {
-    let positive = evaluate_relocation(
-        &relocation(R_X86_64_PLT32, i64::from(i32::MAX) + 1),
-        0,
-        0,
-    )
-    .unwrap_err();
-    let negative = evaluate_relocation(
-        &relocation(R_X86_64_PLT32, i64::from(i32::MIN) - 1),
-        0,
-        0,
-    )
-    .unwrap_err();
+    let positive = evaluate_relocation(&relocation(R_X86_64_PLT32, i64::from(i32::MAX) + 1), 0, 0)
+        .unwrap_err();
+    let negative = evaluate_relocation(&relocation(R_X86_64_PLT32, i64::from(i32::MIN) - 1), 0, 0)
+        .unwrap_err();
 
     assert_eq!(
         positive,
