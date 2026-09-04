@@ -238,14 +238,15 @@ pub fn prepare_ordered_link_inputs<'a>(
                         continue;
                     }
                     let object_index = objects.len();
-                    let object = LinkerInputObject::parse(object_index, member.data).map_err(
-                        |source| OrderedLinkInputError::InvalidArchiveMember {
-                            input_index,
-                            archive_member_index,
-                            member_name: member.name.clone(),
-                            source,
-                        },
-                    )?;
+                    let object =
+                        LinkerInputObject::parse(object_index, member.data).map_err(|source| {
+                            OrderedLinkInputError::InvalidArchiveMember {
+                                input_index,
+                                archive_member_index,
+                                member_name: member.name.clone(),
+                                source,
+                            }
+                        })?;
                     update_symbol_state(
                         input_index,
                         object_index,
