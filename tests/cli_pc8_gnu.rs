@@ -30,33 +30,45 @@ fn temp_dir() -> PathBuf {
 }
 
 #[test]
-fn cli_links_gnu_r_x86_64_pc8_reference() {
+fn cli_links_gnu_r_x86_64_pc8_cross_object_reference() {
     if !have_gnu_toolchain() {
         return;
     }
 
     let dir = temp_dir();
-    let source = dir.join("start.s");
-    let object = dir.join("start.o");
+    let start_source = dir.join("start.s");
+    let helper_source = dir.join("helper.s");
+    let start_object = dir.join("start.o");
+    let helper_object = dir.join("helper.o");
     let output = dir.join("linked-pc8");
 
     fs::write(
-        &source,
-        ".global _start\n.global helper\n.section .text\n_start:\n    mov $60, %eax\n    xor %edi, %edi\n    syscall\npc8_slot:\n    .byte helper - .\nhelper:\n    ret\n",
+        &start_source,
+        ".global _start\n.extern helper\n.section .text\n_start:\n    mov $60, %eax\n    xor %edi, %edi\n    syscall\npc8_slot:\n    .byte helper - . - 4096\n",
     )
-    .expect("write assembly input");
+    .expect("write start assembly input");
+    fs::write(
+        &helper_source,
+        ".global helper\n.section .text\nhelper:\n    ret\n",
+    )
+    .expect("write helper assembly input");
 
-    let assemble = Command::new("as")
-        .args(["--64", "-o"])
-        .arg(&object)
-        .arg(&source)
-        .status()
-        .expect("run GNU as");
-    assert!(assemble.success(), "GNU as failed for {}", source.display());
+    for (source, object) in [
+        (&start_source, &start_object),
+        (&helper_source, &helper_object),
+    ] {
+        let assemble = Command::new("as")
+            .args(["--64", "-o"])
+            .arg(object)
+            .arg(source)
+            .status()
+            .expect("run GNU as");
+        assert!(assemble.success(), "GNU as failed for {}", source.display());
+    }
 
     let relocations = Command::new("readelf")
         .args(["-rW"])
-        .arg(&object)
+        .arg(&start_object)
         .output()
         .expect("run GNU readelf -rW");
     assert!(relocations.status.success());
@@ -69,7 +81,8 @@ fn cli_links_gnu_r_x86_64_pc8_reference() {
     let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
         .arg(&output)
-        .arg(&object)
+        .arg(&start_object)
+        .arg(&helper_object)
         .output()
         .expect("run mini-elf-toolchain link");
     assert!(
