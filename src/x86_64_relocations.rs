@@ -4,10 +4,13 @@ use crate::relocations::Elf64Rela;
 
 pub const R_X86_64_64: u32 = 1;
 pub const R_X86_64_PC32: u32 = 2;
+pub const R_X86_64_32: u32 = 10;
+pub const R_X86_64_32S: u32 = 11;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelocationValue {
     U64(u64),
+    U32(u32),
     I32(i32),
 }
 
@@ -15,7 +18,7 @@ impl RelocationValue {
     fn width(self) -> u64 {
         match self {
             Self::U64(_) => 8,
-            Self::I32(_) => 4,
+            Self::U32(_) | Self::I32(_) => 4,
         }
     }
 }
@@ -24,6 +27,7 @@ impl RelocationValue {
 pub enum RelocationEvaluationError {
     UnsupportedRelocationType { relocation_type: u32 },
     Unsigned64OutOfRange { value: i128 },
+    Unsigned32OutOfRange { value: i128 },
     Signed32OutOfRange { value: i128 },
 }
 
@@ -37,9 +41,13 @@ impl fmt::Display for RelocationEvaluationError {
                 f,
                 "x86-64 absolute relocation result {value} is outside the unsigned 64-bit range"
             ),
+            Self::Unsigned32OutOfRange { value } => write!(
+                f,
+                "x86-64 absolute relocation result {value} is outside the unsigned 32-bit range"
+            ),
             Self::Signed32OutOfRange { value } => write!(
                 f,
-                "x86-64 PC-relative relocation result {value} is outside the signed 32-bit range"
+                "x86-64 signed 32-bit relocation result {value} is outside the signed 32-bit range"
             ),
         }
     }
@@ -120,6 +128,18 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Signed32OutOfRange { value })?;
             Ok(RelocationValue::I32(value))
         }
+        R_X86_64_32 => {
+            let value = symbol_value + addend;
+            let value = u32::try_from(value)
+                .map_err(|_| RelocationEvaluationError::Unsigned32OutOfRange { value })?;
+            Ok(RelocationValue::U32(value))
+        }
+        R_X86_64_32S => {
+            let value = symbol_value + addend;
+            let value = i32::try_from(value)
+                .map_err(|_| RelocationEvaluationError::Signed32OutOfRange { value })?;
+            Ok(RelocationValue::I32(value))
+        }
         relocation_type => {
             Err(RelocationEvaluationError::UnsupportedRelocationType { relocation_type })
         }
@@ -158,6 +178,7 @@ pub fn write_relocation_value(
     let end = end as usize;
     match value {
         RelocationValue::U64(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
+        RelocationValue::U32(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
         RelocationValue::I32(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
     }
 
