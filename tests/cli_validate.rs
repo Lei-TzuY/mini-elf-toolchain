@@ -95,10 +95,7 @@ fn validate_rel_rejects_non_relocatable_elf() {
     fs::write(&path, minimal_elf64(2)).expect("write temp executable ELF");
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
-        .args([
-            "validate-rel",
-            path.to_str().expect("UTF-8 temp path"),
-        ])
+        .args(["validate-rel", path.to_str().expect("UTF-8 temp path")])
         .output()
         .expect("run CLI");
 
