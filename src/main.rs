@@ -1,9 +1,12 @@
 use mini_elf_toolchain::archive::{Archive, ArchiveMemberKind};
 use mini_elf_toolchain::elf64::Elf64Header;
+use mini_elf_toolchain::forced_undefined::{
+    extract_forced_undefined_arguments, ForcedUndefinedArgumentError,
+};
 use mini_elf_toolchain::input_object::RelocatableObject;
 use mini_elf_toolchain::library_search::{resolve_static_library_arguments, LibrarySearchError};
 use mini_elf_toolchain::ordered_inputs::{
-    prepare_ordered_link_inputs, OrderedLinkInput, OrderedLinkInputError,
+    prepare_ordered_link_inputs_with_forced_undefined, OrderedLinkInput, OrderedLinkInputError,
 };
 use mini_elf_toolchain::static_link::link_static_executable_with_map;
 use std::env;
@@ -20,7 +23,7 @@ const END_GROUP: &str = "--end-group";
 const WHOLE_ARCHIVE: &str = "--whole-archive";
 const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -87,7 +90,10 @@ where
         let output = args
             .next()
             .ok_or_else(|| CliError::Usage("missing output path after -o".to_owned()))?;
-        let mut remaining: Vec<_> = args.collect();
+        let raw_remaining: Vec<_> = args.collect();
+        let forced =
+            extract_forced_undefined_arguments(&raw_remaining).map_err(forced_undefined_error)?;
+        let mut remaining = forced.arguments;
         let mut map_output = None;
         let mut entry_symbol = OsString::from(DEFAULT_ENTRY_SYMBOL);
         let mut entry_seen = false;
@@ -127,13 +133,23 @@ where
         if remaining.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
-        return link_files(&output, map_output.as_ref(), &entry_symbol, &remaining);
+        return link_files(
+            &output,
+            map_output.as_ref(),
+            &entry_symbol,
+            &forced.symbols,
+            &remaining,
+        );
     }
 
     Err(CliError::Usage(format!(
         "unknown command '{}'",
         command.to_string_lossy()
     )))
+}
+
+fn forced_undefined_error(error: ForcedUndefinedArgumentError) -> CliError {
+    CliError::Usage(error.to_string())
 }
 
 fn library_search_error(error: LibrarySearchError) -> CliError {
@@ -224,6 +240,7 @@ fn link_files(
     output: &OsString,
     map_output: Option<&OsString>,
     entry_symbol: &OsString,
+    forced_undefined: &[Vec<u8>],
     paths: &[OsString],
 ) -> Result<String, CliError> {
     let loaded = load_link_input_sequence(paths)?;
@@ -248,8 +265,9 @@ fn link_files(
         .iter()
         .map(|input| loaded.paths[input.file_index].clone())
         .collect::<Vec<_>>();
-    let prepared = prepare_ordered_link_inputs(&ordered_inputs)
-        .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
+    let prepared =
+        prepare_ordered_link_inputs_with_forced_undefined(&ordered_inputs, forced_undefined)
+            .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     let entry_symbol = entry_symbol.to_string_lossy();
 
     let linked = link_static_executable_with_map(
@@ -509,6 +527,36 @@ mod tests {
         assert_eq!(
             run(args.into_iter()),
             Err(CliError::Usage("missing relocatable input path".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_forced_undefined_requires_symbol_before_io() {
+        let missing = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("-u"),
+        ];
+        assert_eq!(
+            run(missing.into_iter()),
+            Err(CliError::Usage(
+                "missing symbol after -u/--undefined".to_owned()
+            ))
+        );
+
+        let empty = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--undefined"),
+            OsString::new(),
+        ];
+        assert_eq!(
+            run(empty.into_iter()),
+            Err(CliError::Usage(
+                "forced undefined symbol cannot be empty".to_owned()
+            ))
         );
     }
 

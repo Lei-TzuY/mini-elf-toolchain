@@ -151,10 +151,17 @@ impl std::error::Error for OrderedLinkInputError {
 pub fn prepare_ordered_link_inputs<'a>(
     inputs: &[OrderedLinkInput<'a>],
 ) -> Result<OrderedLinkObjects<'a>, OrderedLinkInputError> {
+    prepare_ordered_link_inputs_with_forced_undefined(inputs, &[])
+}
+
+pub fn prepare_ordered_link_inputs_with_forced_undefined<'a>(
+    inputs: &[OrderedLinkInput<'a>],
+    forced_undefined: &[Vec<u8>],
+) -> Result<OrderedLinkObjects<'a>, OrderedLinkInputError> {
     let mut objects = Vec::new();
     let mut origins = Vec::new();
     let mut defined = BTreeSet::new();
-    let mut unresolved = BTreeSet::new();
+    let mut unresolved = forced_undefined.iter().cloned().collect::<BTreeSet<_>>();
 
     for (input_index, input) in inputs.iter().copied().enumerate() {
         match input {
