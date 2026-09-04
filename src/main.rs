@@ -1,3 +1,4 @@
+use mini_elf_toolchain::archive::{Archive, ArchiveMemberKind};
 use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::input_object::RelocatableObject;
 use mini_elf_toolchain::ordered_inputs::{
@@ -13,8 +14,10 @@ const DEFAULT_START_ADDRESS: u64 = 0x400000;
 const DEFAULT_PAGE_ALIGNMENT: u64 = 0x1000;
 const DEFAULT_ENTRY_SYMBOL: &str = "_start";
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
+const START_GROUP: &str = "--start-group";
+const END_GROUP: &str = "--end-group";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] <input>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] <input|--start-group|--end-group>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -196,14 +199,11 @@ fn link_files(
     entry_symbol: &OsString,
     paths: &[OsString],
 ) -> Result<String, CliError> {
-    let mut files = Vec::with_capacity(paths.len());
-    for path in paths {
-        files.push(read_file(path)?);
-    }
-
-    let ordered_inputs = files
+    let (files, loaded_paths, sequence) = load_link_input_sequence(paths)?;
+    let ordered_inputs = sequence
         .iter()
-        .map(|file| {
+        .map(|&file_index| {
+            let file = &files[file_index];
             if file.starts_with(ARCHIVE_MAGIC) {
                 OrderedLinkInput::Archive(file)
             } else {
@@ -211,8 +211,12 @@ fn link_files(
             }
         })
         .collect::<Vec<_>>();
+    let expanded_paths = sequence
+        .iter()
+        .map(|&file_index| loaded_paths[file_index].clone())
+        .collect::<Vec<_>>();
     let prepared = prepare_ordered_link_inputs(&ordered_inputs)
-        .map_err(|error| ordered_input_failure(paths, error))?;
+        .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     let entry_symbol = entry_symbol.to_string_lossy();
 
     let linked = link_static_executable_with_map(
@@ -240,6 +244,82 @@ fn link_files(
         linked.image.bytes.len(),
         linked.image.entry_address
     ))
+}
+
+fn load_link_input_sequence(
+    paths: &[OsString],
+) -> Result<(Vec<Vec<u8>>, Vec<OsString>, Vec<usize>), CliError> {
+    let mut files = Vec::new();
+    let mut loaded_paths = Vec::new();
+    let mut sequence = Vec::new();
+    let mut input_index = 0usize;
+
+    while input_index < paths.len() {
+        if paths[input_index] == END_GROUP {
+            return Err(CliError::Usage("unmatched --end-group".to_owned()));
+        }
+        if paths[input_index] != START_GROUP {
+            let file = read_file(&paths[input_index])?;
+            let file_index = files.len();
+            files.push(file);
+            loaded_paths.push(paths[input_index].clone());
+            sequence.push(file_index);
+            input_index += 1;
+            continue;
+        }
+
+        input_index += 1;
+        let mut group_indices = Vec::new();
+        let mut archive_indices = Vec::new();
+        let mut ordinary_member_count = 0usize;
+
+        while input_index < paths.len() && paths[input_index] != END_GROUP {
+            if paths[input_index] == START_GROUP {
+                return Err(CliError::Usage(
+                    "nested --start-group is not supported".to_owned(),
+                ));
+            }
+
+            let path = paths[input_index].clone();
+            let file = read_file(&path)?;
+            let file_index = files.len();
+            if file.starts_with(ARCHIVE_MAGIC) {
+                let archive = Archive::parse(&file).map_err(|error| {
+                    CliError::Failure(format!("{}: {error}", path.to_string_lossy()))
+                })?;
+                let member_count = archive
+                    .members
+                    .iter()
+                    .filter(|member| member.kind == ArchiveMemberKind::Ordinary)
+                    .count();
+                ordinary_member_count = checked_total(
+                    ordinary_member_count,
+                    member_count,
+                    "archive-group member",
+                )?;
+                archive_indices.push(file_index);
+            }
+            files.push(file);
+            loaded_paths.push(path);
+            group_indices.push(file_index);
+            input_index += 1;
+        }
+
+        if input_index == paths.len() {
+            return Err(CliError::Usage("missing --end-group".to_owned()));
+        }
+        if group_indices.is_empty() {
+            return Err(CliError::Usage("archive group cannot be empty".to_owned()));
+        }
+
+        sequence.extend(group_indices);
+        for _ in 0..ordinary_member_count {
+            sequence.extend(archive_indices.iter().copied());
+        }
+        input_index += 1;
+    }
+
+    Ok((files, loaded_paths, sequence))
 }
 
 fn ordered_input_failure(paths: &[OsString], error: OrderedLinkInputError) -> CliError {
@@ -411,6 +491,52 @@ mod tests {
         assert_eq!(
             run(args.into_iter()),
             Err(CliError::Usage("duplicate --entry option".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_group_rejects_unmatched_end_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--end-group"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("unmatched --end-group".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_group_requires_end_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--start-group"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("missing --end-group".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_group_rejects_nested_group_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--start-group"),
+            OsString::from("--start-group"),
+            OsString::from("--end-group"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage(
+                "nested --start-group is not supported".to_owned()
+            ))
         );
     }
 }
