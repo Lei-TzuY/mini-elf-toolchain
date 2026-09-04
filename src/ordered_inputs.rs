@@ -1,7 +1,7 @@
 use core::fmt;
 use std::collections::BTreeSet;
 
-use crate::archive::{Archive, ArchiveError};
+use crate::archive::{Archive, ArchiveError, ArchiveMemberKind};
 use crate::archive_index::{parse_archive_symbol_index, ArchiveSymbolIndexError};
 use crate::archive_lazy::{extract_indexed_archive_members, ArchiveExtractionError};
 use crate::input_object::RelocatableObjectError;
@@ -13,6 +13,7 @@ use crate::resolve::{SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 pub enum OrderedLinkInput<'a> {
     Object(&'a [u8]),
     Archive(&'a [u8]),
+    WholeArchive(&'a [u8]),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +64,12 @@ pub enum OrderedLinkInputError {
     MissingArchiveIndex {
         input_index: usize,
     },
+    InvalidArchiveMember {
+        input_index: usize,
+        archive_member_index: usize,
+        member_name: Vec<u8>,
+        source: RelocatableObjectError,
+    },
     ArchiveExtraction {
         input_index: usize,
         source: ArchiveExtractionError,
@@ -106,6 +113,16 @@ impl fmt::Display for OrderedLinkInputError {
                 f,
                 "input {input_index} archive has no System V/GNU symbol index"
             ),
+            Self::InvalidArchiveMember {
+                input_index,
+                archive_member_index,
+                member_name,
+                source,
+            } => write!(
+                f,
+                "input {input_index} archive member {archive_member_index} '{}' is not a valid ET_REL object: {source}",
+                String::from_utf8_lossy(member_name)
+            ),
             Self::ArchiveExtraction {
                 input_index,
                 source,
@@ -124,6 +141,7 @@ impl std::error::Error for OrderedLinkInputError {
             Self::ObjectSymbols { source, .. } => Some(source),
             Self::InvalidArchive { source, .. } => Some(source),
             Self::InvalidArchiveIndex { source, .. } => Some(source),
+            Self::InvalidArchiveMember { source, .. } => Some(source),
             Self::ArchiveExtraction { source, .. } => Some(source),
             Self::UnsupportedBinding { .. } | Self::MissingArchiveIndex { .. } => None,
         }
@@ -205,6 +223,42 @@ pub fn prepare_ordered_link_inputs<'a>(
                         input_index,
                         archive_member_index,
                         member_name: extracted.name,
+                    });
+                }
+            }
+            OrderedLinkInput::WholeArchive(file) => {
+                let archive = Archive::parse(file).map_err(|source| {
+                    OrderedLinkInputError::InvalidArchive {
+                        input_index,
+                        source,
+                    }
+                })?;
+                for (archive_member_index, member) in archive.members.iter().enumerate() {
+                    if member.kind != ArchiveMemberKind::Ordinary {
+                        continue;
+                    }
+                    let object_index = objects.len();
+                    let object = LinkerInputObject::parse(object_index, member.data).map_err(
+                        |source| OrderedLinkInputError::InvalidArchiveMember {
+                            input_index,
+                            archive_member_index,
+                            member_name: member.name.clone(),
+                            source,
+                        },
+                    )?;
+                    update_symbol_state(
+                        input_index,
+                        object_index,
+                        member.data,
+                        &object,
+                        &mut defined,
+                        &mut unresolved,
+                    )?;
+                    objects.push(object);
+                    origins.push(LinkObjectOrigin::ArchiveMember {
+                        input_index,
+                        archive_member_index,
+                        member_name: member.name.clone(),
                     });
                 }
             }
