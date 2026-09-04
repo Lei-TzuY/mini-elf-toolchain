@@ -122,7 +122,11 @@ mod tests {
         assert_eq!(
             parsed,
             ForcedUndefinedArguments {
-                arguments: vec![OsString::from("root.o"), OsString::from("liba.a"), OsString::from("libb.a")],
+                arguments: vec![
+                    OsString::from("root.o"),
+                    OsString::from("liba.a"),
+                    OsString::from("libb.a")
+                ],
                 symbols: vec![b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()],
             }
         );
@@ -135,10 +139,7 @@ mod tests {
             Err(ForcedUndefinedArgumentError::MissingSymbol)
         );
         assert_eq!(
-            extract_forced_undefined_arguments(&[
-                OsString::from("--undefined"),
-                OsString::new(),
-            ]),
+            extract_forced_undefined_arguments(&[OsString::from("--undefined"), OsString::new(),]),
             Err(ForcedUndefinedArgumentError::EmptySymbol)
         );
     }
