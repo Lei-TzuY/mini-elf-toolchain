@@ -122,7 +122,8 @@ where
             }
         }
 
-        let remaining = resolve_static_library_arguments(&remaining).map_err(library_search_error)?;
+        let remaining =
+            resolve_static_library_arguments(&remaining).map_err(library_search_error)?;
         if remaining.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
