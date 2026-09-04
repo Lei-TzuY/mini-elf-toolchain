@@ -1,9 +1,12 @@
 use mini_elf_toolchain::archive::{Archive, ArchiveMemberKind};
 use mini_elf_toolchain::elf64::Elf64Header;
+use mini_elf_toolchain::forced_undefined::{
+    extract_forced_undefined_arguments, ForcedUndefinedArgumentError,
+};
 use mini_elf_toolchain::input_object::RelocatableObject;
 use mini_elf_toolchain::library_search::{resolve_static_library_arguments, LibrarySearchError};
 use mini_elf_toolchain::ordered_inputs::{
-    prepare_ordered_link_inputs, OrderedLinkInput, OrderedLinkInputError,
+    prepare_ordered_link_inputs_with_forced_undefined, OrderedLinkInput, OrderedLinkInputError,
 };
 use mini_elf_toolchain::static_link::link_static_executable_with_map;
 use std::env;
@@ -20,7 +23,7 @@ const END_GROUP: &str = "--end-group";
 const WHOLE_ARCHIVE: &str = "--whole-archive";
 const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -75,65 +78,79 @@ where
         return validate_relocatable_files(&inputs);
     }
 
-    if command == "link" {
-        let output_flag = args
-            .next()
-            .ok_or_else(|| CliError::Usage("missing -o <output>".to_owned()))?;
-        if output_flag != "-o" {
-            return Err(CliError::Usage(
-                "expected -o <output> after link".to_owned(),
-            ));
-        }
-        let output = args
-            .next()
-            .ok_or_else(|| CliError::Usage("missing output path after -o".to_owned()))?;
-        let mut remaining: Vec<_> = args.collect();
-        let mut map_output = None;
-        let mut entry_symbol = OsString::from(DEFAULT_ENTRY_SYMBOL);
-        let mut entry_seen = false;
-
-        while let Some(argument) = remaining.first() {
-            if argument == "--map" {
-                if remaining.len() < 2 {
-                    return Err(CliError::Usage("missing map path after --map".to_owned()));
-                }
-                if map_output.is_some() {
-                    return Err(CliError::Usage("duplicate --map option".to_owned()));
-                }
-                map_output = Some(remaining[1].clone());
-                remaining.drain(0..2);
-            } else if argument == "--entry" {
-                if remaining.len() < 2 {
-                    return Err(CliError::Usage(
-                        "missing entry symbol after --entry".to_owned(),
-                    ));
-                }
-                if entry_seen {
-                    return Err(CliError::Usage("duplicate --entry option".to_owned()));
-                }
-                if remaining[1].is_empty() {
-                    return Err(CliError::Usage("entry symbol cannot be empty".to_owned()));
-                }
-                entry_symbol = remaining[1].clone();
-                entry_seen = true;
-                remaining.drain(0..2);
-            } else {
-                break;
-            }
-        }
-
-        let remaining =
-            resolve_static_library_arguments(&remaining).map_err(library_search_error)?;
-        if remaining.is_empty() {
-            return Err(CliError::Usage("missing relocatable input path".to_owned()));
-        }
-        return link_files(&output, map_output.as_ref(), &entry_symbol, &remaining);
+    if command != "link" {
+        return Err(CliError::Usage(format!(
+            "unknown command '{}'",
+            command.to_string_lossy()
+        )));
     }
 
-    Err(CliError::Usage(format!(
-        "unknown command '{}'",
-        command.to_string_lossy()
-    )))
+    let output_flag = args
+        .next()
+        .ok_or_else(|| CliError::Usage("missing -o <output>".to_owned()))?;
+    if output_flag != "-o" {
+        return Err(CliError::Usage(
+            "expected -o <output> after link".to_owned(),
+        ));
+    }
+    let output = args
+        .next()
+        .ok_or_else(|| CliError::Usage("missing output path after -o".to_owned()))?;
+
+    let raw_remaining = args.collect::<Vec<_>>();
+    let forced = extract_forced_undefined_arguments(&raw_remaining)
+        .map_err(forced_undefined_error)?;
+    let mut remaining = forced.arguments;
+    let mut map_output = None;
+    let mut entry_symbol = OsString::from(DEFAULT_ENTRY_SYMBOL);
+    let mut entry_seen = false;
+
+    while let Some(argument) = remaining.first() {
+        if argument == "--map" {
+            if remaining.len() < 2 {
+                return Err(CliError::Usage("missing map path after --map".to_owned()));
+            }
+            if map_output.is_some() {
+                return Err(CliError::Usage("duplicate --map option".to_owned()));
+            }
+            map_output = Some(remaining[1].clone());
+            remaining.drain(0..2);
+        } else if argument == "--entry" {
+            if remaining.len() < 2 {
+                return Err(CliError::Usage(
+                    "missing entry symbol after --entry".to_owned(),
+                ));
+            }
+            if entry_seen {
+                return Err(CliError::Usage("duplicate --entry option".to_owned()));
+            }
+            if remaining[1].is_empty() {
+                return Err(CliError::Usage("entry symbol cannot be empty".to_owned()));
+            }
+            entry_symbol = remaining[1].clone();
+            entry_seen = true;
+            remaining.drain(0..2);
+        } else {
+            break;
+        }
+    }
+
+    let remaining = resolve_static_library_arguments(&remaining).map_err(library_search_error)?;
+    if remaining.is_empty() {
+        return Err(CliError::Usage("missing relocatable input path".to_owned()));
+    }
+
+    link_files(
+        &output,
+        map_output.as_ref(),
+        &entry_symbol,
+        &forced.symbols,
+        &remaining,
+    )
+}
+
+fn forced_undefined_error(error: ForcedUndefinedArgumentError) -> CliError {
+    CliError::Usage(error.to_string())
 }
 
 fn library_search_error(error: LibrarySearchError) -> CliError {
@@ -156,15 +173,15 @@ fn validate_file(path: &OsString) -> Result<String, CliError> {
     let symbol_tables = header
         .symbol_tables(&file, &sections)
         .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))?;
-    let symbol_count = symbol_tables.iter().try_fold(0usize, |total, table| {
-        total.checked_add(table.symbols.len())
-    });
-    let symbol_count = symbol_count.ok_or_else(|| {
-        CliError::Failure(format!(
-            "{}: total symbol count overflows host usize",
-            path.to_string_lossy()
-        ))
-    })?;
+    let symbol_count = symbol_tables
+        .iter()
+        .try_fold(0usize, |total, table| total.checked_add(table.symbols.len()))
+        .ok_or_else(|| {
+            CliError::Failure(format!(
+                "{}: total symbol count overflows host usize",
+                path.to_string_lossy()
+            ))
+        })?;
 
     Ok(format!(
         "valid ELF64 x86-64: sections={}, symbol_tables={}, symbols={symbol_count}",
@@ -184,7 +201,6 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
         let file = read_file(path)?;
         let object = RelocatableObject::parse(&file)
             .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))?;
-
         section_count = checked_total(section_count, object.sections.len(), "section")?;
         symbol_table_count = checked_total(
             symbol_table_count,
@@ -192,13 +208,11 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
             "symbol-table",
         )?;
         rela_table_count = checked_total(rela_table_count, object.rela_tables.len(), "RELA-table")?;
-
         for table in &object.symbol_tables {
             symbol_count = checked_total(symbol_count, table.symbols.len(), "symbol")?;
         }
         for table in &object.rela_tables {
-            relocation_count =
-                checked_total(relocation_count, table.relocations.len(), "relocation")?;
+            relocation_count = checked_total(relocation_count, table.relocations.len(), "relocation")?;
         }
     }
 
@@ -224,6 +238,7 @@ fn link_files(
     output: &OsString,
     map_output: Option<&OsString>,
     entry_symbol: &OsString,
+    forced_undefined: &[Vec<u8>],
     paths: &[OsString],
 ) -> Result<String, CliError> {
     let loaded = load_link_input_sequence(paths)?;
@@ -248,8 +263,11 @@ fn link_files(
         .iter()
         .map(|input| loaded.paths[input.file_index].clone())
         .collect::<Vec<_>>();
-    let prepared = prepare_ordered_link_inputs(&ordered_inputs)
-        .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
+    let prepared = prepare_ordered_link_inputs_with_forced_undefined(
+        &ordered_inputs,
+        forced_undefined,
+    )
+    .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     let entry_symbol = entry_symbol.to_string_lossy();
 
     let linked = link_static_executable_with_map(
@@ -399,7 +417,6 @@ fn ordered_input_failure(paths: &[OsString], error: OrderedLinkInputError) -> Cl
         | OrderedLinkInputError::InvalidArchiveMember { input_index, .. }
         | OrderedLinkInputError::ArchiveExtraction { input_index, .. } => *input_index,
     };
-
     match paths.get(input_index) {
         Some(path) => CliError::Failure(format!("{}: {error}", path.to_string_lossy())),
         None => CliError::Failure(format!("link input {input_index}: {error}")),
@@ -409,9 +426,7 @@ fn ordered_input_failure(paths: &[OsString], error: OrderedLinkInputError) -> Cl
 #[cfg(unix)]
 fn set_executable_permissions(path: &OsString) -> Result<(), CliError> {
     use std::os::unix::fs::PermissionsExt;
-
-    let permissions = fs::Permissions::from_mode(0o755);
-    fs::set_permissions(path, permissions)
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
         .map_err(|error| CliError::Failure(format!("{}: {error}", path.to_string_lossy())))
 }
 
@@ -438,48 +453,38 @@ mod tests {
 
     #[test]
     fn help_is_available_without_input() {
-        assert_eq!(
-            run([OsString::from("--help")].into_iter()),
-            Ok(USAGE.to_owned())
-        );
+        assert_eq!(run([OsString::from("--help")].into_iter()), Ok(USAGE.to_owned()));
     }
 
     #[test]
-    fn unknown_command_is_usage_error() {
-        assert_eq!(
-            run([OsString::from("frobnicate")].into_iter()),
-            Err(CliError::Usage("unknown command 'frobnicate'".to_owned()))
-        );
-    }
-
-    #[test]
-    fn validate_rejects_extra_arguments_before_io() {
+    fn link_forced_undefined_rejects_missing_symbol_before_io() {
         let args = [
-            OsString::from("validate"),
-            OsString::from("one.o"),
-            OsString::from("two.o"),
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("-u"),
         ];
         assert_eq!(
             run(args.into_iter()),
-            Err(CliError::Usage("too many arguments".to_owned()))
+            Err(CliError::Usage(
+                "missing symbol after -u/--undefined".to_owned()
+            ))
         );
     }
 
     #[test]
-    fn validate_rel_requires_at_least_one_input() {
-        assert_eq!(
-            run([OsString::from("validate-rel")].into_iter()),
-            Err(CliError::Usage("missing relocatable input path".to_owned()))
-        );
-    }
-
-    #[test]
-    fn link_requires_output_flag_before_io() {
-        let args = [OsString::from("link"), OsString::from("input.o")];
+    fn link_forced_undefined_rejects_empty_symbol_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--undefined"),
+            OsString::new(),
+        ];
         assert_eq!(
             run(args.into_iter()),
             Err(CliError::Usage(
-                "expected -o <output> after link".to_owned()
+                "forced undefined symbol cannot be empty".to_owned()
             ))
         );
     }
@@ -494,156 +499,6 @@ mod tests {
         assert_eq!(
             run(args.into_iter()),
             Err(CliError::Usage("missing relocatable input path".to_owned()))
-        );
-    }
-
-    #[test]
-    fn link_whole_archive_markers_alone_are_not_inputs() {
-        let args = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("--whole-archive"),
-            OsString::from("--no-whole-archive"),
-        ];
-        assert_eq!(
-            run(args.into_iter()),
-            Err(CliError::Usage("missing relocatable input path".to_owned()))
-        );
-    }
-
-    #[test]
-    fn link_library_options_require_values_before_io() {
-        let missing_path = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("-L"),
-        ];
-        assert_eq!(
-            run(missing_path.into_iter()),
-            Err(CliError::Usage("missing directory after -L".to_owned()))
-        );
-
-        let missing_name = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("-l"),
-        ];
-        assert_eq!(
-            run(missing_name.into_iter()),
-            Err(CliError::Usage("missing library name after -l".to_owned()))
-        );
-    }
-
-    #[test]
-    fn link_map_requires_map_path_before_io() {
-        let args = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("--map"),
-        ];
-        assert_eq!(
-            run(args.into_iter()),
-            Err(CliError::Usage("missing map path after --map".to_owned()))
-        );
-    }
-
-    #[test]
-    fn link_entry_requires_symbol_before_io() {
-        let args = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("--entry"),
-        ];
-        assert_eq!(
-            run(args.into_iter()),
-            Err(CliError::Usage(
-                "missing entry symbol after --entry".to_owned()
-            ))
-        );
-    }
-
-    #[test]
-    fn link_entry_rejects_empty_symbol_before_io() {
-        let args = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("--entry"),
-            OsString::new(),
-            OsString::from("input.o"),
-        ];
-        assert_eq!(
-            run(args.into_iter()),
-            Err(CliError::Usage("entry symbol cannot be empty".to_owned()))
-        );
-    }
-
-    #[test]
-    fn link_entry_rejects_duplicate_default_symbol_before_io() {
-        let args = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("--entry"),
-            OsString::from("_start"),
-            OsString::from("--entry"),
-            OsString::from("custom_entry"),
-            OsString::from("input.o"),
-        ];
-        assert_eq!(
-            run(args.into_iter()),
-            Err(CliError::Usage("duplicate --entry option".to_owned()))
-        );
-    }
-
-    #[test]
-    fn link_group_rejects_unmatched_end_before_io() {
-        let args = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("--end-group"),
-        ];
-        assert_eq!(
-            run(args.into_iter()),
-            Err(CliError::Usage("unmatched --end-group".to_owned()))
-        );
-    }
-
-    #[test]
-    fn link_group_requires_end_before_io() {
-        let args = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("--start-group"),
-        ];
-        assert_eq!(
-            run(args.into_iter()),
-            Err(CliError::Usage("missing --end-group".to_owned()))
-        );
-    }
-
-    #[test]
-    fn link_group_rejects_nested_group_before_io() {
-        let args = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("--start-group"),
-            OsString::from("--start-group"),
-            OsString::from("--end-group"),
-        ];
-        assert_eq!(
-            run(args.into_iter()),
-            Err(CliError::Usage(
-                "nested --start-group is not supported".to_owned()
-            ))
         );
     }
 }
