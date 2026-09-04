@@ -9,6 +9,8 @@ pub const R_X86_64_32: u32 = 10;
 pub const R_X86_64_32S: u32 = 11;
 pub const R_X86_64_16: u32 = 12;
 pub const R_X86_64_PC16: u32 = 13;
+pub const R_X86_64_8: u32 = 14;
+pub const R_X86_64_PC8: u32 = 15;
 pub const R_X86_64_PC64: u32 = 24;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +21,8 @@ pub enum RelocationValue {
     I32(i32),
     U16(u16),
     I16(i16),
+    U8(u8),
+    I8(i8),
 }
 
 impl RelocationValue {
@@ -27,6 +31,7 @@ impl RelocationValue {
             Self::U64(_) | Self::I64(_) => 8,
             Self::U32(_) | Self::I32(_) => 4,
             Self::U16(_) | Self::I16(_) => 2,
+            Self::U8(_) | Self::I8(_) => 1,
         }
     }
 }
@@ -40,6 +45,8 @@ pub enum RelocationEvaluationError {
     Signed32OutOfRange { value: i128 },
     Unsigned16OutOfRange { value: i128 },
     Signed16OutOfRange { value: i128 },
+    Unsigned8OutOfRange { value: i128 },
+    Signed8OutOfRange { value: i128 },
 }
 
 impl fmt::Display for RelocationEvaluationError {
@@ -71,6 +78,14 @@ impl fmt::Display for RelocationEvaluationError {
             Self::Signed16OutOfRange { value } => write!(
                 f,
                 "x86-64 signed 16-bit relocation result {value} is outside the signed 16-bit range"
+            ),
+            Self::Unsigned8OutOfRange { value } => write!(
+                f,
+                "x86-64 absolute relocation result {value} is outside the unsigned 8-bit range"
+            ),
+            Self::Signed8OutOfRange { value } => write!(
+                f,
+                "x86-64 signed 8-bit relocation result {value} is outside the signed 8-bit range"
             ),
         }
     }
@@ -175,6 +190,18 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Signed16OutOfRange { value })?;
             Ok(RelocationValue::I16(value))
         }
+        R_X86_64_8 => {
+            let value = symbol_value + addend;
+            let value = u8::try_from(value)
+                .map_err(|_| RelocationEvaluationError::Unsigned8OutOfRange { value })?;
+            Ok(RelocationValue::U8(value))
+        }
+        R_X86_64_PC8 => {
+            let value = symbol_value + addend - place;
+            let value = i8::try_from(value)
+                .map_err(|_| RelocationEvaluationError::Signed8OutOfRange { value })?;
+            Ok(RelocationValue::I8(value))
+        }
         R_X86_64_PC64 => {
             let value = symbol_value + addend - place;
             let value = i64::try_from(value)
@@ -224,6 +251,8 @@ pub fn write_relocation_value(
         RelocationValue::I32(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
         RelocationValue::U16(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
         RelocationValue::I16(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
+        RelocationValue::U8(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
+        RelocationValue::I8(value) => section[start..end].copy_from_slice(&value.to_le_bytes()),
     }
 
     Ok(())
