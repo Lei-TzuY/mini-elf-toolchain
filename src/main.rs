@@ -193,17 +193,24 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
     ))
 }
 
+struct LoadedLinkInputSequence {
+    files: Vec<Vec<u8>>,
+    paths: Vec<OsString>,
+    sequence: Vec<usize>,
+}
+
 fn link_files(
     output: &OsString,
     map_output: Option<&OsString>,
     entry_symbol: &OsString,
     paths: &[OsString],
 ) -> Result<String, CliError> {
-    let (files, loaded_paths, sequence) = load_link_input_sequence(paths)?;
-    let ordered_inputs = sequence
+    let loaded = load_link_input_sequence(paths)?;
+    let ordered_inputs = loaded
+        .sequence
         .iter()
         .map(|&file_index| {
-            let file = &files[file_index];
+            let file = &loaded.files[file_index];
             if file.starts_with(ARCHIVE_MAGIC) {
                 OrderedLinkInput::Archive(file)
             } else {
@@ -211,9 +218,10 @@ fn link_files(
             }
         })
         .collect::<Vec<_>>();
-    let expanded_paths = sequence
+    let expanded_paths = loaded
+        .sequence
         .iter()
-        .map(|&file_index| loaded_paths[file_index].clone())
+        .map(|&file_index| loaded.paths[file_index].clone())
         .collect::<Vec<_>>();
     let prepared = prepare_ordered_link_inputs(&ordered_inputs)
         .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
@@ -246,9 +254,7 @@ fn link_files(
     ))
 }
 
-fn load_link_input_sequence(
-    paths: &[OsString],
-) -> Result<(Vec<Vec<u8>>, Vec<OsString>, Vec<usize>), CliError> {
+fn load_link_input_sequence(paths: &[OsString]) -> Result<LoadedLinkInputSequence, CliError> {
     let mut files = Vec::new();
     let mut loaded_paths = Vec::new();
     let mut sequence = Vec::new();
@@ -316,7 +322,11 @@ fn load_link_input_sequence(
         input_index += 1;
     }
 
-    Ok((files, loaded_paths, sequence))
+    Ok(LoadedLinkInputSequence {
+        files,
+        paths: loaded_paths,
+        sequence,
+    })
 }
 
 fn ordered_input_failure(paths: &[OsString], error: OrderedLinkInputError) -> CliError {
