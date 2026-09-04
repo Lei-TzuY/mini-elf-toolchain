@@ -8,6 +8,7 @@ pub mod executable_pipeline;
 pub mod executable_writer;
 pub mod input_object;
 pub mod layout;
+pub mod library_search;
 pub mod link_context;
 pub mod link_map;
 pub mod link_relocations;
