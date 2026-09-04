@@ -118,12 +118,8 @@ fn accepts_unsigned_32_absolute_boundaries() {
 #[test]
 fn rejects_unsigned_32_absolute_underflow_and_overflow() {
     let underflow = evaluate_relocation(&relocation(R_X86_64_32, -1), 0, 0).unwrap_err();
-    let overflow = evaluate_relocation(
-        &relocation(R_X86_64_32, 1),
-        u64::from(u32::MAX),
-        0,
-    )
-    .unwrap_err();
+    let overflow =
+        evaluate_relocation(&relocation(R_X86_64_32, 1), u64::from(u32::MAX), 0).unwrap_err();
 
     assert_eq!(
         underflow,
@@ -148,12 +144,7 @@ fn evaluates_signed_32_absolute_relocation() {
 
 #[test]
 fn rejects_signed_32_absolute_overflow() {
-    let error = evaluate_relocation(
-        &relocation(R_X86_64_32S, 1),
-        i32::MAX as u64,
-        0,
-    )
-    .unwrap_err();
+    let error = evaluate_relocation(&relocation(R_X86_64_32S, 1), i32::MAX as u64, 0).unwrap_err();
 
     assert_eq!(
         error,
