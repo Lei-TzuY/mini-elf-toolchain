@@ -144,5 +144,31 @@ fn cli_whole_archive_forces_unindexed_members_like_gnu_ld() {
         assert!(status.success(), "whole-archive executable returned {status}");
     }
 
+    fs::write(dir.join("bad.txt"), b"not an ELF object").expect("write malformed member");
+    let bad_archive = Command::new("ar")
+        .current_dir(&dir)
+        .args(["rcS", "libbad.a", "bad.txt"])
+        .status()
+        .expect("run GNU ar for malformed-member archive");
+    assert!(bad_archive.success());
+    let malformed = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .current_dir(&dir)
+        .args([
+            "link",
+            "-o",
+            "bad.out",
+            "start.o",
+            "--whole-archive",
+            "libbad.a",
+            "--no-whole-archive",
+        ])
+        .output()
+        .expect("run whole-archive malformed-member link");
+    assert!(!malformed.status.success());
+    let stderr = String::from_utf8_lossy(&malformed.stderr);
+    assert!(stderr.contains("archive member"));
+    assert!(stderr.contains("ET_REL"));
+    assert!(!dir.join("bad.out").exists());
+
     fs::remove_dir_all(dir).expect("remove temporary test directory");
 }
