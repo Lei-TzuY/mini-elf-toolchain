@@ -31,8 +31,8 @@ fn gotpcrel_rejects_signed_32_bit_overflow() {
 #[test]
 fn gotpcrel_preserves_checked_target_bounds() {
     let mut section = [0_u8; 3];
-    let error = apply_relocation(&mut section, &relocation(0, -4), 0x402000, 0x400003)
-        .unwrap_err();
+    let error =
+        apply_relocation(&mut section, &relocation(0, -4), 0x402000, 0x400003).unwrap_err();
     assert!(matches!(
         error,
         RelocationApplyError::TargetOutOfBounds {
