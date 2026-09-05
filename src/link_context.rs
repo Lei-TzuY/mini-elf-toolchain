@@ -17,6 +17,7 @@ pub struct LinkContext<'a> {
     symbols_by_object: Vec<Vec<NamedSymbol<'a>>>,
     definitions: BTreeMap<Vec<u8>, SymbolDefinition>,
     global_addresses: BTreeMap<Vec<u8>, u64>,
+    got_entries: BTreeMap<Vec<u8>, u64>,
     layout: Vec<LaidOutSection>,
 }
 
@@ -95,6 +96,14 @@ pub fn build_link_context<'a>(
     objects: &[ValidatedObject<'a>],
     layout: &[LaidOutSection],
 ) -> Result<LinkContext<'a>, LinkContextBuildError> {
+    build_link_context_with_got_entries(objects, layout, BTreeMap::new())
+}
+
+pub fn build_link_context_with_got_entries<'a>(
+    objects: &[ValidatedObject<'a>],
+    layout: &[LaidOutSection],
+    got_entries: BTreeMap<Vec<u8>, u64>,
+) -> Result<LinkContext<'a>, LinkContextBuildError> {
     let mut symbols_by_object = Vec::with_capacity(objects.len());
 
     for (object_index, object) in objects.iter().enumerate() {
@@ -123,6 +132,7 @@ pub fn build_link_context<'a>(
         symbols_by_object,
         definitions,
         global_addresses,
+        got_entries,
         layout: layout.to_vec(),
     })
 }
@@ -134,6 +144,10 @@ impl LinkContext<'_> {
 
     pub fn global_addresses(&self) -> &BTreeMap<Vec<u8>, u64> {
         &self.global_addresses
+    }
+
+    pub fn got_entries(&self) -> &BTreeMap<Vec<u8>, u64> {
+        &self.got_entries
     }
 
     pub fn layout(&self) -> &[LaidOutSection] {
@@ -163,6 +177,7 @@ impl LinkContext<'_> {
             ResolvedGlobalSymbols {
                 addresses: &self.global_addresses,
                 definitions: &self.definitions,
+                got_entries: &self.got_entries,
             },
             &self.layout,
         )
