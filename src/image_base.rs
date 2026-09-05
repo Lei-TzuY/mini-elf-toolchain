@@ -1,5 +1,5 @@
 use core::fmt;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -18,6 +18,7 @@ pub enum ImageBaseArgumentError {
     DuplicateOption,
     NonUtf8Value,
     InvalidValue { value: String },
+    EmptyEntrySymbol,
     MissingScriptPath,
     EmptyScriptPath,
     DuplicateScriptOption,
@@ -38,6 +39,7 @@ impl fmt::Display for ImageBaseArgumentError {
                 f,
                 "invalid image base '{value}'; expected an unsigned 64-bit hexadecimal or decimal address"
             ),
+            Self::EmptyEntrySymbol => write!(f, "entry symbol cannot be empty"),
             Self::MissingScriptPath => write!(f, "missing linker script path after -T/--script"),
             Self::EmptyScriptPath => write!(f, "linker script path cannot be empty"),
             Self::DuplicateScriptOption => write!(f, "duplicate -T/--script option"),
@@ -98,6 +100,16 @@ pub fn extract_image_base_argument(
             image_base = parse_address(text)?;
             image_base_seen = true;
             index += 2;
+            continue;
+        }
+
+        if let Some(entry_symbol) = strip_os_prefix(&arguments[index], "--entry=") {
+            if entry_symbol.is_empty() {
+                return Err(ImageBaseArgumentError::EmptyEntrySymbol);
+            }
+            remaining.push(OsString::from("--entry"));
+            remaining.push(entry_symbol);
+            index += 1;
             continue;
         }
 
@@ -178,6 +190,22 @@ pub fn extract_image_base_argument(
         arguments: remaining,
         image_base,
     })
+}
+
+#[cfg(unix)]
+fn strip_os_prefix(value: &OsStr, prefix: &str) -> Option<OsString> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let bytes = value.as_bytes();
+    let prefix = prefix.as_bytes();
+    (bytes.len() >= prefix.len() && bytes.starts_with(prefix))
+        .then(|| OsString::from_vec(bytes[prefix.len()..].to_vec()))
+}
+
+#[cfg(windows)]
+fn strip_os_prefix(value: &OsStr, prefix: &str) -> Option<OsString> {
+    let text = value.to_str()?;
+    text.strip_prefix(prefix).map(OsString::from)
 }
 
 fn parse_linker_script_file(path: &Path) -> Result<LinkerScriptConfig, ImageBaseArgumentError> {
@@ -400,6 +428,27 @@ mod tests {
         let parsed = extract_image_base_argument(&[OsString::from("start.o")]).unwrap();
         assert_eq!(parsed.image_base, DEFAULT_IMAGE_BASE);
         assert_eq!(parsed.arguments, vec![OsString::from("start.o")]);
+    }
+
+    #[test]
+    fn normalizes_entry_equals_and_rejects_empty_before_io() {
+        let parsed = extract_image_base_argument(&[
+            OsString::from("--entry=custom_entry"),
+            OsString::from("start.o"),
+        ])
+        .unwrap();
+        assert_eq!(
+            parsed.arguments,
+            vec![
+                OsString::from("--entry"),
+                OsString::from("custom_entry"),
+                OsString::from("start.o")
+            ]
+        );
+        assert_eq!(
+            extract_image_base_argument(&[OsString::from("--entry=")]).unwrap_err(),
+            ImageBaseArgumentError::EmptyEntrySymbol
+        );
     }
 
     #[test]
