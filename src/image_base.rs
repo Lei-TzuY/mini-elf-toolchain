@@ -141,25 +141,60 @@ fn parse_linker_script(text: &str) -> Result<u64, String> {
     let mut rest = text.trim_start();
     rest = consume_keyword(rest, "SECTIONS")?;
     rest = consume_char(rest, '{')?;
-    rest = consume_char(rest, '.')?;
-    rest = consume_char(rest, '=')?;
 
     let trimmed = rest.trim_start();
+    let (image_base, remaining) = if trimmed.starts_with(".text") {
+        parse_text_output_section(trimmed)?
+    } else {
+        parse_location_counter_assignment(trimmed)?
+    };
+
+    rest = consume_char(remaining, '}')?;
+    if !rest.trim().is_empty() {
+        return Err("unexpected trailing tokens after SECTIONS block".to_owned());
+    }
+    Ok(image_base)
+}
+
+fn parse_location_counter_assignment(mut rest: &str) -> Result<(u64, &str), String> {
+    rest = consume_char(rest, '.')?;
+    rest = consume_char(rest, '=')?;
+    let (image_base, rest) = parse_address_token(rest, &[ ';', '}' ])?;
+    let rest = consume_char(rest, ';')?;
+    Ok((image_base, rest))
+}
+
+fn parse_text_output_section(mut rest: &str) -> Result<(u64, &str), String> {
+    rest = consume_literal(rest, ".text")?;
+    if rest
+        .chars()
+        .next()
+        .is_some_and(|character| !character.is_whitespace())
+    {
+        return Err("expected whitespace after '.text' output section name".to_owned());
+    }
+    let (image_base, next) = parse_address_token(rest, &[':'])?;
+    rest = consume_char(next, ':')?;
+    rest = consume_char(rest, '{')?;
+    rest = consume_char(rest, '*')?;
+    rest = consume_char(rest, '(')?;
+    rest = consume_literal(rest, ".text")?;
+    rest = consume_char(rest, ')')?;
+    rest = consume_char(rest, '}')?;
+    Ok((image_base, rest))
+}
+
+fn parse_address_token<'a>(text: &'a str, terminators: &[char]) -> Result<(u64, &'a str), String> {
+    let trimmed = text.trim_start();
     let token_len = trimmed
-        .find(|character: char| character.is_whitespace() || character == ';' || character == '}')
+        .find(|character: char| character.is_whitespace() || terminators.contains(&character))
         .unwrap_or(trimmed.len());
     if token_len == 0 {
         return Err("missing location-counter address".to_owned());
     }
     let token = &trimmed[..token_len];
     let image_base = parse_script_address(token)?;
-    rest = &trimmed[token_len..];
-    rest = consume_char(rest, ';')?;
-    rest = consume_char(rest, '}')?;
-    if !rest.trim().is_empty() {
-        return Err("unexpected trailing tokens after SECTIONS block".to_owned());
-    }
-    Ok(image_base)
+    Ok((image_base, &trimmed[token_len..]))
 }
 
 fn consume_keyword<'a>(text: &'a str, keyword: &str) -> Result<&'a str, String> {
@@ -178,6 +213,13 @@ fn consume_keyword<'a>(text: &'a str, keyword: &str) -> Result<&'a str, String> 
 }
 
 fn consume_char(text: &str, expected: char) -> Result<&str, String> {
+    let trimmed = text.trim_start();
+    trimmed
+        .strip_prefix(expected)
+        .ok_or_else(|| format!("expected '{expected}'"))
+}
+
+fn consume_literal<'a>(text: &'a str, expected: &str) -> Result<&'a str, String> {
     let trimmed = text.trim_start();
     trimmed
         .strip_prefix(expected)
@@ -256,6 +298,14 @@ mod tests {
             parse_linker_script("\nSECTIONS\n{\n. = 8388608 ;\n}\n").unwrap(),
             0x800000
         );
+        assert_eq!(
+            parse_linker_script("SECTIONS { .text 0x900000 : { *(.text) } }").unwrap(),
+            0x900000
+        );
+        assert_eq!(
+            parse_linker_script("\nSECTIONS {\n.text 9437184 :\n{ *( .text ) }\n}\n").unwrap(),
+            0x900000
+        );
     }
 
     #[test]
@@ -266,6 +316,11 @@ mod tests {
             "SECTIONS { . = 0x10000000000000000; }",
             "SECTIONS { . = 0x800000; .text : {} }",
             "ENTRY(_start) SECTIONS { . = 0x800000; }",
+            "SECTIONS { .text 0x10000000000000000 : { *(.text) } }",
+            "SECTIONS { .data 0x900000 : { *(.data) } }",
+            "SECTIONS { .text 0x900000 : { *(.rodata) } }",
+            "SECTIONS { .text 0x900000 : { *(.text) *(.rodata) } }",
+            "SECTIONS { .text 0x900000 : { *(.text) } .data : { *(.data) } }",
         ] {
             assert!(parse_linker_script(script).is_err(), "accepted {script:?}");
         }
