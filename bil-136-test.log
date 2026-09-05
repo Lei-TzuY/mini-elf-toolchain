@@ -1,0 +1,21 @@
+[1m[92m   Compiling[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 1.47s
+[1m[92m     Running[0m tests/cli_library_path_gnu.rs (target/debug/deps/cli_library_path_gnu-97f375b73ff09082)
+
+running 1 test
+
+thread 'library_path_equals_matches_gnu_archive_search_and_executes' (2421) panicked at tests/cli_library_path_gnu.rs:112:9:
+assertion failed: String::from_utf8_lossy(&symbols.stdout).contains(" helper")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test library_path_equals_matches_gnu_archive_search_and_executes ... FAILED
+
+failures:
+
+failures:
+    library_path_equals_matches_gnu_archive_search_and_executes
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s
+
+[1m[91merror[0m: test failed, to rerun pass `--test cli_library_path_gnu`
+
+exit_status=101
