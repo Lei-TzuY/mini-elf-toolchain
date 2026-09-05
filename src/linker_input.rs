@@ -6,9 +6,7 @@ use crate::link_symbols::ValidatedObject;
 use crate::load_segments::SHF_ALLOC;
 use crate::permission_layout::PermissionLayoutInput;
 use crate::relocations::Elf64RelaTable;
-use crate::x86_64_relocations::{
-    R_X86_64_GOTPCREL, R_X86_64_GOTPCRELX, R_X86_64_REX_GOTPCRELX,
-};
+use crate::x86_64_relocations::{R_X86_64_GOTPCREL, R_X86_64_GOTPCRELX, R_X86_64_REX_GOTPCRELX};
 
 #[derive(Debug)]
 pub struct LinkerInputObject<'a> {
