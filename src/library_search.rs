@@ -17,7 +17,7 @@ pub enum LibrarySearchError {
         path: PathBuf,
     },
     LibraryNotFound {
-        name: OsString,
+        filename: OsString,
         search_paths: Vec<PathBuf>,
     },
 }
@@ -43,11 +43,14 @@ impl fmt::Display for LibrarySearchError {
                     path.display()
                 )
             }
-            Self::LibraryNotFound { name, search_paths } => {
+            Self::LibraryNotFound {
+                filename,
+                search_paths,
+            } => {
                 write!(
                     f,
-                    "cannot find static library 'lib{}.a'",
-                    name.to_string_lossy()
+                    "cannot find static library '{}'",
+                    filename.to_string_lossy()
                 )?;
                 if search_paths.is_empty() {
                     write!(f, "; no -L search directories were provided")
@@ -139,9 +142,18 @@ fn resolve_library(name: &OsStr, search_paths: &[PathBuf]) -> Result<OsString, L
     if name.is_empty() {
         return Err(LibrarySearchError::EmptyLibraryName);
     }
-    let mut filename = OsString::from("lib");
-    filename.push(name);
-    filename.push(".a");
+
+    let filename = if let Some(exact) = strip_os_prefix_including_empty(name, ":") {
+        if exact.is_empty() {
+            return Err(LibrarySearchError::EmptyLibraryName);
+        }
+        exact
+    } else {
+        let mut filename = OsString::from("lib");
+        filename.push(name);
+        filename.push(".a");
+        filename
+    };
 
     for directory in search_paths {
         let candidate = directory.join(Path::new(&filename));
@@ -151,7 +163,7 @@ fn resolve_library(name: &OsStr, search_paths: &[PathBuf]) -> Result<OsString, L
     }
 
     Err(LibrarySearchError::LibraryNotFound {
-        name: name.to_os_string(),
+        filename,
         search_paths: search_paths.to_vec(),
     })
 }
@@ -171,6 +183,25 @@ fn strip_os_prefix(value: &OsStr, prefix: &str) -> Option<OsString> {
     let text = value.to_str()?;
     text.strip_prefix(prefix)
         .filter(|suffix| !suffix.is_empty())
+        .map(OsString::from)
+}
+
+#[cfg(unix)]
+fn strip_os_prefix_including_empty(value: &OsStr, prefix: &str) -> Option<OsString> {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let bytes = value.as_bytes();
+    let prefix = prefix.as_bytes();
+    bytes
+        .starts_with(prefix)
+        .then(|| OsString::from_vec(bytes[prefix.len()..].to_vec()))
+}
+
+#[cfg(windows)]
+fn strip_os_prefix_including_empty(value: &OsStr, prefix: &str) -> Option<OsString> {
+    value
+        .to_str()?
+        .strip_prefix(prefix)
         .map(OsString::from)
 }
 
@@ -227,6 +258,31 @@ mod tests {
     }
 
     #[test]
+    fn resolves_exact_filename_library_forms_in_place() {
+        let directory = temp_dir();
+        fs::write(directory.join("custom-name.a"), b"archive").expect("write exact archive");
+        let arguments = vec![
+            OsString::from("root.o"),
+            OsString::from("-L"),
+            directory.as_os_str().to_os_string(),
+            OsString::from("-l:custom-name.a"),
+            OsString::from("-l"),
+            OsString::from(":custom-name.a"),
+        ];
+
+        let resolved = resolve_static_library_arguments(&arguments).expect("resolve exact libraries");
+        assert_eq!(
+            resolved,
+            vec![
+                OsString::from("root.o"),
+                directory.join("custom-name.a").into_os_string(),
+                directory.join("custom-name.a").into_os_string(),
+            ]
+        );
+        fs::remove_dir_all(directory).expect("remove temp directory");
+    }
+
+    #[test]
     fn rejects_missing_library_with_search_context() {
         let directory = temp_dir();
         let error = resolve_static_library_arguments(&[
@@ -241,6 +297,22 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_exact_library_with_exact_filename() {
+        let directory = temp_dir();
+        let error = resolve_static_library_arguments(&[
+            OsString::from("-L"),
+            directory.as_os_str().to_os_string(),
+            OsString::from("-l:missing-custom.a"),
+        ])
+        .expect_err("missing exact library must fail");
+        assert!(matches!(error, LibrarySearchError::LibraryNotFound { .. }));
+        let message = error.to_string();
+        assert!(message.contains("missing-custom.a"));
+        assert!(!message.contains("libmissing-custom.a.a"));
+        fs::remove_dir_all(directory).expect("remove temp directory");
+    }
+
+    #[test]
     fn rejects_missing_or_empty_option_values() {
         assert!(matches!(
             resolve_static_library_arguments(&[OsString::from("-L")]),
@@ -249,6 +321,14 @@ mod tests {
         assert!(matches!(
             resolve_static_library_arguments(&[OsString::from("-l")]),
             Err(LibrarySearchError::MissingLibraryName)
+        ));
+        assert!(matches!(
+            resolve_static_library_arguments(&[OsString::from("-l:")]),
+            Err(LibrarySearchError::EmptyLibraryName)
+        ));
+        assert!(matches!(
+            resolve_static_library_arguments(&[OsString::from("-l"), OsString::from(":")]),
+            Err(LibrarySearchError::EmptyLibraryName)
         ));
     }
 }
