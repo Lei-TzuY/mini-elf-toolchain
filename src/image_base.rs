@@ -83,6 +83,23 @@ pub fn extract_image_base_argument(
     let mut index = 0usize;
 
     while index < arguments.len() {
+        if let Some(value) = strip_os_prefix(&arguments[index], "--image-base=") {
+            if image_base_seen {
+                return Err(ImageBaseArgumentError::DuplicateOption);
+            }
+            if script_seen {
+                return Err(ImageBaseArgumentError::ConflictingSources);
+            }
+            if value.is_empty() {
+                return Err(ImageBaseArgumentError::EmptyValue);
+            }
+            let text = value.to_str().ok_or(ImageBaseArgumentError::NonUtf8Value)?;
+            image_base = parse_address(text)?;
+            image_base_seen = true;
+            index += 1;
+            continue;
+        }
+
         if arguments[index] == "--image-base" {
             if image_base_seen {
                 return Err(ImageBaseArgumentError::DuplicateOption);
@@ -473,6 +490,14 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(decimal.image_base, 0x800000);
+
+        let equals = extract_image_base_argument(&[
+            OsString::from("--image-base=0x900000"),
+            OsString::from("start.o"),
+        ])
+        .unwrap();
+        assert_eq!(equals.image_base, 0x900000);
+        assert_eq!(equals.arguments, vec![OsString::from("start.o")]);
     }
 
     #[test]
@@ -592,6 +617,10 @@ mod tests {
                 OsString::from("start.o"),
             ])
             .unwrap_err(),
+            ImageBaseArgumentError::EmptyValue
+        );
+        assert_eq!(
+            extract_image_base_argument(&[OsString::from("--image-base=")]).unwrap_err(),
             ImageBaseArgumentError::EmptyValue
         );
         assert_eq!(
