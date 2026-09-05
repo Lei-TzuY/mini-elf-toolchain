@@ -291,12 +291,11 @@ impl<'a> Archive<'a> {
                         offset: raw.header_offset,
                     });
                 }
-                data_offset = raw
-                    .data_offset
-                    .checked_add(name_len)
-                    .ok_or(ArchiveError::MemberRangeOverflow {
+                data_offset = raw.data_offset.checked_add(name_len).ok_or(
+                    ArchiveError::MemberRangeOverflow {
                         offset: raw.header_offset,
-                    })?;
+                    },
+                )?;
                 data = &raw.data[name_len..];
                 (ArchiveMemberKind::Ordinary, name_bytes[..name_end].to_vec())
             } else if token.starts_with(b"/") {
