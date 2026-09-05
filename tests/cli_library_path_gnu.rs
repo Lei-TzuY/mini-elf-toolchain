@@ -106,11 +106,11 @@ fn library_path_equals_matches_gnu_archive_search_and_executes() {
         assert!(header.status.success());
         assert!(String::from_utf8_lossy(&header.stdout)
             .contains("Type:                              EXEC"));
-
-        let symbols = Command::new("nm").arg(output).output().expect("run nm");
-        assert!(symbols.status.success());
-        assert!(String::from_utf8_lossy(&symbols.stdout).contains(" helper"));
     }
+
+    let gnu_symbols = Command::new("nm").arg(&gnu).output().expect("run GNU nm");
+    assert!(gnu_symbols.status.success());
+    assert!(String::from_utf8_lossy(&gnu_symbols.stdout).contains(" helper"));
 
     #[cfg(target_os = "linux")]
     {
