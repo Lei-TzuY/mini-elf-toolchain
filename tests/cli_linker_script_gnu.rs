@@ -43,8 +43,7 @@ fn bounded_linker_script_image_base_matches_gnu_ld_and_executes() {
         ".globl _start\n.type _start,@function\n_start:\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n",
     )
     .expect("write assembly source");
-    fs::write(dir.join("base.ld"), "SECTIONS { . = 0x800000; }\n")
-        .expect("write linker script");
+    fs::write(dir.join("base.ld"), "SECTIONS { . = 0x800000; }\n").expect("write linker script");
     fs::write(
         dir.join("overflow.ld"),
         "SECTIONS { . = 0x10000000000000000; }\n",
@@ -151,7 +150,10 @@ fn bounded_linker_script_image_base_matches_gnu_ld_and_executes() {
         let status = Command::new(dir.join("script.out"))
             .status()
             .expect("execute script-linked static ELF");
-        assert!(status.success(), "script-linked executable returned {status}");
+        assert!(
+            status.success(),
+            "script-linked executable returned {status}"
+        );
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
