@@ -104,12 +104,10 @@ fn library_path_equals_matches_gnu_archive_search_and_executes() {
             .output()
             .expect("run readelf");
         assert!(header.status.success());
-        assert!(String::from_utf8_lossy(&header.stdout).contains("Type:                              EXEC"));
+        assert!(String::from_utf8_lossy(&header.stdout)
+            .contains("Type:                              EXEC"));
 
-        let symbols = Command::new("nm")
-            .arg(output)
-            .output()
-            .expect("run nm");
+        let symbols = Command::new("nm").arg(output).output().expect("run nm");
         assert!(symbols.status.success());
         assert!(String::from_utf8_lossy(&symbols.stdout).contains(" helper"));
     }
