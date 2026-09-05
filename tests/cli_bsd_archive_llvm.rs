@@ -62,12 +62,7 @@ fn cli_whole_archive_links_llvm_bsd_extended_member_name() {
 
     let archive = Command::new("llvm-ar")
         .current_dir(&dir)
-        .args([
-            "--format=bsd",
-            "rcS",
-            "libbsd.a",
-            &format!("{long_stem}.o"),
-        ])
+        .args(["--format=bsd", "rcS", "libbsd.a", &format!("{long_stem}.o")])
         .output()
         .expect("run llvm-ar");
     assert!(
