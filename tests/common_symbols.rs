@@ -72,11 +72,9 @@ fn merges_common_size_and_alignment_then_allocates_by_name() {
 
 #[test]
 fn real_strong_definition_overrides_common_without_allocating_storage() {
-    let resolved = resolve_symbols_with_common([
-        common(b"target", 0, 1, 64, 64),
-        defined(b"target", 1, 2),
-    ])
-    .unwrap();
+    let resolved =
+        resolve_symbols_with_common([common(b"target", 0, 1, 64, 64), defined(b"target", 1, 2)])
+            .unwrap();
 
     assert!(resolved.common_section.is_none());
     let target = &resolved.definitions[b"target".as_slice()];
@@ -102,11 +100,9 @@ fn rejects_invalid_common_alignment() {
 
 #[test]
 fn rejects_common_storage_size_overflow() {
-    let error = resolve_symbols_with_common([
-        common(b"a", 0, 1, u64::MAX, 1),
-        common(b"b", 1, 2, 1, 1),
-    ])
-    .unwrap_err();
+    let error =
+        resolve_symbols_with_common([common(b"a", 0, 1, u64::MAX, 1), common(b"b", 1, 2, 1, 1)])
+            .unwrap_err();
 
     assert_eq!(
         error,
