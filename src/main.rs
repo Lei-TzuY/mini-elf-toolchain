@@ -3,9 +3,7 @@ use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::forced_undefined::{
     extract_forced_undefined_arguments, ForcedUndefinedArgumentError,
 };
-use mini_elf_toolchain::image_base::{
-    extract_image_base_argument, ImageBaseArgumentError, DEFAULT_IMAGE_BASE,
-};
+use mini_elf_toolchain::image_base::{extract_image_base_argument, ImageBaseArgumentError};
 use mini_elf_toolchain::input_object::RelocatableObject;
 use mini_elf_toolchain::library_search::{resolve_static_library_arguments, LibrarySearchError};
 use mini_elf_toolchain::ordered_inputs::{
@@ -461,7 +459,7 @@ fn checked_total(total: usize, addend: usize, kind: &str) -> Result<usize, CliEr
 
 #[cfg(test)]
 mod tests {
-    use super::{run, CliError, DEFAULT_IMAGE_BASE, USAGE};
+    use super::{run, CliError, USAGE};
     use std::ffi::OsString;
 
     #[test]
@@ -746,10 +744,5 @@ mod tests {
                 "nested --start-group is not supported".to_owned()
             ))
         );
-    }
-
-    #[test]
-    fn default_image_base_constant_matches_cli_default() {
-        assert_eq!(DEFAULT_IMAGE_BASE, 0x400000);
     }
 }
