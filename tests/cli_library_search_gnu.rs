@@ -258,7 +258,10 @@ fn cli_exact_library_search_matches_gnu_ld() {
         let status = Command::new(dir.join("exact.out"))
             .status()
             .expect("execute exact-search static ELF");
-        assert!(status.success(), "exact-search executable returned {status}");
+        assert!(
+            status.success(),
+            "exact-search executable returned {status}"
+        );
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
