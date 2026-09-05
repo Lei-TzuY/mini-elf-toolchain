@@ -143,7 +143,7 @@ fn resolve_library(name: &OsStr, search_paths: &[PathBuf]) -> Result<OsString, L
         return Err(LibrarySearchError::EmptyLibraryName);
     }
 
-    let filename = if let Some(exact) = strip_os_prefix_including_empty(name, ":") {
+    let filename = if let Some(exact) = strip_os_prefix(name, ":") {
         if exact.is_empty() {
             return Err(LibrarySearchError::EmptyLibraryName);
         }
@@ -174,35 +174,15 @@ fn strip_os_prefix(value: &OsStr, prefix: &str) -> Option<OsString> {
 
     let bytes = value.as_bytes();
     let prefix = prefix.as_bytes();
-    (bytes.len() > prefix.len() && bytes.starts_with(prefix))
-        .then(|| OsString::from_vec(bytes[prefix.len()..].to_vec()))
-}
-
-#[cfg(windows)]
-fn strip_os_prefix(value: &OsStr, prefix: &str) -> Option<OsString> {
-    let text = value.to_str()?;
-    text.strip_prefix(prefix)
-        .filter(|suffix| !suffix.is_empty())
-        .map(OsString::from)
-}
-
-#[cfg(unix)]
-fn strip_os_prefix_including_empty(value: &OsStr, prefix: &str) -> Option<OsString> {
-    use std::os::unix::ffi::{OsStrExt, OsStringExt};
-
-    let bytes = value.as_bytes();
-    let prefix = prefix.as_bytes();
     bytes
         .starts_with(prefix)
         .then(|| OsString::from_vec(bytes[prefix.len()..].to_vec()))
 }
 
 #[cfg(windows)]
-fn strip_os_prefix_including_empty(value: &OsStr, prefix: &str) -> Option<OsString> {
-    value
-        .to_str()?
-        .strip_prefix(prefix)
-        .map(OsString::from)
+fn strip_os_prefix(value: &OsStr, prefix: &str) -> Option<OsString> {
+    let text = value.to_str()?;
+    text.strip_prefix(prefix).map(OsString::from)
 }
 
 #[cfg(test)]
@@ -270,7 +250,8 @@ mod tests {
             OsString::from(":custom-name.a"),
         ];
 
-        let resolved = resolve_static_library_arguments(&arguments).expect("resolve exact libraries");
+        let resolved =
+            resolve_static_library_arguments(&arguments).expect("resolve exact libraries");
         assert_eq!(
             resolved,
             vec![
