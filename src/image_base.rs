@@ -239,9 +239,7 @@ fn parse_text_output_section(mut rest: &str) -> Result<(u64, &str), String> {
     Ok((image_base, rest))
 }
 
-fn parse_text_output_section_at_current_address(
-    mut rest: &str,
-) -> Result<&str, String> {
+fn parse_text_output_section_at_current_address(mut rest: &str) -> Result<&str, String> {
     rest = consume_literal(rest, ".text")?;
     rest = consume_char(rest, ':')?;
     parse_text_output_section_body(rest)
