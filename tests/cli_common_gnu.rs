@@ -54,11 +54,7 @@ fn cli_allocates_and_relocates_gnu_common_symbols() {
         "start",
         ".globl _start\n.type _start,@function\n.comm shared,8,8\n_start:\n  lea shared(%rip),%rax\n  movq $0x1234,(%rax)\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n",
     );
-    assemble(
-        &dir,
-        "common",
-        ".comm shared,32,32\n.comm extra,4,4\n",
-    );
+    assemble(&dir, "common", ".comm shared,32,32\n.comm extra,4,4\n");
 
     let input_symbols = Command::new("readelf")
         .current_dir(&dir)
@@ -73,13 +69,7 @@ fn cli_allocates_and_relocates_gnu_common_symbols() {
     let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .current_dir(&dir)
         .args([
-            "link",
-            "-o",
-            "ours.out",
-            "--map",
-            "ours.map",
-            "start.o",
-            "common.o",
+            "link", "-o", "ours.out", "--map", "ours.map", "start.o", "common.o",
         ])
         .output()
         .expect("run common-symbol linker");
@@ -127,15 +117,22 @@ fn cli_allocates_and_relocates_gnu_common_symbols() {
         .expect("run GNU nm");
     assert!(nm.status.success());
     let nm = String::from_utf8_lossy(&nm.stdout);
-    assert!(nm.lines().any(|line| line.contains("0000000000000020 B shared")));
-    assert!(nm.lines().any(|line| line.contains("0000000000000004 B extra")));
+    assert!(nm
+        .lines()
+        .any(|line| line.contains("0000000000000020 B shared")));
+    assert!(nm
+        .lines()
+        .any(|line| line.contains("0000000000000004 B extra")));
 
     #[cfg(target_os = "linux")]
     {
         let status = Command::new(dir.join("ours.out"))
             .status()
             .expect("execute common-symbol static ELF");
-        assert!(status.success(), "common-symbol executable returned {status}");
+        assert!(
+            status.success(),
+            "common-symbol executable returned {status}"
+        );
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
