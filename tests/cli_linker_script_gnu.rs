@@ -70,6 +70,17 @@ fn bounded_linker_script_image_base_matches_gnu_ld_and_executes() {
         String::from_utf8_lossy(&linked.stderr)
     );
 
+    let attached = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .current_dir(&dir)
+        .args(["link", "-o", "attached.out", "-Tbase.ld", "start.o"])
+        .output()
+        .expect("run linker with attached -T script");
+    assert!(
+        attached.status.success(),
+        "attached -T script link failed: {}",
+        String::from_utf8_lossy(&attached.stderr)
+    );
+
     let gnu = Command::new("ld")
         .current_dir(&dir)
         .args(["-o", "gnu.out", "-T", "base.ld", "start.o"])
@@ -81,7 +92,18 @@ fn bounded_linker_script_image_base_matches_gnu_ld_and_executes() {
         String::from_utf8_lossy(&gnu.stderr)
     );
 
-    for output in ["script.out", "gnu.out"] {
+    let gnu_attached = Command::new("ld")
+        .current_dir(&dir)
+        .args(["-o", "gnu-attached.out", "-Tbase.ld", "start.o"])
+        .output()
+        .expect("run GNU ld with attached -T script");
+    assert!(
+        gnu_attached.status.success(),
+        "GNU ld attached -T script link failed: {}",
+        String::from_utf8_lossy(&gnu_attached.stderr)
+    );
+
+    for output in ["script.out", "attached.out", "gnu.out", "gnu-attached.out"] {
         let header = Command::new("readelf")
             .current_dir(&dir)
             .args(["-hW", output])
@@ -92,6 +114,21 @@ fn bounded_linker_script_image_base_matches_gnu_ld_and_executes() {
         assert!(stdout.contains("Type:                              EXEC"));
         assert!(stdout.contains("Entry point address:               0x800000"));
     }
+
+    let missing_attached = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .current_dir(&dir)
+        .args([
+            "link",
+            "-o",
+            "missing-attached.out",
+            "-Tmissing.ld",
+            "start.o",
+        ])
+        .output()
+        .expect("run linker with missing attached -T script");
+    assert!(!missing_attached.status.success());
+    assert!(String::from_utf8_lossy(&missing_attached.stderr).contains("cannot read linker script"));
+    assert!(!dir.join("missing-attached.out").exists());
 
     let overflow = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .current_dir(&dir)
@@ -117,8 +154,7 @@ fn bounded_linker_script_image_base_matches_gnu_ld_and_executes() {
             "conflict.out",
             "--image-base",
             "0x800000",
-            "-T",
-            "base.ld",
+            "-Tbase.ld",
             "start.o",
         ])
         .output()
@@ -133,8 +169,7 @@ fn bounded_linker_script_image_base_matches_gnu_ld_and_executes() {
             "link",
             "-o",
             "duplicate.out",
-            "-T",
-            "base.ld",
+            "-Tbase.ld",
             "--script",
             "second.ld",
             "start.o",
@@ -147,13 +182,15 @@ fn bounded_linker_script_image_base_matches_gnu_ld_and_executes() {
 
     #[cfg(target_os = "linux")]
     {
-        let status = Command::new(dir.join("script.out"))
-            .status()
-            .expect("execute script-linked static ELF");
-        assert!(
-            status.success(),
-            "script-linked executable returned {status}"
-        );
+        for output in ["script.out", "attached.out"] {
+            let status = Command::new(dir.join(output))
+                .status()
+                .expect("execute script-linked static ELF");
+            assert!(
+                status.success(),
+                "script-linked executable {output} returned {status}"
+            );
+        }
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");

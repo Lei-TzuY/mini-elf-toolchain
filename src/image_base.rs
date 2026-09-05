@@ -101,6 +101,25 @@ pub fn extract_image_base_argument(
             continue;
         }
 
+        if let Some(path) = arguments[index]
+            .to_str()
+            .and_then(|argument| argument.strip_prefix("-T"))
+            .filter(|path| !path.is_empty())
+        {
+            if script_seen {
+                return Err(ImageBaseArgumentError::DuplicateScriptOption);
+            }
+            if image_base_seen {
+                return Err(ImageBaseArgumentError::ConflictingSources);
+            }
+            let config = parse_linker_script_file(Path::new(path))?;
+            image_base = config.image_base;
+            script_entry_symbol = config.entry_symbol;
+            script_seen = true;
+            index += 1;
+            continue;
+        }
+
         if arguments[index] == "-T" || arguments[index] == "--script" {
             if script_seen {
                 return Err(ImageBaseArgumentError::DuplicateScriptOption);
@@ -504,6 +523,15 @@ mod tests {
                 OsString::from("0x800000"),
                 OsString::from("-T"),
                 OsString::from("missing.ld"),
+            ])
+            .unwrap_err(),
+            ImageBaseArgumentError::ConflictingSources
+        );
+        assert_eq!(
+            extract_image_base_argument(&[
+                OsString::from("--image-base"),
+                OsString::from("0x800000"),
+                OsString::from("-Tmissing.ld"),
             ])
             .unwrap_err(),
             ImageBaseArgumentError::ConflictingSources
