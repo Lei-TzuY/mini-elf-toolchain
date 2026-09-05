@@ -105,7 +105,10 @@ fn linker_script_entry_matches_gnu_and_cli_entry_overrides_it() {
         let status = Command::new(dir.join("custom.out"))
             .status()
             .expect("execute ENTRY-selected output");
-        assert!(status.success(), "ENTRY-selected executable returned {status}");
+        assert!(
+            status.success(),
+            "ENTRY-selected executable returned {status}"
+        );
     }
 
     let override_linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
@@ -130,7 +133,15 @@ fn linker_script_entry_matches_gnu_and_cli_entry_overrides_it() {
 
     let gnu_override = Command::new("ld")
         .current_dir(&dir)
-        .args(["-o", "gnu-override.out", "-e", "_start", "-T", "entry.ld", "start.o"])
+        .args([
+            "-o",
+            "gnu-override.out",
+            "-e",
+            "_start",
+            "-T",
+            "entry.ld",
+            "start.o",
+        ])
         .output()
         .expect("run GNU ld with CLI entry override");
     assert!(gnu_override.status.success());
@@ -158,7 +169,9 @@ fn linker_script_entry_matches_gnu_and_cli_entry_overrides_it() {
         .output()
         .expect("run linker with malformed ENTRY script");
     assert!(!invalid.status.success());
-    assert!(String::from_utf8_lossy(&invalid.stderr).contains("ENTRY expects exactly one symbol token"));
+    assert!(
+        String::from_utf8_lossy(&invalid.stderr).contains("ENTRY expects exactly one symbol token")
+    );
     assert!(!dir.join("bad.out").exists());
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
