@@ -1,0 +1,53 @@
+name: Canonicalize image-base slice
+on:
+  push:
+    branches: [bil-149-image-base-equals]
+permissions:
+  contents: write
+jobs:
+  canonicalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: bil-149-image-base-equals
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Restore live-base source and apply bounded edit
+        run: |
+          git fetch origin main
+          git checkout origin/main -- src/image_base.rs
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('src/image_base.rs')
+          s = p.read_text()
+          needle = '''    while index < arguments.len() {\n        if arguments[index] == "--image-base" {\n'''
+          insert = '''    while index < arguments.len() {\n        if let Some(value) = strip_os_prefix(&arguments[index], "--image-base=") {\n            if image_base_seen {\n                return Err(ImageBaseArgumentError::DuplicateOption);\n            }\n            if script_seen {\n                return Err(ImageBaseArgumentError::ConflictingSources);\n            }\n            if value.is_empty() {\n                return Err(ImageBaseArgumentError::EmptyValue);\n            }\n            let text = value.to_str().ok_or(ImageBaseArgumentError::NonUtf8Value)?;\n            image_base = parse_address(text)?;\n            image_base_seen = true;\n            index += 1;\n            continue;\n        }\n\n        if arguments[index] == "--image-base" {\n'''
+          if needle not in s:
+              raise SystemExit('image-base insertion anchor missing')
+          s = s.replace(needle, insert, 1)
+          test_anchor = '''        assert_eq!(decimal.image_base, 0x800000);\n    }\n\n    #[test]\n    fn parses_bounded_linker_script_grammar() {\n'''
+          test_insert = '''        assert_eq!(decimal.image_base, 0x800000);\n\n        let equals = extract_image_base_argument(&[\n            OsString::from("--image-base=0x900000"),\n            OsString::from("start.o"),\n        ])\n        .unwrap();\n        assert_eq!(equals.image_base, 0x900000);\n        assert_eq!(equals.arguments, vec![OsString::from("start.o")]);\n    }\n\n    #[test]\n    fn parses_bounded_linker_script_grammar() {\n'''
+          if test_anchor not in s:
+              raise SystemExit('success regression anchor missing')
+          s = s.replace(test_anchor, test_insert, 1)
+          reject_anchor = '''        assert_eq!(\n            extract_image_base_argument(&[\n                OsString::from("--image-base"),\n                OsString::new(),\n                OsString::from("start.o"),\n            ])\n            .unwrap_err(),\n            ImageBaseArgumentError::EmptyValue\n        );\n'''
+          reject_insert = reject_anchor + '''        assert_eq!(\n            extract_image_base_argument(&[OsString::from("--image-base=")]).unwrap_err(),\n            ImageBaseArgumentError::EmptyValue\n        );\n'''
+          if reject_anchor not in s:
+              raise SystemExit('empty regression anchor missing')
+          s = s.replace(reject_anchor, reject_insert, 1)
+          p.write_text(s)
+          PY
+          cargo fmt --all
+      - name: Commit canonical source if needed
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/image_base.rs tests/cli_image_base_equals_gnu.rs
+          git commit -m "Canonicalize image-base equals slice"
+          git push origin HEAD:bil-149-image-base-equals
