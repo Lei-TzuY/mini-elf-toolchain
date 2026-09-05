@@ -64,6 +64,12 @@ impl fmt::Display for ImageBaseArgumentError {
 
 impl std::error::Error for ImageBaseArgumentError {}
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LinkerScriptConfig {
+    image_base: u64,
+    entry_symbol: Option<String>,
+}
+
 pub fn extract_image_base_argument(
     arguments: &[OsString],
 ) -> Result<ImageBaseArguments, ImageBaseArgumentError> {
@@ -71,6 +77,7 @@ pub fn extract_image_base_argument(
     let mut image_base = DEFAULT_IMAGE_BASE;
     let mut image_base_seen = false;
     let mut script_seen = false;
+    let mut script_entry_symbol = None;
     let mut index = 0usize;
 
     while index < arguments.len() {
@@ -107,7 +114,9 @@ pub fn extract_image_base_argument(
             if value.is_empty() {
                 return Err(ImageBaseArgumentError::EmptyScriptPath);
             }
-            image_base = parse_linker_script_file(Path::new(value))?;
+            let config = parse_linker_script_file(Path::new(value))?;
+            image_base = config.image_base;
+            script_entry_symbol = config.entry_symbol;
             script_seen = true;
             index += 2;
             continue;
@@ -117,13 +126,21 @@ pub fn extract_image_base_argument(
         index += 1;
     }
 
+    if let Some(entry_symbol) = script_entry_symbol {
+        let cli_entry_present = remaining.iter().any(|argument| argument == "--entry");
+        if !cli_entry_present {
+            remaining.insert(0, OsString::from(entry_symbol));
+            remaining.insert(0, OsString::from("--entry"));
+        }
+    }
+
     Ok(ImageBaseArguments {
         arguments: remaining,
         image_base,
     })
 }
 
-fn parse_linker_script_file(path: &Path) -> Result<u64, ImageBaseArgumentError> {
+fn parse_linker_script_file(path: &Path) -> Result<LinkerScriptConfig, ImageBaseArgumentError> {
     let bytes = fs::read(path).map_err(|error| ImageBaseArgumentError::ReadScript {
         path: path.to_path_buf(),
         message: error.to_string(),
@@ -131,14 +148,27 @@ fn parse_linker_script_file(path: &Path) -> Result<u64, ImageBaseArgumentError> 
     let text = std::str::from_utf8(&bytes).map_err(|_| ImageBaseArgumentError::NonUtf8Script {
         path: path.to_path_buf(),
     })?;
-    parse_linker_script(text).map_err(|message| ImageBaseArgumentError::InvalidScript {
+    parse_linker_script_config(text).map_err(|message| ImageBaseArgumentError::InvalidScript {
         path: path.to_path_buf(),
         message,
     })
 }
 
+#[cfg(test)]
 fn parse_linker_script(text: &str) -> Result<u64, String> {
+    parse_linker_script_config(text).map(|config| config.image_base)
+}
+
+fn parse_linker_script_config(text: &str) -> Result<LinkerScriptConfig, String> {
     let mut rest = text.trim_start();
+    let entry_symbol = if rest.starts_with("ENTRY") {
+        let (entry_symbol, remaining) = parse_entry_directive(rest)?;
+        rest = remaining;
+        Some(entry_symbol)
+    } else {
+        None
+    };
+
     rest = consume_keyword(rest, "SECTIONS")?;
     rest = consume_char(rest, '{')?;
 
@@ -153,7 +183,30 @@ fn parse_linker_script(text: &str) -> Result<u64, String> {
     if !rest.trim().is_empty() {
         return Err("unexpected trailing tokens after SECTIONS block".to_owned());
     }
-    Ok(image_base)
+    Ok(LinkerScriptConfig {
+        image_base,
+        entry_symbol,
+    })
+}
+
+fn parse_entry_directive(mut rest: &str) -> Result<(String, &str), String> {
+    rest = consume_keyword(rest, "ENTRY")?;
+    rest = consume_char(rest, '(')?;
+    let trimmed = rest.trim_start();
+    let close = trimmed
+        .find(')')
+        .ok_or_else(|| "expected ')' after ENTRY symbol".to_owned())?;
+    let symbol = trimmed[..close].trim();
+    if symbol.is_empty() {
+        return Err("ENTRY symbol cannot be empty".to_owned());
+    }
+    if symbol
+        .chars()
+        .any(|character| character.is_whitespace() || "(){};".contains(character))
+    {
+        return Err("ENTRY expects exactly one symbol token".to_owned());
+    }
+    Ok((symbol.to_owned(), &trimmed[close + 1..]))
 }
 
 fn parse_location_counter_assignment(mut rest: &str) -> Result<(u64, &str), String> {
@@ -205,7 +258,7 @@ fn consume_keyword<'a>(text: &'a str, keyword: &str) -> Result<&'a str, String> 
     if rest
         .chars()
         .next()
-        .is_some_and(|character| !character.is_whitespace() && character != '{')
+        .is_some_and(|character| !character.is_whitespace() && character != '{' && character != '(')
     {
         return Err(format!("expected '{keyword}'"));
     }
@@ -252,8 +305,8 @@ fn parse_address(text: &str) -> Result<u64, ImageBaseArgumentError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        extract_image_base_argument, parse_linker_script, ImageBaseArgumentError,
-        DEFAULT_IMAGE_BASE,
+        extract_image_base_argument, parse_linker_script, parse_linker_script_config,
+        ImageBaseArgumentError, DEFAULT_IMAGE_BASE,
     };
     use std::ffi::OsString;
 
@@ -309,20 +362,36 @@ mod tests {
     }
 
     #[test]
+    fn parses_bounded_entry_directive_before_sections() {
+        let parsed = parse_linker_script_config(
+            "ENTRY(custom_entry)\nSECTIONS { .text 0x900000 : { *(.text) } }",
+        )
+        .unwrap();
+        assert_eq!(parsed.image_base, 0x900000);
+        assert_eq!(parsed.entry_symbol.as_deref(), Some("custom_entry"));
+    }
+
+    #[test]
     fn rejects_malformed_and_overflowing_linker_scripts() {
         for script in [
             "SECTIONS { }",
             "SECTIONS { . = ; }",
             "SECTIONS { . = 0x10000000000000000; }",
             "SECTIONS { . = 0x800000; .text : {} }",
-            "ENTRY(_start) SECTIONS { . = 0x800000; }",
+            "ENTRY() SECTIONS { . = 0x800000; }",
+            "ENTRY(two words) SECTIONS { . = 0x800000; }",
+            "ENTRY(one) ENTRY(two) SECTIONS { . = 0x800000; }",
+            "ENTRY(unclosed SECTIONS { . = 0x800000; }",
             "SECTIONS { .text 0x10000000000000000 : { *(.text) } }",
             "SECTIONS { .data 0x900000 : { *(.data) } }",
             "SECTIONS { .text 0x900000 : { *(.rodata) } }",
             "SECTIONS { .text 0x900000 : { *(.text) *(.rodata) } }",
             "SECTIONS { .text 0x900000 : { *(.text) } .data : { *(.data) } }",
         ] {
-            assert!(parse_linker_script(script).is_err(), "accepted {script:?}");
+            assert!(
+                parse_linker_script_config(script).is_err(),
+                "accepted {script:?}"
+            );
         }
     }
 
