@@ -2,7 +2,9 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use crate::layout::LaidOutSection;
-use crate::link_relocations::{apply_rela_table_with_resolved_symbols, LinkRelocationError};
+use crate::link_relocations::{
+    apply_rela_table_with_resolved_symbols_and_definitions, LinkRelocationError,
+};
 use crate::link_symbols::ValidatedObject;
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
 use crate::relocations::Elf64RelaTable;
@@ -151,13 +153,14 @@ impl LinkContext<'_> {
             },
         )?;
 
-        apply_rela_table_with_resolved_symbols(
+        apply_rela_table_with_resolved_symbols_and_definitions(
             section,
             section_address,
             table,
             object_index,
             symbols,
             &self.global_addresses,
+            &self.definitions,
             &self.layout,
         )
         .map_err(LinkContextRelocationError::Apply)
