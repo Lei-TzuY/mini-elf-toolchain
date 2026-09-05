@@ -7,8 +7,8 @@ use crate::relocations::Elf64RelaTable;
 use crate::resolve::{NamedSymbol, SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
 use crate::x86_64_relocations::{
-    is_static_got_entry_type, is_static_got_offset_type, is_static_gotpcrel_type,
-    R_X86_64_SIZE32, R_X86_64_SIZE64,
+    is_static_got_entry_type, is_static_got_offset_type, is_static_gotpcrel_type, R_X86_64_SIZE32,
+    R_X86_64_SIZE64,
 };
 
 const R_X86_64_NONE: u32 = 0;
