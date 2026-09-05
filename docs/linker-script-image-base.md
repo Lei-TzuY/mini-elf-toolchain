@@ -1,6 +1,6 @@
 # Bounded linker-script image base
 
-The static linker accepts a deliberately small linker-script slice through `-T <script>`, attached GNU-style `-T<script>`, or `--script <script>`.
+The static linker accepts a deliberately small linker-script slice through `-T <script>`, attached GNU-style `-T<script>`, `--script <script>`, or GNU-style `--script=<script>`.
 
 Two executable forms are supported. The original location-counter form is:
 
@@ -18,6 +18,6 @@ For the current static layout model, the explicit `.text` address selects the im
 
 Whitespace and newlines may vary, and addresses may be hexadecimal or decimal. Addresses are parsed as checked unsigned 64-bit values. The `.text` form deliberately accepts only the bounded `.text` selector forms documented by the linker-script subset; other output sections, additional output sections, and arbitrary wildcard patterns are rejected rather than silently ignored.
 
-`--image-base` and `-T`/`--script` are mutually exclusive, and multiple script options are rejected regardless of whether `-T` is split or attached. Malformed scripts, unsupported trailing commands, non-UTF-8 content, unreadable files, and overflowing addresses fail before output emission.
+`--image-base` and `-T`/`--script` are mutually exclusive, and multiple script options are rejected regardless of whether `-T` is split or attached or whether `--script` uses a separate argument or the equals form. An empty `--script=` path is rejected explicitly. Malformed scripts, unsupported trailing commands, non-UTF-8 content, unreadable files, and overflowing addresses fail before output emission.
 
 This milestone intentionally does **not** implement general named output-section placement, multiple output sections, symbol assignments, `MEMORY`, `PHDRS`, `INCLUDE`, general wildcard matching, expressions, or dynamic-linking script semantics. Those require separate executable vertical slices rather than accepting syntax the linker cannot yet honor.
