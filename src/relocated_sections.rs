@@ -245,9 +245,7 @@ fn matching_layout(
     layout
         .iter()
         .copied()
-        .find(|entry| {
-            entry.object_index == object_index && entry.section_index == section_index
-        })
+        .find(|entry| entry.object_index == object_index && entry.section_index == section_index)
 }
 
 fn reject_memory_only_relocation(
