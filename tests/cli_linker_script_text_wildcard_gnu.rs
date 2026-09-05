@@ -32,7 +32,7 @@ fn temp_dir() -> PathBuf {
 }
 
 #[test]
-fn text_wildcard_family_matches_gnu_ld_and_executes() {
+fn compact_text_wildcard_matches_gnu_ld_and_executes() {
     if !have_gnu_toolchain() {
         return;
     }
@@ -40,14 +40,14 @@ fn text_wildcard_family_matches_gnu_ld_and_executes() {
     let dir = temp_dir();
     fs::write(
         dir.join("start.s"),
-        ".section .text.startup,\"ax\",@progbits\n.globl _start\n.type _start,@function\n_start:\n  call helper\n  mov $60,%rax\n  syscall\n\n.section .text.helper,\"ax\",@progbits\n.type helper,@function\nhelper:\n  xor %rdi,%rdi\n  ret\n",
+        ".section .text,\"ax\",@progbits\n.globl _start\n.type _start,@function\n_start:\n  call helper\n  mov $60,%rax\n  syscall\n\n.section .text.helper,\"ax\",@progbits\n.type helper,@function\nhelper:\n  xor %rdi,%rdi\n  ret\n",
     )
     .expect("write assembly source");
     fs::write(
         dir.join("wildcard.ld"),
-        "SECTIONS { . = 0x900000; .text : { *(.text .text.*) } }\n",
+        "SECTIONS { . = 0x900000; .text : { *(.text*) } }\n",
     )
-    .expect("write wildcard linker script");
+    .expect("write compact wildcard linker script");
     fs::write(
         dir.join("unsupported.ld"),
         "SECTIONS { . = 0x900000; .text : { *(.text.*) } }\n",
@@ -65,10 +65,10 @@ fn text_wildcard_family_matches_gnu_ld_and_executes() {
         .current_dir(&dir)
         .args(["link", "-o", "wildcard.out", "-T", "wildcard.ld", "start.o"])
         .output()
-        .expect("run linker with wildcard-family script");
+        .expect("run linker with compact wildcard script");
     assert!(
         linked.status.success(),
-        "wildcard-family linker-script link failed: {}",
+        "compact wildcard linker-script link failed: {}",
         String::from_utf8_lossy(&linked.stderr)
     );
 
@@ -76,10 +76,10 @@ fn text_wildcard_family_matches_gnu_ld_and_executes() {
         .current_dir(&dir)
         .args(["-o", "gnu.out", "-T", "wildcard.ld", "start.o"])
         .output()
-        .expect("run GNU ld with wildcard-family script");
+        .expect("run GNU ld with compact wildcard script");
     assert!(
         gnu.status.success(),
-        "GNU ld wildcard-family script link failed: {}",
+        "GNU ld compact wildcard script link failed: {}",
         String::from_utf8_lossy(&gnu.stderr)
     );
 
@@ -114,10 +114,10 @@ fn text_wildcard_family_matches_gnu_ld_and_executes() {
     {
         let status = Command::new(dir.join("wildcard.out"))
             .status()
-            .expect("execute wildcard-family static ELF");
+            .expect("execute compact-wildcard static ELF");
         assert!(
             status.success(),
-            "wildcard-family executable returned {status}"
+            "compact-wildcard executable returned {status}"
         );
     }
 
