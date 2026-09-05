@@ -154,6 +154,7 @@ fn parse_linker_script_file(path: &Path) -> Result<LinkerScriptConfig, ImageBase
     })
 }
 
+#[cfg(test)]
 fn parse_linker_script(text: &str) -> Result<u64, String> {
     parse_linker_script_config(text).map(|config| config.image_base)
 }
@@ -254,11 +255,9 @@ fn consume_keyword<'a>(text: &'a str, keyword: &str) -> Result<&'a str, String> 
     let Some(rest) = trimmed.strip_prefix(keyword) else {
         return Err(format!("expected '{keyword}'"));
     };
-    if rest
-        .chars()
-        .next()
-        .is_some_and(|character| !character.is_whitespace() && character != '{' && character != '(')
-    {
+    if rest.chars().next().is_some_and(|character| {
+        !character.is_whitespace() && character != '{' && character != '('
+    }) {
         return Err(format!("expected '{keyword}'"));
     }
     Ok(rest)
