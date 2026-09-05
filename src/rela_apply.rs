@@ -94,12 +94,11 @@ where
                 offset: relocation.offset,
             },
         )?;
-        let value = relocation_value(relocation).ok_or(
-            RelaTableApplyError::MissingSymbolValue {
+        let value =
+            relocation_value(relocation).ok_or(RelaTableApplyError::MissingSymbolValue {
                 relocation_index,
                 symbol_index: relocation.symbol_index,
-            },
-        )?;
+            })?;
         apply_relocation(&mut patched, relocation, value, place).map_err(|error| {
             RelaTableApplyError::Relocation {
                 relocation_index,
