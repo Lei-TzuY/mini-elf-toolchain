@@ -46,7 +46,7 @@ fn assemble(dir: &Path, stem: &str, source: &str) {
 }
 
 #[test]
-fn cli_builds_static_got_for_gnu_gotpcrel_relocation() {
+fn cli_builds_static_got_for_gnu_gotpcrel_family() {
     if !have_gnu_toolchain() {
         return;
     }
@@ -55,7 +55,7 @@ fn cli_builds_static_got_for_gnu_gotpcrel_relocation() {
     assemble(
         &dir,
         "start",
-        ".globl _start\n.type _start,@function\n.extern helper\n_start:\n  .byte 0x48,0x8b,0x05\n.Lgotdisp:\n  .long 0\n  .reloc .Lgotdisp, R_X86_64_GOTPCREL, helper-4\n  lea helper(%rip),%rcx\n  cmp %rcx,%rax\n  jne .Lbad\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n.Lbad:\n  mov $60,%rax\n  mov $1,%rdi\n  syscall\n",
+        ".globl _start\n.type _start,@function\n.extern helper\n_start:\n  .byte 0x48,0x8b,0x05\n.Lgotdisp:\n  .long 0\n  .reloc .Lgotdisp, R_X86_64_REX_GOTPCRELX, helper-4\n  lea helper(%rip),%rcx\n  cmp %rcx,%rax\n  jne .Lbad\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n.Lbad:\n  mov $60,%rax\n  mov $1,%rdi\n  syscall\n.Lplain_gotpcrelx:\n  .long 0\n  .reloc .Lplain_gotpcrelx, R_X86_64_GOTPCRELX, helper-4\n",
     );
     assemble(
         &dir,
@@ -69,10 +69,14 @@ fn cli_builds_static_got_for_gnu_gotpcrel_relocation() {
         .output()
         .expect("run GNU readelf on input");
     assert!(relocations.status.success());
+    let relocation_stdout = String::from_utf8_lossy(&relocations.stdout);
     assert!(
-        String::from_utf8_lossy(&relocations.stdout).contains("R_X86_64_GOTPCREL"),
-        "assembler did not produce GOTPCREL: {}",
-        String::from_utf8_lossy(&relocations.stdout)
+        relocation_stdout.contains("R_X86_64_REX_GOTPCRELX"),
+        "assembler did not produce REX_GOTPCRELX: {relocation_stdout}"
+    );
+    assert!(
+        relocation_stdout.contains("R_X86_64_GOTPCRELX"),
+        "assembler did not produce GOTPCRELX: {relocation_stdout}"
     );
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
@@ -112,8 +116,11 @@ fn cli_builds_static_got_for_gnu_gotpcrel_relocation() {
     {
         let status = Command::new(dir.join("ours.out"))
             .status()
-            .expect("execute linked GOTPCREL ELF");
-        assert!(status.success(), "GOTPCREL executable returned {status}");
+            .expect("execute linked GOTPCREL-family ELF");
+        assert!(
+            status.success(),
+            "GOTPCREL-family executable returned {status}"
+        );
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");

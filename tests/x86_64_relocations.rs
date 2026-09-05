@@ -193,12 +193,13 @@ fn rejects_signed_32_absolute_overflow() {
 
 #[test]
 fn rejects_unsupported_relocation_type() {
-    let error = evaluate_relocation(&relocation(42, 0), 0, 0).unwrap_err();
+    const UNSUPPORTED: u32 = u32::MAX;
+    let error = evaluate_relocation(&relocation(UNSUPPORTED, 0), 0, 0).unwrap_err();
 
     assert_eq!(
         error,
         RelocationEvaluationError::UnsupportedRelocationType {
-            relocation_type: 42
+            relocation_type: UNSUPPORTED
         }
     );
 }

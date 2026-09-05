@@ -6,6 +6,7 @@ use crate::link_symbols::ValidatedObject;
 use crate::load_segments::SHF_ALLOC;
 use crate::permission_layout::PermissionLayoutInput;
 use crate::relocations::Elf64RelaTable;
+use crate::x86_64_relocations::{R_X86_64_GOTPCREL, R_X86_64_GOTPCRELX, R_X86_64_REX_GOTPCRELX};
 
 #[derive(Debug)]
 pub struct LinkerInputObject<'a> {
@@ -82,10 +83,12 @@ impl std::error::Error for LinkerInputError {}
 
 impl<'a> LinkerInputObject<'a> {
     pub fn parse(object_index: usize, file: &'a [u8]) -> Result<Self, RelocatableObjectError> {
+        let mut object = RelocatableObject::parse(file)?;
+        canonicalize_relaxable_static_got_relocations(&mut object);
         Ok(Self {
             object_index,
             file,
-            object: RelocatableObject::parse(file)?,
+            object,
         })
     }
 
@@ -162,6 +165,19 @@ impl<'a> LinkerInputObject<'a> {
         }
 
         Ok(&self.file[section.offset as usize..end as usize])
+    }
+}
+
+fn canonicalize_relaxable_static_got_relocations(object: &mut RelocatableObject) {
+    for table in &mut object.rela_tables {
+        for relocation in &mut table.relocations {
+            if matches!(
+                relocation.relocation_type,
+                R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
+            ) {
+                relocation.relocation_type = R_X86_64_GOTPCREL;
+            }
+        }
     }
 }
 
