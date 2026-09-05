@@ -159,7 +159,7 @@ fn parse_linker_script(text: &str) -> Result<u64, String> {
 fn parse_location_counter_assignment(mut rest: &str) -> Result<(u64, &str), String> {
     rest = consume_char(rest, '.')?;
     rest = consume_char(rest, '=')?;
-    let (image_base, rest) = parse_address_token(rest, &[ ';', '}' ])?;
+    let (image_base, rest) = parse_address_token(rest, &[';', '}'])?;
     let rest = consume_char(rest, ';')?;
     Ok((image_base, rest))
 }
@@ -184,7 +184,10 @@ fn parse_text_output_section(mut rest: &str) -> Result<(u64, &str), String> {
     Ok((image_base, rest))
 }
 
-fn parse_address_token<'a>(text: &'a str, terminators: &[char]) -> Result<(u64, &'a str), String> {
+fn parse_address_token<'a>(
+    text: &'a str,
+    terminators: &[char],
+) -> Result<(u64, &'a str), String> {
     let trimmed = text.trim_start();
     let token_len = trimmed
         .find(|character: char| character.is_whitespace() || terminators.contains(&character))
