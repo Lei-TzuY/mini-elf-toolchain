@@ -12,6 +12,8 @@ pub const R_X86_64_PC16: u32 = 13;
 pub const R_X86_64_8: u32 = 14;
 pub const R_X86_64_PC8: u32 = 15;
 pub const R_X86_64_PC64: u32 = 24;
+pub const R_X86_64_SIZE32: u32 = 32;
+pub const R_X86_64_SIZE64: u32 = 33;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelocationValue {
@@ -154,7 +156,7 @@ pub fn evaluate_relocation(
     let place = i128::from(place);
 
     match relocation.relocation_type {
-        R_X86_64_64 => {
+        R_X86_64_64 | R_X86_64_SIZE64 => {
             let value = symbol_value + addend;
             let value = u64::try_from(value)
                 .map_err(|_| RelocationEvaluationError::Unsigned64OutOfRange { value })?;
@@ -166,7 +168,7 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Signed32OutOfRange { value })?;
             Ok(RelocationValue::I32(value))
         }
-        R_X86_64_32 => {
+        R_X86_64_32 | R_X86_64_SIZE32 => {
             let value = symbol_value + addend;
             let value = u32::try_from(value)
                 .map_err(|_| RelocationEvaluationError::Unsigned32OutOfRange { value })?;
