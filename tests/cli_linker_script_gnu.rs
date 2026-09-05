@@ -180,7 +180,8 @@ fn bounded_linker_script_image_base_matches_gnu_ld_and_executes() {
         .output()
         .expect("run linker with empty --script= path");
     assert!(!empty_equals.status.success());
-    assert!(String::from_utf8_lossy(&empty_equals.stderr).contains("linker script path cannot be empty"));
+    assert!(String::from_utf8_lossy(&empty_equals.stderr)
+        .contains("linker script path cannot be empty"));
     assert!(!dir.join("empty-equals.out").exists());
 
     let overflow = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
