@@ -25,9 +25,9 @@ pub enum LibrarySearchError {
 impl fmt::Display for LibrarySearchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingSearchPath => write!(f, "missing directory after -L/--library-path"),
+            Self::MissingSearchPath => write!(f, "missing directory after -L"),
             Self::EmptySearchPath => write!(f, "library search directory cannot be empty"),
-            Self::MissingLibraryName => write!(f, "missing library name after -l/--library"),
+            Self::MissingLibraryName => write!(f, "missing library name after -l"),
             Self::EmptyLibraryName => write!(f, "library name cannot be empty"),
             Self::SearchPathMetadata { path, source } => {
                 write!(
