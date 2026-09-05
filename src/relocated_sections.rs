@@ -1,17 +1,28 @@
 use core::fmt;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::elf64::SHT_NOBITS;
 use crate::executable_pipeline::ExecutableSectionInput;
 use crate::layout::LaidOutSection;
-use crate::link_context::{build_link_context, LinkContextBuildError, LinkContextRelocationError};
+use crate::link_context::{
+    build_link_context_with_got_entries, LinkContextBuildError, LinkContextRelocationError,
+};
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
 use crate::linker_input::{LinkerInputError, LinkerInputObject};
 use crate::load_segments::{SHF_ALLOC, SHF_WRITE};
+use crate::object_symbols::named_symbols_from_table;
 use crate::permission_layout::{
     layout_sections_by_permissions, PermissionLayoutError, PermissionLayoutInput,
 };
 use crate::relocations::Elf64RelaTable;
-use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX};
+use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, STB_GLOBAL, STB_WEAK};
+use crate::x86_64_relocations::R_X86_64_GOTPCREL;
+
+const SHT_PROGBITS: u32 = 1;
+const GOT_OBJECT_INDEX: usize = usize::MAX - 1;
+const GOT_SECTION_INDEX: u16 = 1;
+const GOT_ENTRY_SIZE: u64 = 8;
+const GOT_ALIGNMENT: u64 = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelocatedSectionImage {
@@ -53,6 +64,26 @@ pub enum RelocatedSectionError {
         object_index: usize,
         section_index: u16,
     },
+    MissingGotSymbolMetadata {
+        object_index: usize,
+        rela_section_index: u16,
+        symbol_index: u32,
+    },
+    UnsupportedGotBinding {
+        object_index: usize,
+        rela_section_index: u16,
+        symbol_index: u32,
+        binding: u8,
+    },
+    GotSizeOverflow {
+        symbol_count: usize,
+    },
+    GotAddressOverflow {
+        entry_index: usize,
+    },
+    MissingGotSymbolAddress {
+        name: Vec<u8>,
+    },
     RelocationAgainstMemoryOnlySection {
         object_index: usize,
         section_index: u16,
@@ -77,7 +108,7 @@ impl fmt::Display for RelocatedSectionError {
                 "link input at position {position} has object index {object_index}; expected canonical index {position}"
             ),
             Self::Input(source) => write!(f, "cannot extract linker input sections: {source}"),
-            Self::Symbols(source) => write!(f, "cannot resolve common symbols: {source}"),
+            Self::Symbols(source) => write!(f, "cannot resolve linker symbols: {source}"),
             Self::Layout(source) => write!(f, "cannot lay out linker input sections: {source}"),
             Self::LinkContext(source) => write!(f, "cannot build link context: {source}"),
             Self::MissingLayout {
@@ -86,6 +117,36 @@ impl fmt::Display for RelocatedSectionError {
             } => write!(
                 f,
                 "object {object_index} section {section_index} has no matching output layout"
+            ),
+            Self::MissingGotSymbolMetadata {
+                object_index,
+                rela_section_index,
+                symbol_index,
+            } => write!(
+                f,
+                "GOTPCREL relocation in object {object_index} RELA section {rela_section_index} refers to missing symbol {symbol_index} metadata"
+            ),
+            Self::UnsupportedGotBinding {
+                object_index,
+                rela_section_index,
+                symbol_index,
+                binding,
+            } => write!(
+                f,
+                "GOTPCREL relocation in object {object_index} RELA section {rela_section_index} symbol {symbol_index} uses unsupported binding {binding}; bounded static GOT entries require global/weak symbols"
+            ),
+            Self::GotSizeOverflow { symbol_count } => write!(
+                f,
+                "synthetic GOT size overflows u64 for {symbol_count} unique symbols"
+            ),
+            Self::GotAddressOverflow { entry_index } => write!(
+                f,
+                "synthetic GOT entry address overflows u64 at entry {entry_index}"
+            ),
+            Self::MissingGotSymbolAddress { name } => write!(
+                f,
+                "synthetic GOT symbol {:?} has no resolved final address",
+                String::from_utf8_lossy(name)
             ),
             Self::RelocationAgainstMemoryOnlySection {
                 object_index,
@@ -118,6 +179,11 @@ impl std::error::Error for RelocatedSectionError {
             Self::Relocation { source, .. } => Some(source),
             Self::NonCanonicalObjectIndex { .. }
             | Self::MissingLayout { .. }
+            | Self::MissingGotSymbolMetadata { .. }
+            | Self::UnsupportedGotBinding { .. }
+            | Self::GotSizeOverflow { .. }
+            | Self::GotAddressOverflow { .. }
+            | Self::MissingGotSymbolAddress { .. }
             | Self::RelocationAgainstMemoryOnlySection { .. } => None,
         }
     }
@@ -153,6 +219,8 @@ pub fn relocate_allocatable_sections(
     let common_section = resolve_validated_objects_with_common(&validated_objects)
         .map_err(RelocatedSectionError::Symbols)?
         .common_section;
+    let got_symbols = collect_gotpcrel_symbols(inputs)?;
+    let got_size = got_size(got_symbols.len())?;
 
     let mut layout_inputs = sections
         .iter()
@@ -167,11 +235,21 @@ pub fn relocate_allocatable_sections(
             flags: SHF_ALLOC | SHF_WRITE,
         });
     }
+    if got_size != 0 {
+        layout_inputs.push(PermissionLayoutInput {
+            object_index: GOT_OBJECT_INDEX,
+            section_index: GOT_SECTION_INDEX,
+            size: got_size,
+            alignment: GOT_ALIGNMENT,
+            flags: SHF_ALLOC | SHF_WRITE,
+        });
+    }
 
     let layout = layout_sections_by_permissions(start_address, page_alignment, layout_inputs)
         .map_err(RelocatedSectionError::Layout)?;
+    let got_entries = got_entry_addresses(&layout, &got_symbols)?;
 
-    let context = build_link_context(&validated_objects, &layout)
+    let context = build_link_context_with_got_entries(&validated_objects, &layout, got_entries)
         .map_err(RelocatedSectionError::LinkContext)?;
 
     let mut relocated = sections
@@ -234,7 +312,148 @@ pub fn relocate_allocatable_sections(
         });
     }
 
+    if got_size != 0 {
+        let got_layout = matching_layout(&layout, GOT_OBJECT_INDEX, GOT_SECTION_INDEX).ok_or(
+            RelocatedSectionError::MissingLayout {
+                object_index: GOT_OBJECT_INDEX,
+                section_index: GOT_SECTION_INDEX,
+            },
+        )?;
+        let mut bytes = Vec::with_capacity(got_size as usize);
+        for name in &got_symbols {
+            let address = context.global_addresses().get(name).copied().ok_or_else(|| {
+                RelocatedSectionError::MissingGotSymbolAddress { name: name.clone() }
+            })?;
+            bytes.extend_from_slice(&address.to_le_bytes());
+        }
+        relocated.push(RelocatedSectionImage {
+            object_index: GOT_OBJECT_INDEX,
+            section_index: GOT_SECTION_INDEX,
+            section_type: SHT_PROGBITS,
+            flags: SHF_ALLOC | SHF_WRITE,
+            address: got_layout.address,
+            size: got_size,
+            alignment: GOT_ALIGNMENT,
+            bytes,
+        });
+    }
+
     Ok(relocated)
+}
+
+fn collect_gotpcrel_symbols(
+    inputs: &[LinkerInputObject<'_>],
+) -> Result<Vec<Vec<u8>>, RelocatedSectionError> {
+    let mut names = BTreeSet::new();
+
+    for input in inputs {
+        for table in &input.object.rela_tables {
+            if !table
+                .relocations
+                .iter()
+                .any(|relocation| relocation.relocation_type == R_X86_64_GOTPCREL)
+            {
+                continue;
+            }
+
+            let symbol_table = input
+                .object
+                .symbol_tables
+                .iter()
+                .find(|candidate| candidate.section_index == table.symbol_table_index)
+                .ok_or(RelocatedSectionError::MissingGotSymbolMetadata {
+                    object_index: input.object_index,
+                    rela_section_index: table.section_index,
+                    symbol_index: table
+                        .relocations
+                        .iter()
+                        .find(|relocation| relocation.relocation_type == R_X86_64_GOTPCREL)
+                        .map(|relocation| relocation.symbol_index)
+                        .unwrap_or(0),
+                })?;
+            let symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                symbol_table,
+                input.object_index,
+            )
+            .map_err(|source| {
+                RelocatedSectionError::Symbols(LinkSymbolError::ObjectSymbols {
+                    object_index: input.object_index,
+                    source,
+                })
+            })?;
+
+            for relocation in table
+                .relocations
+                .iter()
+                .filter(|relocation| relocation.relocation_type == R_X86_64_GOTPCREL)
+            {
+                let symbol = symbols
+                    .iter()
+                    .find(|symbol| symbol.symbol_index == relocation.symbol_index as usize)
+                    .ok_or(RelocatedSectionError::MissingGotSymbolMetadata {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                    })?;
+                let binding = symbol.symbol.info >> 4;
+                if binding != STB_GLOBAL && binding != STB_WEAK {
+                    return Err(RelocatedSectionError::UnsupportedGotBinding {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                        binding,
+                    });
+                }
+                if symbol.name.is_empty() {
+                    return Err(RelocatedSectionError::MissingGotSymbolMetadata {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                    });
+                }
+                names.insert(symbol.name.to_vec());
+            }
+        }
+    }
+
+    Ok(names.into_iter().collect())
+}
+
+fn got_size(symbol_count: usize) -> Result<u64, RelocatedSectionError> {
+    u64::try_from(symbol_count)
+        .ok()
+        .and_then(|count| count.checked_mul(GOT_ENTRY_SIZE))
+        .ok_or(RelocatedSectionError::GotSizeOverflow { symbol_count })
+}
+
+fn got_entry_addresses(
+    layout: &[LaidOutSection],
+    symbols: &[Vec<u8>],
+) -> Result<BTreeMap<Vec<u8>, u64>, RelocatedSectionError> {
+    if symbols.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let got_layout = matching_layout(layout, GOT_OBJECT_INDEX, GOT_SECTION_INDEX).ok_or(
+        RelocatedSectionError::MissingLayout {
+            object_index: GOT_OBJECT_INDEX,
+            section_index: GOT_SECTION_INDEX,
+        },
+    )?;
+    let mut entries = BTreeMap::new();
+    for (entry_index, name) in symbols.iter().enumerate() {
+        let offset = u64::try_from(entry_index)
+            .ok()
+            .and_then(|index| index.checked_mul(GOT_ENTRY_SIZE))
+            .ok_or(RelocatedSectionError::GotAddressOverflow { entry_index })?;
+        let address = got_layout
+            .address
+            .checked_add(offset)
+            .ok_or(RelocatedSectionError::GotAddressOverflow { entry_index })?;
+        entries.insert(name.clone(), address);
+    }
+    Ok(entries)
 }
 
 fn matching_layout(
@@ -273,8 +492,6 @@ mod tests {
     use crate::load_segments::{SHF_EXECINSTR, SHF_WRITE};
     use crate::relocations::{Elf64Rela, Elf64RelaTable};
     use crate::x86_64_relocations::R_X86_64_64;
-
-    const SHT_PROGBITS: u32 = 1;
 
     fn header(section_count: u16) -> Elf64Header {
         Elf64Header {
