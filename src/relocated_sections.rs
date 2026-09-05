@@ -16,7 +16,7 @@ use crate::permission_layout::{
 };
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, STB_GLOBAL, STB_WEAK};
-use crate::x86_64_relocations::R_X86_64_GOTPCREL;
+use crate::x86_64_relocations::is_static_got_entry_type;
 
 const SHT_PROGBITS: u32 = 1;
 const GOT_OBJECT_INDEX: usize = usize::MAX - 1;
@@ -124,7 +124,7 @@ impl fmt::Display for RelocatedSectionError {
                 symbol_index,
             } => write!(
                 f,
-                "GOTPCREL relocation in object {object_index} RELA section {rela_section_index} refers to missing symbol {symbol_index} metadata"
+                "static GOT relocation in object {object_index} RELA section {rela_section_index} refers to missing symbol {symbol_index} metadata"
             ),
             Self::UnsupportedGotBinding {
                 object_index,
@@ -133,7 +133,7 @@ impl fmt::Display for RelocatedSectionError {
                 binding,
             } => write!(
                 f,
-                "GOTPCREL relocation in object {object_index} RELA section {rela_section_index} symbol {symbol_index} uses unsupported binding {binding}; bounded static GOT entries require global/weak symbols"
+                "static GOT relocation in object {object_index} RELA section {rela_section_index} symbol {symbol_index} uses unsupported binding {binding}; bounded static GOT entries require global/weak symbols"
             ),
             Self::GotSizeOverflow { symbol_count } => write!(
                 f,
@@ -219,7 +219,7 @@ pub fn relocate_allocatable_sections(
     let common_section = resolve_validated_objects_with_common(&validated_objects)
         .map_err(RelocatedSectionError::Symbols)?
         .common_section;
-    let got_symbols = collect_gotpcrel_symbols(inputs)?;
+    let got_symbols = collect_static_got_symbols(inputs)?;
     let got_size = got_size(got_symbols.len())?;
 
     let mut layout_inputs = sections
@@ -345,7 +345,7 @@ pub fn relocate_allocatable_sections(
     Ok(relocated)
 }
 
-fn collect_gotpcrel_symbols(
+fn collect_static_got_symbols(
     inputs: &[LinkerInputObject<'_>],
 ) -> Result<Vec<Vec<u8>>, RelocatedSectionError> {
     let mut names = BTreeSet::new();
@@ -355,7 +355,7 @@ fn collect_gotpcrel_symbols(
             if !table
                 .relocations
                 .iter()
-                .any(|relocation| relocation.relocation_type == R_X86_64_GOTPCREL)
+                .any(|relocation| is_static_got_entry_type(relocation.relocation_type))
             {
                 continue;
             }
@@ -371,7 +371,7 @@ fn collect_gotpcrel_symbols(
                     symbol_index: table
                         .relocations
                         .iter()
-                        .find(|relocation| relocation.relocation_type == R_X86_64_GOTPCREL)
+                        .find(|relocation| is_static_got_entry_type(relocation.relocation_type))
                         .map(|relocation| relocation.symbol_index)
                         .unwrap_or(0),
                 })?;
@@ -391,7 +391,7 @@ fn collect_gotpcrel_symbols(
             for relocation in table
                 .relocations
                 .iter()
-                .filter(|relocation| relocation.relocation_type == R_X86_64_GOTPCREL)
+                .filter(|relocation| is_static_got_entry_type(relocation.relocation_type))
             {
                 let symbol = symbols
                     .iter()

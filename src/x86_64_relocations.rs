@@ -4,6 +4,7 @@ use crate::relocations::Elf64Rela;
 
 pub const R_X86_64_64: u32 = 1;
 pub const R_X86_64_PC32: u32 = 2;
+pub const R_X86_64_GOT32: u32 = 3;
 pub const R_X86_64_PLT32: u32 = 4;
 pub const R_X86_64_GOTPCREL: u32 = 9;
 pub const R_X86_64_32: u32 = 10;
@@ -23,6 +24,10 @@ pub fn is_static_gotpcrel_type(relocation_type: u32) -> bool {
         relocation_type,
         R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
     )
+}
+
+pub fn is_static_got_entry_type(relocation_type: u32) -> bool {
+    relocation_type == R_X86_64_GOT32 || is_static_gotpcrel_type(relocation_type)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,7 +187,7 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Signed32OutOfRange { value })?;
             Ok(RelocationValue::I32(value))
         }
-        R_X86_64_32 | R_X86_64_SIZE32 => {
+        R_X86_64_GOT32 | R_X86_64_32 | R_X86_64_SIZE32 => {
             let value = symbol_value + addend;
             let value = u32::try_from(value)
                 .map_err(|_| RelocationEvaluationError::Unsigned32OutOfRange { value })?;
