@@ -124,9 +124,51 @@ fn cli_forced_undefined_extracts_otherwise_unused_archive_member_like_gnu_ld() {
     assert!(long_form.status.success());
     assert!(String::from_utf8_lossy(&long_form.stdout).contains("objects=2"));
 
+    let equals_form = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .current_dir(&dir)
+        .args([
+            "link",
+            "-o",
+            "equals.out",
+            "--undefined=helper",
+            "start.o",
+            "libextra.a",
+        ])
+        .output()
+        .expect("run equals forced link");
+    assert!(
+        equals_form.status.success(),
+        "equals forced link failed: {}",
+        String::from_utf8_lossy(&equals_form.stderr)
+    );
+    assert!(String::from_utf8_lossy(&equals_form.stdout).contains("objects=2"));
+
+    let empty_equals = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .current_dir(&dir)
+        .args([
+            "link",
+            "-o",
+            "empty-equals.out",
+            "--undefined=",
+            "start.o",
+            "libextra.a",
+        ])
+        .output()
+        .expect("run empty equals forced link");
+    assert!(!empty_equals.status.success());
+    assert!(String::from_utf8_lossy(&empty_equals.stderr)
+        .contains("forced undefined symbol cannot be empty"));
+    assert!(!dir.join("empty-equals.out").exists());
+
     let gnu = Command::new("ld")
         .current_dir(&dir)
-        .args(["-o", "gnu.out", "-u", "helper", "start.o", "libextra.a"])
+        .args([
+            "-o",
+            "gnu.out",
+            "--undefined=helper",
+            "start.o",
+            "libextra.a",
+        ])
         .output()
         .expect("run GNU ld");
     assert!(
@@ -144,7 +186,7 @@ fn cli_forced_undefined_extracts_otherwise_unused_archive_member_like_gnu_ld() {
 
     let header = Command::new("readelf")
         .current_dir(&dir)
-        .args(["-hW", "forced.out"])
+        .args(["-hW", "equals.out"])
         .output()
         .expect("run GNU readelf");
     assert!(header.status.success());
@@ -154,7 +196,7 @@ fn cli_forced_undefined_extracts_otherwise_unused_archive_member_like_gnu_ld() {
 
     #[cfg(target_os = "linux")]
     {
-        let status = Command::new(dir.join("forced.out"))
+        let status = Command::new(dir.join("equals.out"))
             .status()
             .expect("execute forced-link ELF");
         assert!(status.success(), "forced executable returned {status}");
