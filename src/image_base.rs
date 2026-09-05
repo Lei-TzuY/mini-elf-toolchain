@@ -255,9 +255,11 @@ fn consume_keyword<'a>(text: &'a str, keyword: &str) -> Result<&'a str, String> 
     let Some(rest) = trimmed.strip_prefix(keyword) else {
         return Err(format!("expected '{keyword}'"));
     };
-    if rest.chars().next().is_some_and(|character| {
-        !character.is_whitespace() && character != '{' && character != '('
-    }) {
+    if rest
+        .chars()
+        .next()
+        .is_some_and(|character| !character.is_whitespace() && character != '{' && character != '(')
+    {
         return Err(format!("expected '{keyword}'"));
     }
     Ok(rest)
@@ -386,7 +388,10 @@ mod tests {
             "SECTIONS { .text 0x900000 : { *(.text) *(.rodata) } }",
             "SECTIONS { .text 0x900000 : { *(.text) } .data : { *(.data) } }",
         ] {
-            assert!(parse_linker_script_config(script).is_err(), "accepted {script:?}");
+            assert!(
+                parse_linker_script_config(script).is_err(),
+                "accepted {script:?}"
+            );
         }
     }
 
