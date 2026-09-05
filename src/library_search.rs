@@ -265,7 +265,8 @@ mod tests {
             OsString::from("helper"),
         ];
 
-        let resolved = resolve_static_library_arguments(&arguments).expect("resolve split long forms");
+        let resolved =
+            resolve_static_library_arguments(&arguments).expect("resolve split long forms");
         assert_eq!(
             resolved,
             vec![
