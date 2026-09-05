@@ -68,14 +68,7 @@ fn location_counter_then_text_section_matches_gnu_ld_and_executes() {
 
     let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .current_dir(&dir)
-        .args([
-            "link",
-            "-o",
-            "sequence.out",
-            "-T",
-            "sequence.ld",
-            "start.o",
-        ])
+        .args(["link", "-o", "sequence.out", "-T", "sequence.ld", "start.o"])
         .output()
         .expect("run linker with sequenced script");
     assert!(
@@ -107,10 +100,7 @@ fn location_counter_then_text_section_matches_gnu_ld_and_executes() {
         assert!(stdout.contains("Entry point address:               0x900000"));
     }
 
-    for (script, output) in [
-        ("overflow.ld", "overflow.out"),
-        ("extra.ld", "extra.out"),
-    ] {
+    for (script, output) in [("overflow.ld", "overflow.out"), ("extra.ld", "extra.out")] {
         let rejected = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
             .current_dir(&dir)
             .args(["link", "-o", output, "-T", script, "start.o"])
@@ -125,7 +115,10 @@ fn location_counter_then_text_section_matches_gnu_ld_and_executes() {
         let status = Command::new(dir.join("sequence.out"))
             .status()
             .expect("execute sequenced-script static ELF");
-        assert!(status.success(), "sequenced-script executable returned {status}");
+        assert!(
+            status.success(),
+            "sequenced-script executable returned {status}"
+        );
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
