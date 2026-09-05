@@ -117,7 +117,13 @@ fn bounded_linker_script_image_base_matches_gnu_ld_and_executes() {
 
     let missing_attached = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .current_dir(&dir)
-        .args(["link", "-o", "missing-attached.out", "-Tmissing.ld", "start.o"])
+        .args([
+            "link",
+            "-o",
+            "missing-attached.out",
+            "-Tmissing.ld",
+            "start.o",
+        ])
         .output()
         .expect("run linker with missing attached -T script");
     assert!(!missing_attached.status.success());
