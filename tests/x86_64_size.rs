@@ -27,12 +27,8 @@ fn evaluates_size32_and_size64_from_symbol_size_operand() {
 
 #[test]
 fn size32_checks_unsigned_range_and_size64_checks_underflow() {
-    let too_large = evaluate_relocation(
-        &relocation(R_X86_64_SIZE32, 0, 1),
-        u64::from(u32::MAX),
-        0,
-    )
-    .unwrap_err();
+    let too_large = evaluate_relocation(&relocation(R_X86_64_SIZE32, 0, 1), u64::from(u32::MAX), 0)
+        .unwrap_err();
     assert_eq!(
         too_large,
         RelocationEvaluationError::Unsigned32OutOfRange {
@@ -40,8 +36,7 @@ fn size32_checks_unsigned_range_and_size64_checks_underflow() {
         }
     );
 
-    let underflow =
-        evaluate_relocation(&relocation(R_X86_64_SIZE64, 0, -1), 0, 0).unwrap_err();
+    let underflow = evaluate_relocation(&relocation(R_X86_64_SIZE64, 0, -1), 0, 0).unwrap_err();
     assert_eq!(
         underflow,
         RelocationEvaluationError::Unsigned64OutOfRange { value: -1 }
@@ -51,30 +46,13 @@ fn size32_checks_unsigned_range_and_size64_checks_underflow() {
 #[test]
 fn applies_size_relocations_with_checked_target_widths() {
     let mut section = [0xa5; 12];
-    apply_relocation(
-        &mut section,
-        &relocation(R_X86_64_SIZE32, 0, 1),
-        4,
-        0,
-    )
-    .unwrap();
-    apply_relocation(
-        &mut section,
-        &relocation(R_X86_64_SIZE64, 4, -1),
-        9,
-        0,
-    )
-    .unwrap();
+    apply_relocation(&mut section, &relocation(R_X86_64_SIZE32, 0, 1), 4, 0).unwrap();
+    apply_relocation(&mut section, &relocation(R_X86_64_SIZE64, 4, -1), 9, 0).unwrap();
     assert_eq!(&section[..4], &5u32.to_le_bytes());
     assert_eq!(&section[4..], &8u64.to_le_bytes());
 
-    let error = apply_relocation(
-        &mut [0u8; 7],
-        &relocation(R_X86_64_SIZE64, 0, 0),
-        1,
-        0,
-    )
-    .unwrap_err();
+    let error =
+        apply_relocation(&mut [0u8; 7], &relocation(R_X86_64_SIZE64, 0, 0), 1, 0).unwrap_err();
     assert_eq!(
         error,
         RelocationApplyError::TargetOutOfBounds {
