@@ -2,10 +2,11 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use crate::layout::LaidOutSection;
-use crate::rela_apply::{apply_rela_table, RelaTableApplyError};
+use crate::rela_apply::{apply_rela_table_with_values, RelaTableApplyError};
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{NamedSymbol, SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
+use crate::x86_64_relocations::{R_X86_64_SIZE32, R_X86_64_SIZE64};
 
 const R_X86_64_NONE: u32 = 0;
 
@@ -28,6 +29,11 @@ pub enum LinkRelocationError {
         binding: u8,
     },
     MissingGlobalAddress {
+        relocation_index: usize,
+        symbol_index: u32,
+        name: Vec<u8>,
+    },
+    MissingGlobalDefinition {
         relocation_index: usize,
         symbol_index: u32,
         name: Vec<u8>,
@@ -77,6 +83,15 @@ impl fmt::Display for LinkRelocationError {
                 "relocation {relocation_index} symbol {symbol_index} ({:?}) has no resolved global address",
                 String::from_utf8_lossy(name)
             ),
+            Self::MissingGlobalDefinition {
+                relocation_index,
+                symbol_index,
+                name,
+            } => write!(
+                f,
+                "relocation {relocation_index} symbol {symbol_index} ({:?}) has no resolved global definition for symbol-size relocation",
+                String::from_utf8_lossy(name)
+            ),
             Self::LocalSymbolAddress {
                 relocation_index,
                 symbol_index,
@@ -98,9 +113,22 @@ impl std::error::Error for LinkRelocationError {
             Self::MissingSymbolMetadata { .. }
             | Self::WrongObject { .. }
             | Self::UnsupportedBinding { .. }
-            | Self::MissingGlobalAddress { .. } => None,
+            | Self::MissingGlobalAddress { .. }
+            | Self::MissingGlobalDefinition { .. } => None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RelocationSymbolValues {
+    address: u64,
+    size: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ResolvedGlobalSymbols<'a> {
+    pub addresses: &'a BTreeMap<Vec<u8>, u64>,
+    pub definitions: &'a BTreeMap<Vec<u8>, SymbolDefinition>,
 }
 
 pub fn apply_rela_table_with_resolved_symbols(
@@ -110,6 +138,30 @@ pub fn apply_rela_table_with_resolved_symbols(
     object_index: usize,
     symbols: &[NamedSymbol<'_>],
     global_addresses: &BTreeMap<Vec<u8>, u64>,
+    layout: &[LaidOutSection],
+) -> Result<(), LinkRelocationError> {
+    let global_definitions = BTreeMap::new();
+    apply_rela_table_with_resolved_symbols_and_definitions(
+        section,
+        section_address,
+        table,
+        object_index,
+        symbols,
+        ResolvedGlobalSymbols {
+            addresses: global_addresses,
+            definitions: &global_definitions,
+        },
+        layout,
+    )
+}
+
+pub fn apply_rela_table_with_resolved_symbols_and_definitions(
+    section: &mut [u8],
+    section_address: u64,
+    table: &Elf64RelaTable,
+    object_index: usize,
+    symbols: &[NamedSymbol<'_>],
+    globals: ResolvedGlobalSymbols<'_>,
     layout: &[LaidOutSection],
 ) -> Result<(), LinkRelocationError> {
     let mut values = BTreeMap::new();
@@ -143,8 +195,13 @@ pub fn apply_rela_table_with_resolved_symbols(
             });
         }
 
+        let needs_size = table.relocations.iter().any(|candidate| {
+            candidate.symbol_index == relocation.symbol_index
+                && (candidate.relocation_type == R_X86_64_SIZE32
+                    || candidate.relocation_type == R_X86_64_SIZE64)
+        });
         let binding = symbol.symbol.info >> 4;
-        let value = match binding {
+        let (address, size) = match binding {
             STB_LOCAL => {
                 let definition = SymbolDefinition {
                     name: symbol.name.to_vec(),
@@ -153,25 +210,45 @@ pub fn apply_rela_table_with_resolved_symbols(
                     symbol_index: symbol.symbol_index,
                     symbol: symbol.symbol,
                 };
-                final_symbol_address(&definition, layout).map_err(|source| {
+                let address = final_symbol_address(&definition, layout).map_err(|source| {
                     LinkRelocationError::LocalSymbolAddress {
                         relocation_index,
                         symbol_index: relocation.symbol_index,
                         source,
                     }
-                })?
+                })?;
+                (address, symbol.symbol.size)
             }
-            STB_GLOBAL | STB_WEAK => match global_addresses.get(symbol.name) {
-                Some(address) => *address,
-                None if binding == STB_WEAK && symbol.symbol.section_index == SHN_UNDEF => 0,
-                None => {
-                    return Err(LinkRelocationError::MissingGlobalAddress {
-                        relocation_index,
-                        symbol_index: relocation.symbol_index,
-                        name: symbol.name.to_vec(),
-                    });
-                }
-            },
+            STB_GLOBAL | STB_WEAK => {
+                let address = match globals.addresses.get(symbol.name) {
+                    Some(address) => *address,
+                    None if binding == STB_WEAK && symbol.symbol.section_index == SHN_UNDEF => 0,
+                    None => {
+                        return Err(LinkRelocationError::MissingGlobalAddress {
+                            relocation_index,
+                            symbol_index: relocation.symbol_index,
+                            name: symbol.name.to_vec(),
+                        });
+                    }
+                };
+                let size = if !needs_size {
+                    0
+                } else {
+                    match globals.definitions.get(symbol.name) {
+                        Some(definition) => definition.symbol.size,
+                        None if symbol.symbol.section_index != SHN_UNDEF => symbol.symbol.size,
+                        None if binding == STB_WEAK => 0,
+                        None => {
+                            return Err(LinkRelocationError::MissingGlobalDefinition {
+                                relocation_index,
+                                symbol_index: relocation.symbol_index,
+                                name: symbol.name.to_vec(),
+                            });
+                        }
+                    }
+                };
+                (address, size)
+            }
             _ => {
                 return Err(LinkRelocationError::UnsupportedBinding {
                     relocation_index,
@@ -181,11 +258,22 @@ pub fn apply_rela_table_with_resolved_symbols(
             }
         };
 
-        values.insert(relocation.symbol_index, value);
+        values.insert(
+            relocation.symbol_index,
+            RelocationSymbolValues { address, size },
+        );
     }
 
-    apply_rela_table(section, section_address, table, |symbol_index| {
-        values.get(&symbol_index).copied()
+    apply_rela_table_with_values(section, section_address, table, |relocation| {
+        values.get(&relocation.symbol_index).map(|values| {
+            if relocation.relocation_type == R_X86_64_SIZE32
+                || relocation.relocation_type == R_X86_64_SIZE64
+            {
+                values.size
+            } else {
+                values.address
+            }
+        })
     })
     .map_err(LinkRelocationError::Apply)
 }

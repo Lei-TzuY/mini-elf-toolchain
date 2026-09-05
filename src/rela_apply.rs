@@ -1,6 +1,6 @@
 use core::fmt;
 
-use crate::relocations::Elf64RelaTable;
+use crate::relocations::{Elf64Rela, Elf64RelaTable};
 use crate::x86_64_relocations::{apply_relocation, RelocationApplyError};
 
 const R_X86_64_NONE: u32 = 0;
@@ -66,6 +66,20 @@ pub fn apply_rela_table<F>(
 where
     F: FnMut(u32) -> Option<u64>,
 {
+    apply_rela_table_with_values(section, section_address, table, |relocation| {
+        symbol_value(relocation.symbol_index)
+    })
+}
+
+pub fn apply_rela_table_with_values<F>(
+    section: &mut [u8],
+    section_address: u64,
+    table: &Elf64RelaTable,
+    mut relocation_value: F,
+) -> Result<(), RelaTableApplyError>
+where
+    F: FnMut(&Elf64Rela) -> Option<u64>,
+{
     let mut patched = section.to_vec();
 
     for (relocation_index, relocation) in table.relocations.iter().enumerate() {
@@ -80,12 +94,11 @@ where
                 offset: relocation.offset,
             },
         )?;
-        let value = symbol_value(relocation.symbol_index).ok_or(
-            RelaTableApplyError::MissingSymbolValue {
+        let value =
+            relocation_value(relocation).ok_or(RelaTableApplyError::MissingSymbolValue {
                 relocation_index,
                 symbol_index: relocation.symbol_index,
-            },
-        )?;
+            })?;
         apply_relocation(&mut patched, relocation, value, place).map_err(|error| {
             RelaTableApplyError::Relocation {
                 relocation_index,
