@@ -1,0 +1,181 @@
+name: Apply BIL-135
+
+on:
+  push:
+    branches:
+      - conquest/bil-135-entry-equals
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Apply bounded --entry= implementation
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          main = Path('src/main.rs')
+          text = main.read_text()
+          text = text.replace(
+              '[--map <map-file>] [--entry <symbol>] [--image-base <address>]',
+              '[--map <map-file>] [--entry <symbol>|--entry=<symbol>] [--image-base <address>]',
+              1,
+          )
+          old = '''            } else if argument == "--entry" {
+                if remaining.len() < 2 {
+                    return Err(CliError::Usage(
+                        "missing entry symbol after --entry".to_owned(),
+                    ));
+                }
+                if entry_seen {
+                    return Err(CliError::Usage("duplicate --entry option".to_owned()));
+                }
+                if remaining[1].is_empty() {
+                    return Err(CliError::Usage("entry symbol cannot be empty".to_owned()));
+                }
+                entry_symbol = remaining[1].clone();
+                entry_seen = true;
+                remaining.drain(0..2);
+            } else {
+'''
+          new = '''            } else if argument == "--entry" {
+                if remaining.len() < 2 {
+                    return Err(CliError::Usage(
+                        "missing entry symbol after --entry".to_owned(),
+                    ));
+                }
+                if entry_seen {
+                    return Err(CliError::Usage("duplicate --entry option".to_owned()));
+                }
+                if remaining[1].is_empty() {
+                    return Err(CliError::Usage("entry symbol cannot be empty".to_owned()));
+                }
+                entry_symbol = remaining[1].clone();
+                entry_seen = true;
+                remaining.drain(0..2);
+            } else if let Some(symbol) = argument
+                .to_str()
+                .and_then(|argument| argument.strip_prefix("--entry="))
+            {
+                if entry_seen {
+                    return Err(CliError::Usage("duplicate --entry option".to_owned()));
+                }
+                if symbol.is_empty() {
+                    return Err(CliError::Usage("entry symbol cannot be empty".to_owned()));
+                }
+                entry_symbol = OsString::from(symbol);
+                entry_seen = true;
+                remaining.remove(0);
+            } else {
+'''
+          if old not in text:
+              raise SystemExit('entry parser anchor not found')
+          text = text.replace(old, new, 1)
+          test_anchor = '''    #[test]
+    fn link_entry_rejects_duplicate_default_symbol_before_io() {
+'''
+          tests = '''    #[test]
+    fn link_entry_equals_rejects_empty_symbol_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--entry="),
+            OsString::from("input.o"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("entry symbol cannot be empty".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_entry_equals_conflicts_with_split_entry_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--entry=custom_entry"),
+            OsString::from("--entry"),
+            OsString::from("_start"),
+            OsString::from("input.o"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("duplicate --entry option".to_owned()))
+        );
+    }
+
+'''
+          if test_anchor not in text:
+              raise SystemExit('unit test anchor not found')
+          text = text.replace(test_anchor, tests + test_anchor, 1)
+          main.write_text(text)
+
+          cli = Path('tests/cli_entry.rs')
+          text = cli.read_text()
+          text = text.replace(
+              '.args(["--entry", "custom_entry"])',
+              '.arg("--entry=custom_entry")',
+              1,
+          )
+          marker = '    let output = dir.join("linked");\n'
+          if marker not in text:
+              raise SystemExit('integration test output anchor not found')
+          text = text.replace(
+              marker,
+              marker + '    let gnu_output = dir.join("gnu-linked");\n',
+              1,
+          )
+          link_anchor = '''    let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+'''
+          gnu = '''    if command_available("ld") {
+        let gnu_link = Command::new("ld")
+            .arg("-o")
+            .arg(&gnu_output)
+            .arg("--entry=custom_entry")
+            .arg(&input)
+            .status()
+            .expect("run GNU ld");
+        assert!(gnu_link.success(), "GNU ld failed");
+    }
+
+'''
+          if link_anchor not in text:
+              raise SystemExit('integration test link anchor not found')
+          text = text.replace(link_anchor, gnu + link_anchor, 1)
+          readelf_anchor = '''    assert!(String::from_utf8_lossy(&header.stdout)
+        .contains("Entry point address:               0x400004"));
+'''
+          gnu_readelf = '''    if gnu_output.exists() {
+        let gnu_header = Command::new("readelf")
+            .args(["-hW"])
+            .arg(&gnu_output)
+            .output()
+            .expect("run readelf on GNU output");
+        assert!(gnu_header.status.success());
+        assert!(String::from_utf8_lossy(&gnu_header.stdout)
+            .contains("Entry point address:               0x400004"));
+    }
+'''
+          if readelf_anchor not in text:
+              raise SystemExit('readelf anchor not found')
+          text = text.replace(readelf_anchor, readelf_anchor + '\n' + gnu_readelf, 1)
+          cli.write_text(text)
+
+          Path('docs/entry-equals.md').write_text('''# Bounded `--entry=<symbol>` compatibility\n\nThe `link` command accepts GNU-style `--entry=<symbol>` in the same pre-input option region as the existing split `--entry <symbol>` form. Both forms select the resolved ELF symbol used as the executable entry point and conflict with each other if repeated.\n\nAn empty equals value (`--entry=`) is rejected before input or output I/O. The attached form is deliberately limited to UTF-8 command-line text; split `--entry <symbol>` remains the compatibility path for platform-native non-UTF-8 arguments. This slice does not broaden option placement rules or linker-script grammar.\n''')
+          PY
+          cargo fmt --all
+          git add src/main.rs tests/cli_entry.rs docs/entry-equals.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Add bounded GNU --entry=<symbol> form"
+          git push
