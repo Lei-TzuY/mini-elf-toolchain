@@ -147,8 +147,14 @@ fn attached_map_form_matches_gnu_cli_semantics() {
 
     #[cfg(target_os = "linux")]
     {
-        assert!(Command::new(&ours).status().expect("run our executable").success());
-        assert!(Command::new(&gnu).status().expect("run GNU executable").success());
+        assert!(Command::new(&ours)
+            .status()
+            .expect("run our executable")
+            .success());
+        assert!(Command::new(&gnu)
+            .status()
+            .expect("run GNU executable")
+            .success());
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
