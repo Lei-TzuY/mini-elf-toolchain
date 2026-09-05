@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 
 use crate::elf64::{Elf64SectionHeader, Elf64SymbolTable};
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
-use crate::resolve::{resolve_symbols, ResolutionError, SymbolDefinition};
+use crate::resolve::{
+    resolve_symbols_with_common, ResolutionError, ResolvedSymbols, SymbolDefinition,
+};
 
 #[derive(Debug, Clone, Copy)]
 pub struct ValidatedObject<'a> {
@@ -48,6 +50,12 @@ impl std::error::Error for LinkSymbolError {
 pub fn resolve_validated_objects(
     objects: &[ValidatedObject<'_>],
 ) -> Result<BTreeMap<Vec<u8>, SymbolDefinition>, LinkSymbolError> {
+    resolve_validated_objects_with_common(objects).map(|resolved| resolved.definitions)
+}
+
+pub fn resolve_validated_objects_with_common(
+    objects: &[ValidatedObject<'_>],
+) -> Result<ResolvedSymbols, LinkSymbolError> {
     let mut named_symbols = Vec::new();
 
     for (object_index, object) in objects.iter().enumerate() {
@@ -65,5 +73,5 @@ pub fn resolve_validated_objects(
         }
     }
 
-    resolve_symbols(named_symbols).map_err(LinkSymbolError::Resolution)
+    resolve_symbols_with_common(named_symbols).map_err(LinkSymbolError::Resolution)
 }
