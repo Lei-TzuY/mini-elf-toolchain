@@ -392,13 +392,11 @@ mod tests {
             0x900000
         );
         assert_eq!(
-            parse_linker_script("SECTIONS { . = 0x900000; .text : { *(.text .text.*) } }")
-                .unwrap(),
+            parse_linker_script("SECTIONS { . = 0x900000; .text : { *(.text .text.*) } }").unwrap(),
             0x900000
         );
         assert_eq!(
-            parse_linker_script("SECTIONS { .text 0x900000 : { *( .text\n.text.* ) } }")
-                .unwrap(),
+            parse_linker_script("SECTIONS { .text 0x900000 : { *( .text\n.text.* ) } }").unwrap(),
             0x900000
         );
     }
