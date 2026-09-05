@@ -20,18 +20,10 @@ fn temp_dir() -> PathBuf {
     path
 }
 
-#[test]
-fn cli_writes_deterministic_link_map_for_gnu_object() {
-    if !command_available("as") || !command_available("objcopy") {
-        return;
-    }
-
-    let dir = temp_dir();
+fn assemble_start(dir: &std::path::Path) -> PathBuf {
     let source = dir.join("start.s");
     let assembled = dir.join("start-all.o");
     let input = dir.join("start.o");
-    let output = dir.join("linked");
-    let map = dir.join("linked.map");
 
     fs::write(
         &source,
@@ -52,6 +44,20 @@ fn cli_writes_deterministic_link_map_for_gnu_object() {
         .status()
         .expect("run GNU objcopy")
         .success());
+
+    input
+}
+
+#[test]
+fn cli_writes_deterministic_link_map_for_gnu_object() {
+    if !command_available("as") || !command_available("objcopy") {
+        return;
+    }
+
+    let dir = temp_dir();
+    let input = assemble_start(&dir);
+    let output = dir.join("linked");
+    let map = dir.join("linked.map");
 
     let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
@@ -76,6 +82,74 @@ fn cli_writes_deterministic_link_map_for_gnu_object() {
     assert!(rendered.contains("SEGMENTS\n"));
     assert!(rendered.contains("vaddr=0x0000000000400000"));
     assert!(rendered.contains(" RX\n"));
+
+    fs::remove_dir_all(dir).expect("remove temporary test directory");
+}
+
+#[test]
+fn attached_map_form_matches_gnu_cli_semantics() {
+    if !command_available("as")
+        || !command_available("objcopy")
+        || !command_available("ld")
+        || !command_available("readelf")
+    {
+        return;
+    }
+
+    let dir = temp_dir();
+    let input = assemble_start(&dir);
+    let ours = dir.join("ours");
+    let ours_map = dir.join("ours.map");
+    let gnu = dir.join("gnu");
+    let gnu_map = dir.join("gnu.map");
+
+    let ours_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&ours)
+        .arg(format!("-Map={}", ours_map.display()))
+        .arg(&input)
+        .output()
+        .expect("run mini-elf-toolchain link");
+    assert!(
+        ours_link.status.success(),
+        "link failed: {}",
+        String::from_utf8_lossy(&ours_link.stderr)
+    );
+
+    let gnu_link = Command::new("ld")
+        .arg("-o")
+        .arg(&gnu)
+        .arg(format!("-Map={}", gnu_map.display()))
+        .arg(&input)
+        .output()
+        .expect("run GNU ld");
+    assert!(
+        gnu_link.status.success(),
+        "GNU ld failed: {}",
+        String::from_utf8_lossy(&gnu_link.stderr)
+    );
+
+    for executable in [&ours, &gnu] {
+        let header = Command::new("readelf")
+            .args(["-h"])
+            .arg(executable)
+            .output()
+            .expect("run GNU readelf");
+        assert!(header.status.success());
+        let header = String::from_utf8_lossy(&header.stdout);
+        assert!(header.contains("Type:                              EXEC"));
+    }
+
+    let ours_rendered = fs::read_to_string(&ours_map).expect("read our link map");
+    let gnu_rendered = fs::read_to_string(&gnu_map).expect("read GNU link map");
+    assert!(ours_rendered.contains("_start"));
+    assert!(gnu_rendered.contains("_start"));
+
+    #[cfg(target_os = "linux")]
+    {
+        assert!(Command::new(&ours).status().expect("run our executable").success());
+        assert!(Command::new(&gnu).status().expect("run GNU executable").success());
+    }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
 }
