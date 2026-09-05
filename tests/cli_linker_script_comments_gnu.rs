@@ -121,8 +121,9 @@ fn c_style_linker_script_comments_match_gnu_ld_and_execute() {
         .output()
         .expect("run linker with unterminated comment");
     assert!(!malformed.status.success());
-    assert!(String::from_utf8_lossy(&malformed.stderr)
-        .contains("unterminated linker-script comment"));
+    assert!(
+        String::from_utf8_lossy(&malformed.stderr).contains("unterminated linker-script comment")
+    );
     assert!(!dir.join("malformed.out").exists());
 
     #[cfg(target_os = "linux")]
@@ -130,7 +131,10 @@ fn c_style_linker_script_comments_match_gnu_ld_and_execute() {
         let status = Command::new(dir.join("ours.out"))
             .status()
             .expect("execute commented-script static ELF");
-        assert!(status.success(), "commented-script executable returned {status}");
+        assert!(
+            status.success(),
+            "commented-script executable returned {status}"
+        );
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
