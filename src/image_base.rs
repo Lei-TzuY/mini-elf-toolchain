@@ -103,6 +103,27 @@ pub fn extract_image_base_argument(
 
         if let Some(path) = arguments[index]
             .to_str()
+            .and_then(|argument| argument.strip_prefix("--script="))
+        {
+            if script_seen {
+                return Err(ImageBaseArgumentError::DuplicateScriptOption);
+            }
+            if image_base_seen {
+                return Err(ImageBaseArgumentError::ConflictingSources);
+            }
+            if path.is_empty() {
+                return Err(ImageBaseArgumentError::EmptyScriptPath);
+            }
+            let config = parse_linker_script_file(Path::new(path))?;
+            image_base = config.image_base;
+            script_entry_symbol = config.entry_symbol;
+            script_seen = true;
+            index += 1;
+            continue;
+        }
+
+        if let Some(path) = arguments[index]
+            .to_str()
             .and_then(|argument| argument.strip_prefix("-T"))
             .filter(|path| !path.is_empty())
         {
@@ -177,7 +198,6 @@ fn parse_linker_script_file(path: &Path) -> Result<LinkerScriptConfig, ImageBase
 fn parse_linker_script(text: &str) -> Result<u64, String> {
     parse_linker_script_config(text).map(|config| config.image_base)
 }
-
 fn parse_linker_script_config(text: &str) -> Result<LinkerScriptConfig, String> {
     let mut rest = text.trim_start();
     let entry_symbol = if rest.starts_with("ENTRY") {
@@ -535,6 +555,19 @@ mod tests {
             ])
             .unwrap_err(),
             ImageBaseArgumentError::ConflictingSources
+        );
+        assert_eq!(
+            extract_image_base_argument(&[
+                OsString::from("--image-base"),
+                OsString::from("0x800000"),
+                OsString::from("--script=missing.ld"),
+            ])
+            .unwrap_err(),
+            ImageBaseArgumentError::ConflictingSources
+        );
+        assert_eq!(
+            extract_image_base_argument(&[OsString::from("--script=")]).unwrap_err(),
+            ImageBaseArgumentError::EmptyScriptPath
         );
     }
 }
