@@ -7,7 +7,7 @@ use crate::load_segments::SHF_ALLOC;
 use crate::permission_layout::PermissionLayoutInput;
 use crate::relocations::Elf64RelaTable;
 use crate::x86_64_relocations::{
-    is_static_gotpcrel_type, R_X86_64_GOTPCREL, R_X86_64_GOTPCRELX, R_X86_64_REX_GOTPCRELX,
+    R_X86_64_GOTPCREL, R_X86_64_GOTPCRELX, R_X86_64_REX_GOTPCRELX,
 };
 
 #[derive(Debug)]
@@ -173,12 +173,10 @@ impl<'a> LinkerInputObject<'a> {
 fn canonicalize_relaxable_static_got_relocations(object: &mut RelocatableObject) {
     for table in &mut object.rela_tables {
         for relocation in &mut table.relocations {
-            if is_static_gotpcrel_type(relocation.relocation_type)
-                && matches!(
-                    relocation.relocation_type,
-                    R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
-                )
-            {
+            if matches!(
+                relocation.relocation_type,
+                R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
+            ) {
                 relocation.relocation_type = R_X86_64_GOTPCREL;
             }
         }
