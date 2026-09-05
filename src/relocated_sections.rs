@@ -321,9 +321,13 @@ pub fn relocate_allocatable_sections(
         )?;
         let mut bytes = Vec::with_capacity(got_size as usize);
         for name in &got_symbols {
-            let address = context.global_addresses().get(name).copied().ok_or_else(|| {
-                RelocatedSectionError::MissingGotSymbolAddress { name: name.clone() }
-            })?;
+            let address = context
+                .global_addresses()
+                .get(name)
+                .copied()
+                .ok_or_else(|| RelocatedSectionError::MissingGotSymbolAddress {
+                    name: name.clone(),
+                })?;
             bytes.extend_from_slice(&address.to_le_bytes());
         }
         relocated.push(RelocatedSectionImage {
