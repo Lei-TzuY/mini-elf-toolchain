@@ -41,6 +41,11 @@ pub fn extract_forced_undefined_arguments(
             index += 2;
             continue;
         }
+        if let Some(symbol) = strip_os_prefix(argument, "--undefined=") {
+            push_symbol(&symbol, &mut symbols)?;
+            index += 1;
+            continue;
+        }
         if let Some(symbol) = strip_os_prefix(argument, "-u") {
             push_symbol(&symbol, &mut symbols)?;
             index += 1;
@@ -86,16 +91,14 @@ fn strip_os_prefix(value: &OsStr, prefix: &str) -> Option<OsString> {
 
     let bytes = value.as_bytes();
     let prefix = prefix.as_bytes();
-    (bytes.len() > prefix.len() && bytes.starts_with(prefix))
+    (bytes.len() >= prefix.len() && bytes.starts_with(prefix))
         .then(|| OsString::from_vec(bytes[prefix.len()..].to_vec()))
 }
 
 #[cfg(windows)]
 fn strip_os_prefix(value: &OsStr, prefix: &str) -> Option<OsString> {
     let text = value.to_str()?;
-    text.strip_prefix(prefix)
-        .filter(|suffix| !suffix.is_empty())
-        .map(OsString::from)
+    text.strip_prefix(prefix).map(OsString::from)
 }
 
 #[cfg(test)]
@@ -106,13 +109,14 @@ mod tests {
     use std::ffi::OsString;
 
     #[test]
-    fn extracts_split_long_and_joined_forms_without_reordering_inputs() {
+    fn extracts_split_long_joined_and_equals_forms_without_reordering_inputs() {
         let parsed = extract_forced_undefined_arguments(&[
             OsString::from("root.o"),
             OsString::from("-ufoo"),
             OsString::from("liba.a"),
             OsString::from("--undefined"),
             OsString::from("bar"),
+            OsString::from("--undefined=qux"),
             OsString::from("-u"),
             OsString::from("baz"),
             OsString::from("libb.a"),
@@ -127,7 +131,12 @@ mod tests {
                     OsString::from("liba.a"),
                     OsString::from("libb.a")
                 ],
-                symbols: vec![b"foo".to_vec(), b"bar".to_vec(), b"baz".to_vec()],
+                symbols: vec![
+                    b"foo".to_vec(),
+                    b"bar".to_vec(),
+                    b"qux".to_vec(),
+                    b"baz".to_vec()
+                ],
             }
         );
     }
@@ -140,6 +149,10 @@ mod tests {
         );
         assert_eq!(
             extract_forced_undefined_arguments(&[OsString::from("--undefined"), OsString::new(),]),
+            Err(ForcedUndefinedArgumentError::EmptySymbol)
+        );
+        assert_eq!(
+            extract_forced_undefined_arguments(&[OsString::from("--undefined=")]),
             Err(ForcedUndefinedArgumentError::EmptySymbol)
         );
     }
