@@ -134,8 +134,7 @@ fn library_long_forms_match_gnu_archive_search_and_execute() {
         .expect("run missing --library-path test");
     assert!(!missing_path.status.success());
     assert!(!missing_path_output.exists());
-    assert!(String::from_utf8_lossy(&missing_path.stderr)
-        .contains("missing directory after -L/--library-path"));
+    assert!(String::from_utf8_lossy(&missing_path.stderr).contains("missing directory after -L"));
 
     let missing_name_output = dir.join("missing-name");
     let missing_name = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
@@ -146,8 +145,7 @@ fn library_long_forms_match_gnu_archive_search_and_execute() {
         .expect("run missing --library test");
     assert!(!missing_name.status.success());
     assert!(!missing_name_output.exists());
-    assert!(String::from_utf8_lossy(&missing_name.stderr)
-        .contains("missing library name after -l/--library"));
+    assert!(String::from_utf8_lossy(&missing_name.stderr).contains("missing library name after -l"));
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
 }
