@@ -184,10 +184,7 @@ fn parse_text_output_section(mut rest: &str) -> Result<(u64, &str), String> {
     Ok((image_base, rest))
 }
 
-fn parse_address_token<'a>(
-    text: &'a str,
-    terminators: &[char],
-) -> Result<(u64, &'a str), String> {
+fn parse_address_token<'a>(text: &'a str, terminators: &[char]) -> Result<(u64, &'a str), String> {
     let trimmed = text.trim_start();
     let token_len = trimmed
         .find(|character: char| character.is_whitespace() || terminators.contains(&character))
