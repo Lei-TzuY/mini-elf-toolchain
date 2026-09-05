@@ -250,6 +250,12 @@ fn parse_text_output_section_body(mut rest: &str) -> Result<&str, String> {
     rest = consume_char(rest, '*')?;
     rest = consume_char(rest, '(')?;
     rest = consume_literal(rest, ".text")?;
+
+    let trimmed = rest.trim_start();
+    if let Some(remaining) = trimmed.strip_prefix(".text.*") {
+        rest = remaining;
+    }
+
     rest = consume_char(rest, ')')?;
     rest = consume_char(rest, '}')?;
     Ok(rest)
@@ -385,6 +391,16 @@ mod tests {
             parse_linker_script("SECTIONS { . = 9437184 ;\n.text:\n{ *( .text ) } }").unwrap(),
             0x900000
         );
+        assert_eq!(
+            parse_linker_script("SECTIONS { . = 0x900000; .text : { *(.text .text.*) } }")
+                .unwrap(),
+            0x900000
+        );
+        assert_eq!(
+            parse_linker_script("SECTIONS { .text 0x900000 : { *( .text\n.text.* ) } }")
+                .unwrap(),
+            0x900000
+        );
     }
 
     #[test]
@@ -412,6 +428,10 @@ mod tests {
             "SECTIONS { . = 0x10000000000000000; }",
             "SECTIONS { . = 0x800000; .text : {} }",
             "SECTIONS { . = 0x800000; .text : { *(.rodata) } }",
+            "SECTIONS { . = 0x800000; .text : { *(.text.*) } }",
+            "SECTIONS { . = 0x800000; .text : { *(.text.* .text) } }",
+            "SECTIONS { . = 0x800000; .text : { *(.text .text.foo) } }",
+            "SECTIONS { . = 0x800000; .text : { *(.text .rodata*) } }",
             "SECTIONS { . = 0x800000; .text : { *(.text) } .data : { *(.data) } }",
             "ENTRY() SECTIONS { . = 0x800000; }",
             "ENTRY(two words) SECTIONS { . = 0x800000; }",
