@@ -23,7 +23,7 @@ const END_GROUP: &str = "--end-group";
 const WHOLE_ARCHIVE: &str = "--whole-archive";
 const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -108,8 +108,23 @@ where
                 if map_output.is_some() {
                     return Err(CliError::Usage("duplicate --map option".to_owned()));
                 }
+                if remaining[1].is_empty() {
+                    return Err(CliError::Usage("map path cannot be empty".to_owned()));
+                }
                 map_output = Some(remaining[1].clone());
                 remaining.drain(0..2);
+            } else if let Some(path) = argument
+                .to_str()
+                .and_then(|argument| argument.strip_prefix("-Map="))
+            {
+                if map_output.is_some() {
+                    return Err(CliError::Usage("duplicate --map option".to_owned()));
+                }
+                if path.is_empty() {
+                    return Err(CliError::Usage("map path cannot be empty".to_owned()));
+                }
+                map_output = Some(OsString::from(path));
+                remaining.drain(0..1);
             } else if argument == "--entry" {
                 if remaining.len() < 2 {
                     return Err(CliError::Usage(
@@ -647,6 +662,38 @@ mod tests {
         assert_eq!(
             run(args.into_iter()),
             Err(CliError::Usage("missing map path after --map".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_map_rejects_empty_attached_path_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("-Map="),
+            OsString::from("input.o"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("map path cannot be empty".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_map_rejects_mixed_duplicate_forms_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("-Map=first.map"),
+            OsString::from("--map"),
+            OsString::from("second.map"),
+            OsString::from("input.o"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("duplicate --map option".to_owned()))
         );
     }
 
