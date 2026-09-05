@@ -338,8 +338,8 @@ mod tests {
             OsString::from(":custom-name.a"),
         ];
 
-        let resolved = resolve_static_library_arguments(&arguments)
-            .expect("resolve split long exact library");
+        let resolved =
+            resolve_static_library_arguments(&arguments).expect("resolve split long exact library");
         assert_eq!(
             resolved,
             vec![
@@ -391,10 +391,7 @@ mod tests {
             Err(LibrarySearchError::MissingSearchPath)
         ));
         assert!(matches!(
-            resolve_static_library_arguments(&[
-                OsString::from("--library-path"),
-                OsString::new(),
-            ]),
+            resolve_static_library_arguments(&[OsString::from("--library-path"), OsString::new(),]),
             Err(LibrarySearchError::EmptySearchPath)
         ));
         assert!(matches!(
