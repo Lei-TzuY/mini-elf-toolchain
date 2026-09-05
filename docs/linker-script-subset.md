@@ -16,6 +16,14 @@ SECTIONS { .text 0x800000 : { *(.text) } }
 SECTIONS { . = 0x800000; .text : { *(.text) } }
 ```
 
+The `.text` output-section body also accepts the bounded GNU text-family selector:
+
+```ld
+SECTIONS { . = 0x800000; .text : { *(.text .text.*) } }
+```
+
+This selector is intentionally exact: it admits the ordinary `.text` input section plus `.text.*` function/fragment sections used by common assembler/compiler workflows. Wildcard-only `*(.text.*)`, reordered families, arbitrary wildcard patterns, and other section families remain rejected rather than being accepted without corresponding layout semantics.
+
 An optional entry directive may appear before the `SECTIONS` block:
 
 ```ld
@@ -25,6 +33,6 @@ SECTIONS { . = 0x800000; }
 
 `ENTRY(symbol)` selects the resolved global/weak symbol used as the ELF executable entry point. An explicit CLI `--entry <symbol>` takes precedence over the script directive, matching GNU `ld -e` override behavior. The entry directive accepts exactly one non-empty symbol token; malformed or repeated directives are rejected before output emission.
 
-The address is a checked unsigned 64-bit hexadecimal or decimal value and feeds the existing static image layout. The `.text` placement forms remain bounded aliases for selecting the current static image base; they are not a general output-section layout engine. The sequenced form applies the location-counter assignment first and then requires exactly one `.text : { *(.text) }` output section at that current address.
+The address is a checked unsigned 64-bit hexadecimal or decimal value and feeds the existing static image layout. The `.text` placement forms remain bounded aliases for selecting the current static image base; they are not a general output-section layout engine. The sequenced form applies the location-counter assignment first and then requires exactly one `.text` output section at that current address, using either the exact `*(.text)` body or the bounded `*(.text .text.*)` family body.
 
-General output-section placement, symbol assignments, `PROVIDE`, expressions, `MEMORY`, `PHDRS`, wildcards beyond the exact `*(.text)` form, `INCLUDE`, multiple script files, shared-object semantics, and dynamic-link directives remain out of scope until implemented as separate vertical slices.
+General output-section placement, symbol assignments, `PROVIDE`, expressions, `MEMORY`, `PHDRS`, general wildcard matching, orphan-section policy, `INCLUDE`, multiple script files, shared-object semantics, and dynamic-link directives remain out of scope until implemented as separate vertical slices.
