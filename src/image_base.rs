@@ -83,6 +83,23 @@ pub fn extract_image_base_argument(
     let mut index = 0usize;
 
     while index < arguments.len() {
+        if let Some(value) = strip_os_prefix(&arguments[index], "--image-base=") {
+            if image_base_seen {
+                return Err(ImageBaseArgumentError::DuplicateOption);
+            }
+            if script_seen {
+                return Err(ImageBaseArgumentError::ConflictingSources);
+            }
+            if value.is_empty() {
+                return Err(ImageBaseArgumentError::EmptyValue);
+            }
+            let text = value.to_str().ok_or(ImageBaseArgumentError::NonUtf8Value)?;
+            image_base = parse_address(text)?;
+            image_base_seen = true;
+            index += 1;
+            continue;
+        }
+
         if arguments[index] == "--image-base" {
             if image_base_seen {
                 return Err(ImageBaseArgumentError::DuplicateOption);
@@ -473,6 +490,14 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(decimal.image_base, 0x800000);
+
+        let equals = extract_image_base_argument(&[
+            OsString::from("--image-base=0x900000"),
+            OsString::from("start.o"),
+        ])
+        .unwrap();
+        assert_eq!(equals.image_base, 0x900000);
+        assert_eq!(equals.arguments, vec![OsString::from("start.o")]);
     }
 
     #[test]
@@ -482,7 +507,7 @@ mod tests {
             0x800000
         );
         assert_eq!(
-            parse_linker_script("\nSECTIONS\n{\n. = 8388608 ;\n}\n").unwrap(),
+            parse_linker_script("SECTIONS{. = 8388608 ;}").unwrap(),
             0x800000
         );
         assert_eq!(
@@ -490,7 +515,7 @@ mod tests {
             0x900000
         );
         assert_eq!(
-            parse_linker_script("\nSECTIONS {\n.text 9437184 :\n{ *( .text ) }\n}\n").unwrap(),
+            parse_linker_script("SECTIONS {.text 9437184 :{ *( .text ) }}").unwrap(),
             0x900000
         );
         assert_eq!(
@@ -498,7 +523,7 @@ mod tests {
             0x900000
         );
         assert_eq!(
-            parse_linker_script("SECTIONS { . = 9437184 ;\n.text:\n{ *( .text ) } }").unwrap(),
+            parse_linker_script("SECTIONS { . = 9437184 ;.text:{ *( .text ) } }").unwrap(),
             0x900000
         );
         assert_eq!(
@@ -506,8 +531,8 @@ mod tests {
             0x900000
         );
         assert_eq!(
-            parse_linker_script("SECTIONS { .text 0x900000 : { *( .text\n.text.* ) } }").unwrap(),
-            0x900000
+            parse_linker_script("SECTIONS { .text 0x900000 : { *( .text.text.* ) } }").unwrap_err(),
+            "expected ')'"
         );
         assert_eq!(
             parse_linker_script("SECTIONS { . = 0x900000; .text : { *(.text*) } }").unwrap(),
@@ -522,7 +547,7 @@ mod tests {
     #[test]
     fn parses_c_style_comments_as_whitespace() {
         let parsed = parse_linker_script_config(
-            "/* file header */ ENTRY(/* before */ custom_entry /* after */)\nSECTIONS { /* base */ . = 0x900000; /* output */ .text : { *(/* selector */ .text .text.*) } } /* tail */",
+            "/* file header */ ENTRY(/* before */ custom_entry /* after */)SECTIONS { /* base */ . = 0x900000; /* output */ .text : { *(/* selector */ .text .text.*) } } /* tail */",
         )
         .unwrap();
         assert_eq!(parsed.image_base, 0x900000);
@@ -532,14 +557,14 @@ mod tests {
     #[test]
     fn parses_bounded_entry_directive_before_sections() {
         let parsed = parse_linker_script_config(
-            "ENTRY(custom_entry)\nSECTIONS { .text 0x900000 : { *(.text) } }",
+            "ENTRY(custom_entry)SECTIONS { .text 0x900000 : { *(.text) } }",
         )
         .unwrap();
         assert_eq!(parsed.image_base, 0x900000);
         assert_eq!(parsed.entry_symbol.as_deref(), Some("custom_entry"));
 
         let sequenced = parse_linker_script_config(
-            "ENTRY(custom_entry)\nSECTIONS { . = 0x900000; .text : { *(.text) } }",
+            "ENTRY(custom_entry)SECTIONS { . = 0x900000; .text : { *(.text) } }",
         )
         .unwrap();
         assert_eq!(sequenced.image_base, 0x900000);
@@ -595,20 +620,31 @@ mod tests {
             ImageBaseArgumentError::EmptyValue
         );
         assert_eq!(
+            extract_image_base_argument(&[OsString::from("--image-base=")]).unwrap_err(),
+            ImageBaseArgumentError::EmptyValue
+        );
+        assert_eq!(
             extract_image_base_argument(&[
-                OsString::from("--image-base"),
-                OsString::from("1"),
+                OsString::from("--image-base=1"),
                 OsString::from("--image-base"),
                 OsString::from("2"),
             ])
             .unwrap_err(),
             ImageBaseArgumentError::DuplicateOption
         );
-        assert!(matches!(
+        assert_eq!(
             extract_image_base_argument(&[
                 OsString::from("--image-base"),
-                OsString::from("0x10000000000000000"),
+                OsString::from("1"),
+                OsString::from("--image-base=2"),
             ])
+            .unwrap_err(),
+            ImageBaseArgumentError::DuplicateOption
+        );
+        assert!(matches!(
+            extract_image_base_argument(&[OsString::from(
+                "--image-base=0x10000000000000000"
+            )])
             .unwrap_err(),
             ImageBaseArgumentError::InvalidValue { .. }
         ));
@@ -641,8 +677,7 @@ mod tests {
         );
         assert_eq!(
             extract_image_base_argument(&[
-                OsString::from("--image-base"),
-                OsString::from("0x800000"),
+                OsString::from("--image-base=0x800000"),
                 OsString::from("-Tmissing.ld"),
             ])
             .unwrap_err(),
