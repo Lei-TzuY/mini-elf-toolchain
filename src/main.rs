@@ -461,7 +461,7 @@ fn checked_total(total: usize, addend: usize, kind: &str) -> Result<usize, CliEr
 
 #[cfg(test)]
 mod tests {
-    use super::{run, CliError, USAGE};
+    use super::{run, CliError, DEFAULT_IMAGE_BASE, USAGE};
     use std::ffi::OsString;
 
     #[test]
@@ -580,7 +580,9 @@ mod tests {
         ];
         assert_eq!(
             run(missing.into_iter()),
-            Err(CliError::Usage("missing address after --image-base".to_owned()))
+            Err(CliError::Usage(
+                "missing address after --image-base".to_owned()
+            ))
         );
 
         let overflow = [
@@ -591,7 +593,9 @@ mod tests {
             OsString::from("0x10000000000000000"),
             OsString::from("input.o"),
         ];
-        assert!(matches!(run(overflow.into_iter()), Err(CliError::Usage(message)) if message.contains("invalid image base")));
+        assert!(
+            matches!(run(overflow.into_iter()), Err(CliError::Usage(message)) if message.contains("invalid image base"))
+        );
 
         let duplicate = [
             OsString::from("link"),
