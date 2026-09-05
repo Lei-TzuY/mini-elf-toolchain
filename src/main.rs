@@ -3,6 +3,9 @@ use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::forced_undefined::{
     extract_forced_undefined_arguments, ForcedUndefinedArgumentError,
 };
+use mini_elf_toolchain::image_base::{
+    extract_image_base_argument, ImageBaseArgumentError, DEFAULT_IMAGE_BASE,
+};
 use mini_elf_toolchain::input_object::RelocatableObject;
 use mini_elf_toolchain::library_search::{resolve_static_library_arguments, LibrarySearchError};
 use mini_elf_toolchain::ordered_inputs::{
@@ -14,7 +17,6 @@ use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
-const DEFAULT_START_ADDRESS: u64 = 0x400000;
 const DEFAULT_PAGE_ALIGNMENT: u64 = 0x1000;
 const DEFAULT_ENTRY_SYMBOL: &str = "_start";
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
@@ -23,7 +25,7 @@ const END_GROUP: &str = "--end-group";
 const WHOLE_ARCHIVE: &str = "--whole-archive";
 const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -93,7 +95,9 @@ where
         let raw_remaining: Vec<_> = args.collect();
         let forced =
             extract_forced_undefined_arguments(&raw_remaining).map_err(forced_undefined_error)?;
-        let mut remaining = forced.arguments;
+        let image_base =
+            extract_image_base_argument(&forced.arguments).map_err(image_base_error)?;
+        let mut remaining = image_base.arguments;
         let mut map_output = None;
         let mut entry_symbol = OsString::from(DEFAULT_ENTRY_SYMBOL);
         let mut entry_seen = false;
@@ -137,6 +141,7 @@ where
             &output,
             map_output.as_ref(),
             &entry_symbol,
+            image_base.image_base,
             &forced.symbols,
             &remaining,
         );
@@ -149,6 +154,10 @@ where
 }
 
 fn forced_undefined_error(error: ForcedUndefinedArgumentError) -> CliError {
+    CliError::Usage(error.to_string())
+}
+
+fn image_base_error(error: ImageBaseArgumentError) -> CliError {
     CliError::Usage(error.to_string())
 }
 
@@ -240,6 +249,7 @@ fn link_files(
     output: &OsString,
     map_output: Option<&OsString>,
     entry_symbol: &OsString,
+    image_base: u64,
     forced_undefined: &[Vec<u8>],
     paths: &[OsString],
 ) -> Result<String, CliError> {
@@ -272,7 +282,7 @@ fn link_files(
 
     let linked = link_static_executable_with_map(
         &prepared.objects,
-        DEFAULT_START_ADDRESS,
+        image_base,
         DEFAULT_PAGE_ALIGNMENT,
         entry_symbol.as_bytes(),
     )
@@ -561,6 +571,45 @@ mod tests {
     }
 
     #[test]
+    fn link_image_base_requires_valid_single_value_before_io() {
+        let missing = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--image-base"),
+        ];
+        assert_eq!(
+            run(missing.into_iter()),
+            Err(CliError::Usage("missing address after --image-base".to_owned()))
+        );
+
+        let overflow = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--image-base"),
+            OsString::from("0x10000000000000000"),
+            OsString::from("input.o"),
+        ];
+        assert!(matches!(run(overflow.into_iter()), Err(CliError::Usage(message)) if message.contains("invalid image base")));
+
+        let duplicate = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--image-base"),
+            OsString::from("0x400000"),
+            OsString::from("--image-base"),
+            OsString::from("0x800000"),
+            OsString::from("input.o"),
+        ];
+        assert_eq!(
+            run(duplicate.into_iter()),
+            Err(CliError::Usage("duplicate --image-base option".to_owned()))
+        );
+    }
+
+    #[test]
     fn link_library_options_require_values_before_io() {
         let missing_path = [
             OsString::from("link"),
@@ -693,5 +742,10 @@ mod tests {
                 "nested --start-group is not supported".to_owned()
             ))
         );
+    }
+
+    #[test]
+    fn default_image_base_constant_matches_cli_default() {
+        assert_eq!(DEFAULT_IMAGE_BASE, 0x400000);
     }
 }
