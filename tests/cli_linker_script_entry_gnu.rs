@@ -46,7 +46,7 @@ fn read_entry(dir: &std::path::Path, output: &str) -> String {
 }
 
 #[test]
-fn linker_script_entry_matches_gnu_and_cli_entry_overrides_it() {
+fn linker_script_entry_matches_gnu_and_cli_entry_equals_overrides_it() {
     if !have_gnu_toolchain() {
         return;
     }
@@ -117,8 +117,7 @@ fn linker_script_entry_matches_gnu_and_cli_entry_overrides_it() {
             "link",
             "-o",
             "override.out",
-            "--entry",
-            "_start",
+            "--entry=_start",
             "-T",
             "entry.ld",
             "start.o",
@@ -136,15 +135,18 @@ fn linker_script_entry_matches_gnu_and_cli_entry_overrides_it() {
         .args([
             "-o",
             "gnu-override.out",
-            "-e",
-            "_start",
+            "--entry=_start",
             "-T",
             "entry.ld",
             "start.o",
         ])
         .output()
         .expect("run GNU ld with CLI entry override");
-    assert!(gnu_override.status.success());
+    assert!(
+        gnu_override.status.success(),
+        "GNU ld equals-form entry override failed: {}",
+        String::from_utf8_lossy(&gnu_override.stderr)
+    );
     assert_eq!(read_entry(&dir, "override.out"), "0x800000");
     assert_eq!(read_entry(&dir, "gnu-override.out"), "0x800000");
 
@@ -155,6 +157,32 @@ fn linker_script_entry_matches_gnu_and_cli_entry_overrides_it() {
             .expect("execute CLI-overridden output");
         assert_eq!(status.code(), Some(1));
     }
+
+    let empty = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .current_dir(&dir)
+        .args(["link", "-o", "empty.out", "--entry=", "missing.o"])
+        .output()
+        .expect("run mini linker with empty equals-form entry");
+    assert!(!empty.status.success());
+    assert!(String::from_utf8_lossy(&empty.stderr).contains("entry symbol cannot be empty"));
+    assert!(!dir.join("empty.out").exists());
+
+    let duplicate = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .current_dir(&dir)
+        .args([
+            "link",
+            "-o",
+            "duplicate.out",
+            "--entry=_start",
+            "--entry",
+            "custom_entry",
+            "missing.o",
+        ])
+        .output()
+        .expect("run mini linker with duplicate entry forms");
+    assert!(!duplicate.status.success());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("duplicate --entry option"));
+    assert!(!dir.join("duplicate.out").exists());
 
     let invalid = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .current_dir(&dir)
