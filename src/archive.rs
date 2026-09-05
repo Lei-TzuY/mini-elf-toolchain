@@ -61,8 +61,16 @@ pub enum ArchiveError {
     EmptyMemberName {
         offset: usize,
     },
-    UnsupportedBsdExtendedName {
+    InvalidBsdExtendedNameLength {
         offset: usize,
+    },
+    BsdExtendedNameLengthOverflow {
+        offset: usize,
+    },
+    BsdExtendedNameOutOfBounds {
+        offset: usize,
+        name_len: usize,
+        member_size: usize,
     },
     InvalidLongNameOffset {
         offset: usize,
@@ -92,7 +100,7 @@ impl fmt::Display for ArchiveError {
         match self {
             Self::BadMagic => write!(
                 f,
-                "invalid archive magic; expected System V/GNU ar archive"
+                "invalid archive magic; expected System V/GNU or BSD ar archive"
             ),
             Self::TruncatedHeader { offset, available } => write!(
                 f,
@@ -124,9 +132,21 @@ impl fmt::Display for ArchiveError {
             Self::EmptyMemberName { offset } => {
                 write!(f, "empty archive member name at offset {offset}")
             }
-            Self::UnsupportedBsdExtendedName { offset } => write!(
+            Self::InvalidBsdExtendedNameLength { offset } => write!(
                 f,
-                "BSD extended archive member names are unsupported at offset {offset}"
+                "invalid BSD extended archive member name length at offset {offset}"
+            ),
+            Self::BsdExtendedNameLengthOverflow { offset } => write!(
+                f,
+                "BSD extended archive member name length overflows usize at offset {offset}"
+            ),
+            Self::BsdExtendedNameOutOfBounds {
+                offset,
+                name_len,
+                member_size,
+            } => write!(
+                f,
+                "BSD extended archive member name length {name_len} at offset {offset} exceeds member size {member_size}"
             ),
             Self::InvalidLongNameOffset { offset } => write!(
                 f,
@@ -244,16 +264,40 @@ impl<'a> Archive<'a> {
         let mut members = Vec::with_capacity(raw_members.len());
         for raw in raw_members {
             let token = trimmed_name_field(raw.name_field);
+            let mut data_offset = raw.data_offset;
+            let mut data = raw.data;
             let (kind, name) = if token == b"/" {
                 (ArchiveMemberKind::SymbolTable, token.to_vec())
             } else if token == b"/SYM64/" {
                 (ArchiveMemberKind::SymbolTable64, token.to_vec())
             } else if token == b"//" {
                 (ArchiveMemberKind::StringTable, token.to_vec())
-            } else if token.starts_with(b"#1/") {
-                return Err(ArchiveError::UnsupportedBsdExtendedName {
-                    offset: raw.header_offset,
-                });
+            } else if let Some(length_field) = token.strip_prefix(b"#1/") {
+                let name_len = parse_bsd_extended_name_length(length_field, raw.header_offset)?;
+                if name_len > raw.data.len() {
+                    return Err(ArchiveError::BsdExtendedNameOutOfBounds {
+                        offset: raw.header_offset,
+                        name_len,
+                        member_size: raw.data.len(),
+                    });
+                }
+                let name_bytes = &raw.data[..name_len];
+                let name_end = name_bytes
+                    .iter()
+                    .rposition(|byte| *byte != 0)
+                    .map_or(0, |index| index + 1);
+                if name_end == 0 {
+                    return Err(ArchiveError::EmptyMemberName {
+                        offset: raw.header_offset,
+                    });
+                }
+                data_offset = raw.data_offset.checked_add(name_len).ok_or(
+                    ArchiveError::MemberRangeOverflow {
+                        offset: raw.header_offset,
+                    },
+                )?;
+                data = &raw.data[name_len..];
+                (ArchiveMemberKind::Ordinary, name_bytes[..name_end].to_vec())
             } else if token.starts_with(b"/") {
                 let string_offset = parse_long_name_offset(&token[1..], raw.header_offset)?;
                 let table = string_table.ok_or(ArchiveError::MissingStringTable {
@@ -270,9 +314,9 @@ impl<'a> Archive<'a> {
                 name,
                 kind,
                 header_offset: raw.header_offset,
-                data_offset: raw.data_offset,
+                data_offset,
                 declared_size: raw.declared_size,
-                data: raw.data,
+                data,
             });
         }
 
@@ -308,6 +352,13 @@ fn parse_decimal_size(field: &[u8], offset: usize) -> Result<usize, ArchiveError
         return Err(ArchiveError::InvalidSize { offset });
     }
     parse_decimal_usize(trimmed).ok_or(ArchiveError::SizeOverflow { offset })
+}
+
+fn parse_bsd_extended_name_length(field: &[u8], offset: usize) -> Result<usize, ArchiveError> {
+    if field.is_empty() || !field.iter().all(u8::is_ascii_digit) {
+        return Err(ArchiveError::InvalidBsdExtendedNameLength { offset });
+    }
+    parse_decimal_usize(field).ok_or(ArchiveError::BsdExtendedNameLengthOverflow { offset })
 }
 
 fn parse_long_name_offset(field: &[u8], offset: usize) -> Result<usize, ArchiveError> {

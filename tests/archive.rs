@@ -173,12 +173,44 @@ fn rejects_unterminated_long_names_and_duplicate_string_tables() {
 }
 
 #[test]
-fn rejects_bsd_extended_names_in_this_bounded_parser() {
+fn parses_bsd_extended_name_and_exposes_object_payload() {
     let mut bytes = b"!<arch>\n".to_vec();
     append_member(&mut bytes, "#1/8", b"name.o\0\0payload");
 
+    let archive = Archive::parse(&bytes).expect("valid BSD extended member");
+    let member = &archive.members[0];
+    assert_eq!(member.kind, ArchiveMemberKind::Ordinary);
+    assert_eq!(member.name, b"name.o");
+    assert_eq!(member.header_offset, 8);
+    assert_eq!(member.data_offset, 76);
+    assert_eq!(member.declared_size, 15);
+    assert_eq!(member.data, b"payload");
+}
+
+#[test]
+fn rejects_malformed_bsd_extended_name_lengths() {
+    let mut invalid = b"!<arch>\n".to_vec();
+    append_member(&mut invalid, "#1/x", b"payload");
     assert_eq!(
-        Archive::parse(&bytes),
-        Err(ArchiveError::UnsupportedBsdExtendedName { offset: 8 })
+        Archive::parse(&invalid),
+        Err(ArchiveError::InvalidBsdExtendedNameLength { offset: 8 })
+    );
+
+    let mut out_of_bounds = b"!<arch>\n".to_vec();
+    append_member(&mut out_of_bounds, "#1/9", b"short");
+    assert_eq!(
+        Archive::parse(&out_of_bounds),
+        Err(ArchiveError::BsdExtendedNameOutOfBounds {
+            offset: 8,
+            name_len: 9,
+            member_size: 5,
+        })
+    );
+
+    let mut empty = b"!<arch>\n".to_vec();
+    append_member(&mut empty, "#1/2", b"\0\0payload");
+    assert_eq!(
+        Archive::parse(&empty),
+        Err(ArchiveError::EmptyMemberName { offset: 8 })
     );
 }
