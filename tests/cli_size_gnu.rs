@@ -45,7 +45,9 @@ fn contains_size_payload(bytes: &[u8], size: u64) -> bool {
     let mut expected = Vec::new();
     expected.extend_from_slice(&(size as u32).to_le_bytes());
     expected.extend_from_slice(&size.to_le_bytes());
-    bytes.windows(expected.len()).any(|window| window == expected)
+    bytes
+        .windows(expected.len())
+        .any(|window| window == expected)
 }
 
 #[test]
@@ -109,14 +111,19 @@ fn cli_links_gnu_size32_and_size64_against_resolved_definition_size() {
         .output()
         .expect("run GNU readelf on linked output");
     assert!(header.status.success());
-    assert!(String::from_utf8_lossy(&header.stdout).contains("Type:                              EXEC"));
+    assert!(
+        String::from_utf8_lossy(&header.stdout).contains("Type:                              EXEC")
+    );
 
     #[cfg(target_os = "linux")]
     {
         let status = Command::new(dir.join("ours.out"))
             .status()
             .expect("execute linked static ELF");
-        assert!(status.success(), "SIZE-relocation executable returned {status}");
+        assert!(
+            status.success(),
+            "SIZE-relocation executable returned {status}"
+        );
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
