@@ -248,7 +248,10 @@ mod tests {
 
     #[test]
     fn parses_bounded_linker_script_grammar() {
-        assert_eq!(parse_linker_script("SECTIONS { . = 0x800000; }").unwrap(), 0x800000);
+        assert_eq!(
+            parse_linker_script("SECTIONS { . = 0x800000; }").unwrap(),
+            0x800000
+        );
         assert_eq!(
             parse_linker_script("\nSECTIONS\n{\n. = 8388608 ;\n}\n").unwrap(),
             0x800000
