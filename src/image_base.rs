@@ -198,8 +198,10 @@ fn parse_linker_script_file(path: &Path) -> Result<LinkerScriptConfig, ImageBase
 fn parse_linker_script(text: &str) -> Result<u64, String> {
     parse_linker_script_config(text).map(|config| config.image_base)
 }
+
 fn parse_linker_script_config(text: &str) -> Result<LinkerScriptConfig, String> {
-    let mut rest = text.trim_start();
+    let stripped = strip_linker_script_comments(text)?;
+    let mut rest = stripped.trim_start();
     let entry_symbol = if rest.starts_with("ENTRY") {
         let (entry_symbol, remaining) = parse_entry_directive(rest)?;
         rest = remaining;
@@ -233,6 +235,24 @@ fn parse_linker_script_config(text: &str) -> Result<LinkerScriptConfig, String> 
         image_base,
         entry_symbol,
     })
+}
+
+fn strip_linker_script_comments(text: &str) -> Result<String, String> {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+
+    while let Some(comment_start) = rest.find("/*") {
+        output.push_str(&rest[..comment_start]);
+        let after_start = &rest[comment_start + 2..];
+        let comment_end = after_start
+            .find("*/")
+            .ok_or_else(|| "unterminated linker-script comment".to_owned())?;
+        output.push(' ');
+        rest = &after_start[comment_end + 2..];
+    }
+
+    output.push_str(rest);
+    Ok(output)
 }
 
 fn parse_entry_directive(mut rest: &str) -> Result<(String, &str), String> {
@@ -441,6 +461,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_c_style_comments_as_whitespace() {
+        let parsed = parse_linker_script_config(
+            "/* file header */ ENTRY(/* before */ custom_entry /* after */)\nSECTIONS { /* base */ . = 0x900000; /* output */ .text : { *(/* selector */ .text .text.*) } } /* tail */",
+        )
+        .unwrap();
+        assert_eq!(parsed.image_base, 0x900000);
+        assert_eq!(parsed.entry_symbol.as_deref(), Some("custom_entry"));
+    }
+
+    #[test]
     fn parses_bounded_entry_directive_before_sections() {
         let parsed = parse_linker_script_config(
             "ENTRY(custom_entry)\nSECTIONS { .text 0x900000 : { *(.text) } }",
@@ -460,6 +490,8 @@ mod tests {
     #[test]
     fn rejects_malformed_and_overflowing_linker_scripts() {
         for script in [
+            "/* unterminated",
+            "SECTIONS { . = 0x800000; /* unterminated }",
             "SECTIONS { }",
             "SECTIONS { . = ; }",
             "SECTIONS { . = 0x10000000000000000; }",
