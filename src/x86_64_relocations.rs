@@ -15,6 +15,15 @@ pub const R_X86_64_PC8: u32 = 15;
 pub const R_X86_64_PC64: u32 = 24;
 pub const R_X86_64_SIZE32: u32 = 32;
 pub const R_X86_64_SIZE64: u32 = 33;
+pub const R_X86_64_GOTPCRELX: u32 = 41;
+pub const R_X86_64_REX_GOTPCRELX: u32 = 42;
+
+pub fn is_static_gotpcrel_type(relocation_type: u32) -> bool {
+    matches!(
+        relocation_type,
+        R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
+    )
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RelocationValue {
@@ -163,7 +172,11 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Unsigned64OutOfRange { value })?;
             Ok(RelocationValue::U64(value))
         }
-        R_X86_64_PC32 | R_X86_64_PLT32 | R_X86_64_GOTPCREL => {
+        R_X86_64_PC32
+        | R_X86_64_PLT32
+        | R_X86_64_GOTPCREL
+        | R_X86_64_GOTPCRELX
+        | R_X86_64_REX_GOTPCRELX => {
             let value = symbol_value + addend - place;
             let value = i32::try_from(value)
                 .map_err(|_| RelocationEvaluationError::Signed32OutOfRange { value })?;
