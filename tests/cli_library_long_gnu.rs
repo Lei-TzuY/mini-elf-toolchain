@@ -35,7 +35,7 @@ fn assemble(dir: &Path, name: &str, source: &str) -> PathBuf {
 }
 
 #[test]
-fn library_long_equals_matches_gnu_archive_search_and_executes() {
+fn library_long_forms_match_gnu_archive_search_and_execute() {
     if !["as", "ar", "ld", "nm", "readelf"]
         .into_iter()
         .all(command_available)
@@ -70,10 +70,11 @@ fn library_long_equals_matches_gnu_archive_search_and_executes() {
     let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
         .arg(&ours)
-        .arg("-L")
+        .arg("--library-path")
         .arg(&lib_dir)
         .arg(&start)
-        .arg("--library=helper")
+        .arg("--library")
+        .arg("helper")
         .output()
         .expect("run mini-elf-toolchain link");
     assert!(
@@ -86,10 +87,11 @@ fn library_long_equals_matches_gnu_archive_search_and_executes() {
     let gnu_link = Command::new("ld")
         .args(["-o"])
         .arg(&gnu)
-        .arg("-L")
+        .arg("--library-path")
         .arg(&lib_dir)
         .arg(&start)
-        .arg("--library=helper")
+        .arg("--library")
+        .arg("helper")
         .output()
         .expect("run GNU ld");
     assert!(
@@ -123,19 +125,27 @@ fn library_long_equals_matches_gnu_archive_search_and_executes() {
         }
     }
 
-    let empty_output = dir.join("empty-name");
-    let empty = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+    let missing_path_output = dir.join("missing-path");
+    let missing_path = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
-        .arg(&empty_output)
-        .arg("-L")
-        .arg(&lib_dir)
-        .arg("--library=")
-        .arg(&start)
+        .arg(&missing_path_output)
+        .arg("--library-path")
         .output()
-        .expect("run empty --library test");
-    assert!(!empty.status.success());
-    assert!(!empty_output.exists());
-    assert!(String::from_utf8_lossy(&empty.stderr).contains("library name cannot be empty"));
+        .expect("run missing --library-path test");
+    assert!(!missing_path.status.success());
+    assert!(!missing_path_output.exists());
+    assert!(String::from_utf8_lossy(&missing_path.stderr).contains("missing directory after -L"));
+
+    let missing_name_output = dir.join("missing-name");
+    let missing_name = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&missing_name_output)
+        .arg("--library")
+        .output()
+        .expect("run missing --library test");
+    assert!(!missing_name.status.success());
+    assert!(!missing_name_output.exists());
+    assert!(String::from_utf8_lossy(&missing_name.stderr).contains("missing library name after -l"));
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
 }

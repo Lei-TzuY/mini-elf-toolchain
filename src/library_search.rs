@@ -84,7 +84,7 @@ pub fn resolve_static_library_arguments(
 
     while index < arguments.len() {
         let argument = &arguments[index];
-        if argument == "-L" {
+        if argument == "-L" || argument == "--library-path" {
             let path = arguments
                 .get(index + 1)
                 .ok_or(LibrarySearchError::MissingSearchPath)?;
@@ -102,7 +102,7 @@ pub fn resolve_static_library_arguments(
             index += 1;
             continue;
         }
-        if argument == "-l" {
+        if argument == "-l" || argument == "--library" {
             let name = arguments
                 .get(index + 1)
                 .ok_or(LibrarySearchError::MissingLibraryName)?;
@@ -254,6 +254,30 @@ mod tests {
     }
 
     #[test]
+    fn resolves_split_long_search_path_and_library_in_place() {
+        let directory = temp_dir();
+        fs::write(directory.join("libhelper.a"), b"archive").expect("write helper");
+        let arguments = vec![
+            OsString::from("root.o"),
+            OsString::from("--library-path"),
+            directory.as_os_str().to_os_string(),
+            OsString::from("--library"),
+            OsString::from("helper"),
+        ];
+
+        let resolved =
+            resolve_static_library_arguments(&arguments).expect("resolve split long forms");
+        assert_eq!(
+            resolved,
+            vec![
+                OsString::from("root.o"),
+                directory.join("libhelper.a").into_os_string(),
+            ]
+        );
+        fs::remove_dir_all(directory).expect("remove temp directory");
+    }
+
+    #[test]
     fn resolves_exact_filename_library_forms_in_place() {
         let directory = temp_dir();
         fs::write(directory.join("custom-name.a"), b"archive").expect("write exact archive");
@@ -303,6 +327,30 @@ mod tests {
     }
 
     #[test]
+    fn resolves_split_long_exact_filename_in_place() {
+        let directory = temp_dir();
+        fs::write(directory.join("custom-name.a"), b"archive").expect("write exact archive");
+        let arguments = vec![
+            OsString::from("root.o"),
+            OsString::from("--library-path"),
+            directory.as_os_str().to_os_string(),
+            OsString::from("--library"),
+            OsString::from(":custom-name.a"),
+        ];
+
+        let resolved =
+            resolve_static_library_arguments(&arguments).expect("resolve split long exact library");
+        assert_eq!(
+            resolved,
+            vec![
+                OsString::from("root.o"),
+                directory.join("custom-name.a").into_os_string(),
+            ]
+        );
+        fs::remove_dir_all(directory).expect("remove temp directory");
+    }
+
+    #[test]
     fn rejects_missing_library_with_search_context() {
         let directory = temp_dir();
         let error = resolve_static_library_arguments(&[
@@ -339,12 +387,28 @@ mod tests {
             Err(LibrarySearchError::MissingSearchPath)
         ));
         assert!(matches!(
+            resolve_static_library_arguments(&[OsString::from("--library-path")]),
+            Err(LibrarySearchError::MissingSearchPath)
+        ));
+        assert!(matches!(
+            resolve_static_library_arguments(&[OsString::from("--library-path"), OsString::new(),]),
+            Err(LibrarySearchError::EmptySearchPath)
+        ));
+        assert!(matches!(
             resolve_static_library_arguments(&[OsString::from("--library-path=")]),
             Err(LibrarySearchError::EmptySearchPath)
         ));
         assert!(matches!(
             resolve_static_library_arguments(&[OsString::from("-l")]),
             Err(LibrarySearchError::MissingLibraryName)
+        ));
+        assert!(matches!(
+            resolve_static_library_arguments(&[OsString::from("--library")]),
+            Err(LibrarySearchError::MissingLibraryName)
+        ));
+        assert!(matches!(
+            resolve_static_library_arguments(&[OsString::from("--library"), OsString::new()]),
+            Err(LibrarySearchError::EmptyLibraryName)
         ));
         assert!(matches!(
             resolve_static_library_arguments(&[OsString::from("-l:")]),
