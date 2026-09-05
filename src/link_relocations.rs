@@ -6,7 +6,9 @@ use crate::rela_apply::{apply_rela_table_with_values, RelaTableApplyError};
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{NamedSymbol, SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
-use crate::x86_64_relocations::{R_X86_64_GOTPCREL, R_X86_64_SIZE32, R_X86_64_SIZE64};
+use crate::x86_64_relocations::{
+    is_static_gotpcrel_type, R_X86_64_SIZE32, R_X86_64_SIZE64,
+};
 
 const R_X86_64_NONE: u32 = 0;
 
@@ -288,7 +290,7 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
             || relocation.relocation_type == R_X86_64_SIZE64
         {
             Some(values.size)
-        } else if relocation.relocation_type == R_X86_64_GOTPCREL {
+        } else if is_static_gotpcrel_type(relocation.relocation_type) {
             let symbol = symbols.iter().find(|symbol| {
                 symbol.table_section_index == table.symbol_table_index
                     && symbol.symbol_index == relocation.symbol_index as usize
@@ -305,7 +307,7 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
         } = &source
         {
             if let Some(relocation) = table.relocations.get(*relocation_index) {
-                if relocation.relocation_type == R_X86_64_GOTPCREL {
+                if is_static_gotpcrel_type(relocation.relocation_type) {
                     if let Some(symbol) = symbols.iter().find(|symbol| {
                         symbol.table_section_index == table.symbol_table_index
                             && symbol.symbol_index == *symbol_index as usize
