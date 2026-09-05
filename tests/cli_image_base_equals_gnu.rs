@@ -52,7 +52,13 @@ fn image_base_equals_matches_gnu_and_rejects_malformed_values_before_output() {
 
     let custom = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .current_dir(&dir)
-        .args(["link", "-o", "custom.out", "--image-base=0x800000", "start.o"])
+        .args([
+            "link",
+            "-o",
+            "custom.out",
+            "--image-base=0x800000",
+            "start.o",
+        ])
         .output()
         .expect("run mini linker");
     assert!(

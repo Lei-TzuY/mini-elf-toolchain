@@ -642,10 +642,8 @@ mod tests {
             ImageBaseArgumentError::DuplicateOption
         );
         assert!(matches!(
-            extract_image_base_argument(&[OsString::from(
-                "--image-base=0x10000000000000000"
-            )])
-            .unwrap_err(),
+            extract_image_base_argument(&[OsString::from("--image-base=0x10000000000000000")])
+                .unwrap_err(),
             ImageBaseArgumentError::InvalidValue { .. }
         ));
     }
