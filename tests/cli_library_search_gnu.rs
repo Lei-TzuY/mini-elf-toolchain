@@ -163,3 +163,103 @@ fn cli_library_search_preserves_group_order_like_gnu_ld() {
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
 }
+
+#[test]
+fn cli_exact_library_search_matches_gnu_ld() {
+    if !have_gnu_toolchain() {
+        return;
+    }
+
+    let dir = temp_dir();
+    let libs = dir.join("libs");
+    fs::create_dir(&libs).expect("create library directory");
+    assemble(
+        &dir,
+        "start",
+        ".globl _start\n.type _start,@function\n_start:\n  call helper\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n",
+    );
+    assemble(
+        &dir,
+        "helper",
+        ".globl helper\n.type helper,@function\nhelper:\n  ret\n",
+    );
+    archive(&dir, &libs.join("custom-support.a"), &["helper.o"]);
+
+    let search_path = libs.to_str().expect("UTF-8 library path");
+    let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .current_dir(&dir)
+        .args([
+            "link",
+            "-o",
+            "exact.out",
+            "start.o",
+            "-L",
+            search_path,
+            "-l:custom-support.a",
+        ])
+        .output()
+        .expect("run linker with exact library search");
+    assert!(
+        linked.status.success(),
+        "exact library-search link failed: {}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    assert!(String::from_utf8_lossy(&linked.stdout).contains("objects=2"));
+
+    let gnu = Command::new("ld")
+        .current_dir(&dir)
+        .args([
+            "-o",
+            "gnu-exact.out",
+            "start.o",
+            "-L",
+            search_path,
+            "-l:custom-support.a",
+        ])
+        .output()
+        .expect("run GNU ld with exact library search");
+    assert!(
+        gnu.status.success(),
+        "GNU ld exact library-search link failed: {}",
+        String::from_utf8_lossy(&gnu.stderr)
+    );
+
+    let header = Command::new("readelf")
+        .current_dir(&dir)
+        .args(["-hW", "exact.out"])
+        .output()
+        .expect("run GNU readelf");
+    assert!(header.status.success());
+    let stdout = String::from_utf8_lossy(&header.stdout);
+    assert!(stdout.contains("Type:                              EXEC"));
+    assert!(stdout.contains("Entry point address:               0x400000"));
+
+    let missing = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .current_dir(&dir)
+        .args([
+            "link",
+            "-o",
+            "missing-exact.out",
+            "start.o",
+            "-L",
+            search_path,
+            "-l:missing-custom.a",
+        ])
+        .output()
+        .expect("run linker with missing exact library");
+    assert!(!missing.status.success());
+    let stderr = String::from_utf8_lossy(&missing.stderr);
+    assert!(stderr.contains("missing-custom.a"));
+    assert!(!stderr.contains("libmissing-custom.a.a"));
+    assert!(!dir.join("missing-exact.out").exists());
+
+    #[cfg(target_os = "linux")]
+    {
+        let status = Command::new(dir.join("exact.out"))
+            .status()
+            .expect("execute exact-search static ELF");
+        assert!(status.success(), "exact-search executable returned {status}");
+    }
+
+    fs::remove_dir_all(dir).expect("remove temporary test directory");
+}
