@@ -92,6 +92,11 @@ pub fn resolve_static_library_arguments(
             index += 2;
             continue;
         }
+        if let Some(path) = strip_os_prefix(argument, "--library-path=") {
+            add_search_path(&path, &mut search_paths)?;
+            index += 1;
+            continue;
+        }
         if let Some(path) = strip_os_prefix(argument, "-L") {
             add_search_path(&path, &mut search_paths)?;
             index += 1;
@@ -206,11 +211,13 @@ mod tests {
     }
 
     #[test]
-    fn resolves_split_and_joined_library_forms_in_place() {
+    fn resolves_split_joined_and_long_equals_search_paths_in_place() {
         let first = temp_dir();
         let second = temp_dir();
+        let third = temp_dir();
         fs::write(first.join("libfoo.a"), b"archive").expect("write foo");
         fs::write(second.join("libbar.a"), b"archive").expect("write bar");
+        fs::write(third.join("libbaz.a"), b"archive").expect("write baz");
         let arguments = vec![
             OsString::from("root.o"),
             OsString::from("-L"),
@@ -221,6 +228,8 @@ mod tests {
             OsString::from("-l"),
             OsString::from("bar"),
             OsString::from("--no-whole-archive"),
+            OsString::from(format!("--library-path={}", third.display())),
+            OsString::from("-lbaz"),
         ];
         let resolved = resolve_static_library_arguments(&arguments).expect("resolve libraries");
         assert_eq!(
@@ -231,10 +240,12 @@ mod tests {
                 OsString::from("--whole-archive"),
                 second.join("libbar.a").into_os_string(),
                 OsString::from("--no-whole-archive"),
+                third.join("libbaz.a").into_os_string(),
             ]
         );
         fs::remove_dir_all(first).expect("remove first temp directory");
         fs::remove_dir_all(second).expect("remove second temp directory");
+        fs::remove_dir_all(third).expect("remove third temp directory");
     }
 
     #[test]
@@ -298,6 +309,10 @@ mod tests {
         assert!(matches!(
             resolve_static_library_arguments(&[OsString::from("-L")]),
             Err(LibrarySearchError::MissingSearchPath)
+        ));
+        assert!(matches!(
+            resolve_static_library_arguments(&[OsString::from("--library-path=")]),
+            Err(LibrarySearchError::EmptySearchPath)
         ));
         assert!(matches!(
             resolve_static_library_arguments(&[OsString::from("-l")]),
