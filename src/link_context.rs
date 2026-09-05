@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use crate::layout::LaidOutSection;
 use crate::link_relocations::{
     apply_rela_table_with_resolved_symbols_and_definitions, LinkRelocationError,
+    ResolvedGlobalSymbols,
 };
 use crate::link_symbols::ValidatedObject;
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
@@ -159,8 +160,10 @@ impl LinkContext<'_> {
             table,
             object_index,
             symbols,
-            &self.global_addresses,
-            &self.definitions,
+            ResolvedGlobalSymbols {
+                addresses: &self.global_addresses,
+                definitions: &self.definitions,
+            },
             &self.layout,
         )
         .map_err(LinkContextRelocationError::Apply)
