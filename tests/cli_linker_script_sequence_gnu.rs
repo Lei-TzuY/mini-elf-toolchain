@@ -125,7 +125,10 @@ fn location_counter_then_text_section_matches_gnu_ld_and_executes() {
         let status = Command::new(dir.join("sequence.out"))
             .status()
             .expect("execute sequenced-script static ELF");
-        assert!(status.success(), "sequenced-script executable returned {status}");
+        assert!(
+            status.success(),
+            "sequenced-script executable returned {status}"
+        );
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
