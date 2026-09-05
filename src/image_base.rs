@@ -176,7 +176,14 @@ fn parse_linker_script_config(text: &str) -> Result<LinkerScriptConfig, String> 
     let (image_base, remaining) = if trimmed.starts_with(".text") {
         parse_text_output_section(trimmed)?
     } else {
-        parse_location_counter_assignment(trimmed)?
+        let (image_base, remaining) = parse_location_counter_assignment(trimmed)?;
+        let trimmed_remaining = remaining.trim_start();
+        let remaining = if trimmed_remaining.starts_with(".text") {
+            parse_text_output_section_at_current_address(trimmed_remaining)?
+        } else {
+            remaining
+        };
+        (image_base, remaining)
     };
 
     rest = consume_char(remaining, '}')?;
@@ -228,13 +235,24 @@ fn parse_text_output_section(mut rest: &str) -> Result<(u64, &str), String> {
     }
     let (image_base, next) = parse_address_token(rest, &[':'])?;
     rest = consume_char(next, ':')?;
+    rest = parse_text_output_section_body(rest)?;
+    Ok((image_base, rest))
+}
+
+fn parse_text_output_section_at_current_address(mut rest: &str) -> Result<&str, String> {
+    rest = consume_literal(rest, ".text")?;
+    rest = consume_char(rest, ':')?;
+    parse_text_output_section_body(rest)
+}
+
+fn parse_text_output_section_body(mut rest: &str) -> Result<&str, String> {
     rest = consume_char(rest, '{')?;
     rest = consume_char(rest, '*')?;
     rest = consume_char(rest, '(')?;
     rest = consume_literal(rest, ".text")?;
     rest = consume_char(rest, ')')?;
     rest = consume_char(rest, '}')?;
-    Ok((image_base, rest))
+    Ok(rest)
 }
 
 fn parse_address_token<'a>(text: &'a str, terminators: &[char]) -> Result<(u64, &'a str), String> {
@@ -359,6 +377,14 @@ mod tests {
             parse_linker_script("\nSECTIONS {\n.text 9437184 :\n{ *( .text ) }\n}\n").unwrap(),
             0x900000
         );
+        assert_eq!(
+            parse_linker_script("SECTIONS { . = 0x900000; .text : { *(.text) } }").unwrap(),
+            0x900000
+        );
+        assert_eq!(
+            parse_linker_script("SECTIONS { . = 9437184 ;\n.text:\n{ *( .text ) } }").unwrap(),
+            0x900000
+        );
     }
 
     #[test]
@@ -369,6 +395,13 @@ mod tests {
         .unwrap();
         assert_eq!(parsed.image_base, 0x900000);
         assert_eq!(parsed.entry_symbol.as_deref(), Some("custom_entry"));
+
+        let sequenced = parse_linker_script_config(
+            "ENTRY(custom_entry)\nSECTIONS { . = 0x900000; .text : { *(.text) } }",
+        )
+        .unwrap();
+        assert_eq!(sequenced.image_base, 0x900000);
+        assert_eq!(sequenced.entry_symbol.as_deref(), Some("custom_entry"));
     }
 
     #[test]
@@ -378,6 +411,8 @@ mod tests {
             "SECTIONS { . = ; }",
             "SECTIONS { . = 0x10000000000000000; }",
             "SECTIONS { . = 0x800000; .text : {} }",
+            "SECTIONS { . = 0x800000; .text : { *(.rodata) } }",
+            "SECTIONS { . = 0x800000; .text : { *(.text) } .data : { *(.data) } }",
             "ENTRY() SECTIONS { . = 0x800000; }",
             "ENTRY(two words) SECTIONS { . = 0x800000; }",
             "ENTRY(one) ENTRY(two) SECTIONS { . = 0x800000; }",
