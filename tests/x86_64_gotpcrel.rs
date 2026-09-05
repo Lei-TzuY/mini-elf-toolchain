@@ -22,12 +22,8 @@ fn relocation(relocation_type: u32, offset: u64, addend: i64) -> Elf64Rela {
 #[test]
 fn gotpcrel_family_uses_got_entry_address_minus_place() {
     for relocation_type in GOT_RELOCATION_TYPES {
-        let value = evaluate_relocation(
-            &relocation(relocation_type, 0, -4),
-            0x402000,
-            0x400003,
-        )
-        .unwrap();
+        let value =
+            evaluate_relocation(&relocation(relocation_type, 0, -4), 0x402000, 0x400003).unwrap();
         assert_eq!(value, RelocationValue::I32(0x1ff9));
     }
 }
@@ -35,8 +31,8 @@ fn gotpcrel_family_uses_got_entry_address_minus_place() {
 #[test]
 fn gotpcrel_family_rejects_signed_32_bit_overflow() {
     for relocation_type in GOT_RELOCATION_TYPES {
-        let error = evaluate_relocation(&relocation(relocation_type, 0, 0), u64::MAX, 0)
-            .unwrap_err();
+        let error =
+            evaluate_relocation(&relocation(relocation_type, 0, 0), u64::MAX, 0).unwrap_err();
         assert!(matches!(
             error,
             RelocationEvaluationError::Signed32OutOfRange { .. }
