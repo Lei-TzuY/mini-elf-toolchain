@@ -3,16 +3,23 @@ name: Format Diff
 on:
   push:
 
+permissions:
+  contents: write
+
 jobs:
   format-diff:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: bil-108-text-wildcard-selector
       - uses: dtolnay/rust-toolchain@stable
       - run: |
           cargo fmt --all
-          git diff > fmt.patch
-      - uses: actions/upload-artifact@v4
-        with:
-          name: fmt-patch
-          path: fmt.patch
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add src/image_base.rs tests/cli_linker_script_text_wildcard_gnu.rs
+            git commit -m "Apply stable rustfmt"
+            git push origin HEAD:bil-108-text-wildcard-selector
+          fi
