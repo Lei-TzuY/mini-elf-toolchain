@@ -1,5 +1,7 @@
 use core::fmt;
 use std::ffi::OsString;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 pub const DEFAULT_IMAGE_BASE: u64 = 0x400000;
 
@@ -16,6 +18,13 @@ pub enum ImageBaseArgumentError {
     DuplicateOption,
     NonUtf8Value,
     InvalidValue { value: String },
+    MissingScriptPath,
+    EmptyScriptPath,
+    DuplicateScriptOption,
+    ConflictingSources,
+    ReadScript { path: PathBuf, message: String },
+    NonUtf8Script { path: PathBuf },
+    InvalidScript { path: PathBuf, message: String },
 }
 
 impl fmt::Display for ImageBaseArgumentError {
@@ -29,6 +38,26 @@ impl fmt::Display for ImageBaseArgumentError {
                 f,
                 "invalid image base '{value}'; expected an unsigned 64-bit hexadecimal or decimal address"
             ),
+            Self::MissingScriptPath => write!(f, "missing linker script path after -T/--script"),
+            Self::EmptyScriptPath => write!(f, "linker script path cannot be empty"),
+            Self::DuplicateScriptOption => write!(f, "duplicate -T/--script option"),
+            Self::ConflictingSources => write!(
+                f,
+                "cannot combine --image-base with -T/--script image-base selection"
+            ),
+            Self::ReadScript { path, message } => {
+                write!(f, "cannot read linker script '{}': {message}", path.display())
+            }
+            Self::NonUtf8Script { path } => write!(
+                f,
+                "linker script '{}' must contain UTF-8 text",
+                path.display()
+            ),
+            Self::InvalidScript { path, message } => write!(
+                f,
+                "invalid linker script '{}': {message}",
+                path.display()
+            ),
         }
     }
 }
@@ -40,29 +69,52 @@ pub fn extract_image_base_argument(
 ) -> Result<ImageBaseArguments, ImageBaseArgumentError> {
     let mut remaining = Vec::with_capacity(arguments.len());
     let mut image_base = DEFAULT_IMAGE_BASE;
-    let mut seen = false;
+    let mut image_base_seen = false;
+    let mut script_seen = false;
     let mut index = 0usize;
 
     while index < arguments.len() {
-        if arguments[index] != "--image-base" {
-            remaining.push(arguments[index].clone());
-            index += 1;
+        if arguments[index] == "--image-base" {
+            if image_base_seen {
+                return Err(ImageBaseArgumentError::DuplicateOption);
+            }
+            if script_seen {
+                return Err(ImageBaseArgumentError::ConflictingSources);
+            }
+            let value = arguments
+                .get(index + 1)
+                .ok_or(ImageBaseArgumentError::MissingValue)?;
+            if value.is_empty() {
+                return Err(ImageBaseArgumentError::EmptyValue);
+            }
+            let text = value.to_str().ok_or(ImageBaseArgumentError::NonUtf8Value)?;
+            image_base = parse_address(text)?;
+            image_base_seen = true;
+            index += 2;
             continue;
         }
 
-        if seen {
-            return Err(ImageBaseArgumentError::DuplicateOption);
+        if arguments[index] == "-T" || arguments[index] == "--script" {
+            if script_seen {
+                return Err(ImageBaseArgumentError::DuplicateScriptOption);
+            }
+            if image_base_seen {
+                return Err(ImageBaseArgumentError::ConflictingSources);
+            }
+            let value = arguments
+                .get(index + 1)
+                .ok_or(ImageBaseArgumentError::MissingScriptPath)?;
+            if value.is_empty() {
+                return Err(ImageBaseArgumentError::EmptyScriptPath);
+            }
+            image_base = parse_linker_script_file(Path::new(value))?;
+            script_seen = true;
+            index += 2;
+            continue;
         }
-        let value = arguments
-            .get(index + 1)
-            .ok_or(ImageBaseArgumentError::MissingValue)?;
-        if value.is_empty() {
-            return Err(ImageBaseArgumentError::EmptyValue);
-        }
-        let text = value.to_str().ok_or(ImageBaseArgumentError::NonUtf8Value)?;
-        image_base = parse_address(text)?;
-        seen = true;
-        index += 2;
+
+        remaining.push(arguments[index].clone());
+        index += 1;
     }
 
     Ok(ImageBaseArguments {
@@ -71,7 +123,68 @@ pub fn extract_image_base_argument(
     })
 }
 
-fn parse_address(text: &str) -> Result<u64, ImageBaseArgumentError> {
+fn parse_linker_script_file(path: &Path) -> Result<u64, ImageBaseArgumentError> {
+    let bytes = fs::read(path).map_err(|error| ImageBaseArgumentError::ReadScript {
+        path: path.to_path_buf(),
+        message: error.to_string(),
+    })?;
+    let text = std::str::from_utf8(&bytes).map_err(|_| ImageBaseArgumentError::NonUtf8Script {
+        path: path.to_path_buf(),
+    })?;
+    parse_linker_script(text).map_err(|message| ImageBaseArgumentError::InvalidScript {
+        path: path.to_path_buf(),
+        message,
+    })
+}
+
+fn parse_linker_script(text: &str) -> Result<u64, String> {
+    let mut rest = text.trim_start();
+    rest = consume_keyword(rest, "SECTIONS")?;
+    rest = consume_char(rest, '{')?;
+    rest = consume_char(rest, '.')?;
+    rest = consume_char(rest, '=')?;
+
+    let trimmed = rest.trim_start();
+    let token_len = trimmed
+        .find(|character: char| character.is_whitespace() || character == ';' || character == '}')
+        .unwrap_or(trimmed.len());
+    if token_len == 0 {
+        return Err("missing location-counter address".to_owned());
+    }
+    let token = &trimmed[..token_len];
+    let image_base = parse_script_address(token)?;
+    rest = &trimmed[token_len..];
+    rest = consume_char(rest, ';')?;
+    rest = consume_char(rest, '}')?;
+    if !rest.trim().is_empty() {
+        return Err("unexpected trailing tokens after SECTIONS block".to_owned());
+    }
+    Ok(image_base)
+}
+
+fn consume_keyword<'a>(text: &'a str, keyword: &str) -> Result<&'a str, String> {
+    let trimmed = text.trim_start();
+    let Some(rest) = trimmed.strip_prefix(keyword) else {
+        return Err(format!("expected '{keyword}'"));
+    };
+    if rest
+        .chars()
+        .next()
+        .is_some_and(|character| !character.is_whitespace() && character != '{')
+    {
+        return Err(format!("expected '{keyword}'"));
+    }
+    Ok(rest)
+}
+
+fn consume_char(text: &str, expected: char) -> Result<&str, String> {
+    let trimmed = text.trim_start();
+    trimmed
+        .strip_prefix(expected)
+        .ok_or_else(|| format!("expected '{expected}'"))
+}
+
+fn parse_script_address(text: &str) -> Result<u64, String> {
     let parsed = if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         if hex.is_empty() {
             None
@@ -81,15 +194,25 @@ fn parse_address(text: &str) -> Result<u64, ImageBaseArgumentError> {
     } else {
         text.parse::<u64>().ok()
     };
+    parsed.ok_or_else(|| {
+        format!(
+            "invalid location-counter address '{text}'; expected an unsigned 64-bit hexadecimal or decimal value"
+        )
+    })
+}
 
-    parsed.ok_or_else(|| ImageBaseArgumentError::InvalidValue {
+fn parse_address(text: &str) -> Result<u64, ImageBaseArgumentError> {
+    parse_script_address(text).map_err(|_| ImageBaseArgumentError::InvalidValue {
         value: text.to_owned(),
     })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_image_base_argument, ImageBaseArgumentError, DEFAULT_IMAGE_BASE};
+    use super::{
+        extract_image_base_argument, parse_linker_script, ImageBaseArgumentError,
+        DEFAULT_IMAGE_BASE,
+    };
     use std::ffi::OsString;
 
     #[test]
@@ -121,6 +244,31 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(decimal.image_base, 0x800000);
+    }
+
+    #[test]
+    fn parses_bounded_linker_script_grammar() {
+        assert_eq!(
+            parse_linker_script("SECTIONS { . = 0x800000; }").unwrap(),
+            0x800000
+        );
+        assert_eq!(
+            parse_linker_script("\nSECTIONS\n{\n. = 8388608 ;\n}\n").unwrap(),
+            0x800000
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_and_overflowing_linker_scripts() {
+        for script in [
+            "SECTIONS { }",
+            "SECTIONS { . = ; }",
+            "SECTIONS { . = 0x10000000000000000; }",
+            "SECTIONS { . = 0x800000; .text : {} }",
+            "ENTRY(_start) SECTIONS { . = 0x800000; }",
+        ] {
+            assert!(parse_linker_script(script).is_err(), "accepted {script:?}");
+        }
     }
 
     #[test]
@@ -156,5 +304,32 @@ mod tests {
             .unwrap_err(),
             ImageBaseArgumentError::InvalidValue { .. }
         ));
+    }
+
+    #[test]
+    fn rejects_duplicate_scripts_and_image_base_conflicts_before_io() {
+        assert_eq!(
+            extract_image_base_argument(&[
+                OsString::from("-T"),
+                OsString::from("one.ld"),
+                OsString::from("--script"),
+                OsString::from("two.ld"),
+            ])
+            .unwrap_err(),
+            ImageBaseArgumentError::ReadScript {
+                path: "one.ld".into(),
+                message: std::fs::read("one.ld").unwrap_err().to_string(),
+            }
+        );
+        assert_eq!(
+            extract_image_base_argument(&[
+                OsString::from("--image-base"),
+                OsString::from("0x800000"),
+                OsString::from("-T"),
+                OsString::from("missing.ld"),
+            ])
+            .unwrap_err(),
+            ImageBaseArgumentError::ConflictingSources
+        );
     }
 }
