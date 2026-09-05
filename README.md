@@ -24,12 +24,14 @@ Archive support includes a checked System V/GNU `ar` parser, validated `/` and `
 
 The bounded relocation set includes absolute and PC-relative 8/16/32/64-bit forms already exercised by the static linker plus `R_X86_64_SIZE32` and `R_X86_64_SIZE64`. SIZE relocations use the resolved definition's ELF `st_size` (`Z`) and apply the ABI `Z + A` formula with checked unsigned-width conversion, so cross-object references do not incorrectly rely on the undefined reference-side symbol metadata.
 
+Global `SHN_COMMON` tentative symbols are merged by maximum size and alignment, with a real strong definition taking precedence. Surviving commons are placed deterministically by symbol name into one synthetic writable `SHT_NOBITS` region, so existing relocation, symbol-address, load-segment, and link-map paths all observe the same final allocation. Common alignment must be a non-zero power of two, and alignment/size arithmetic is checked for overflow.
+
 ## Core roadmap
 
 1. ELF64 header and table-bound validation — complete
 2. Validated section and symbol object model — complete
 3. RELA parsing and x86-64 relocation validation — complete for the bounded relocation set, including `SIZE32`/`SIZE64`
-4. Symbol resolution — complete for the current static-link scope
+4. Symbol resolution — complete for the current static-link scope, including bounded `SHN_COMMON` allocation
 5. Section layout — complete for the current permission-aware layout model
 6. ELF executable emission — complete
 7. CLI, selectable entry symbol, deterministic link map, forced undefined roots, and configurable image base — complete

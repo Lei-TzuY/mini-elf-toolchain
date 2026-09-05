@@ -1,11 +1,17 @@
 use core::fmt;
 
+use crate::elf64::SHT_NOBITS;
 use crate::executable_pipeline::ExecutableSectionInput;
 use crate::layout::LaidOutSection;
 use crate::link_context::{build_link_context, LinkContextBuildError, LinkContextRelocationError};
+use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
 use crate::linker_input::{LinkerInputError, LinkerInputObject};
-use crate::permission_layout::{layout_sections_by_permissions, PermissionLayoutError};
+use crate::load_segments::{SHF_ALLOC, SHF_WRITE};
+use crate::permission_layout::{
+    layout_sections_by_permissions, PermissionLayoutError, PermissionLayoutInput,
+};
 use crate::relocations::Elf64RelaTable;
+use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelocatedSectionImage {
@@ -40,6 +46,7 @@ pub enum RelocatedSectionError {
         object_index: usize,
     },
     Input(LinkerInputError),
+    Symbols(LinkSymbolError),
     Layout(PermissionLayoutError),
     LinkContext(LinkContextBuildError),
     MissingLayout {
@@ -70,6 +77,7 @@ impl fmt::Display for RelocatedSectionError {
                 "link input at position {position} has object index {object_index}; expected canonical index {position}"
             ),
             Self::Input(source) => write!(f, "cannot extract linker input sections: {source}"),
+            Self::Symbols(source) => write!(f, "cannot resolve common symbols: {source}"),
             Self::Layout(source) => write!(f, "cannot lay out linker input sections: {source}"),
             Self::LinkContext(source) => write!(f, "cannot build link context: {source}"),
             Self::MissingLayout {
@@ -104,6 +112,7 @@ impl std::error::Error for RelocatedSectionError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Input(source) => Some(source),
+            Self::Symbols(source) => Some(source),
             Self::Layout(source) => Some(source),
             Self::LinkContext(source) => Some(source),
             Self::Relocation { source, .. } => Some(source),
@@ -137,23 +146,35 @@ pub fn relocate_allocatable_sections(
         );
     }
 
-    let layout = layout_sections_by_permissions(
-        start_address,
-        page_alignment,
-        sections
-            .iter()
-            .map(|section| section.permission_layout_input()),
-    )
-    .map_err(RelocatedSectionError::Layout)?;
-
     let validated_objects = inputs
         .iter()
         .map(LinkerInputObject::validated_object)
         .collect::<Vec<_>>();
+    let common_section = resolve_validated_objects_with_common(&validated_objects)
+        .map_err(RelocatedSectionError::Symbols)?
+        .common_section;
+
+    let mut layout_inputs = sections
+        .iter()
+        .map(|section| section.permission_layout_input())
+        .collect::<Vec<_>>();
+    if let Some(common) = common_section {
+        layout_inputs.push(PermissionLayoutInput {
+            object_index: COMMON_OBJECT_INDEX,
+            section_index: COMMON_SECTION_INDEX,
+            size: common.size,
+            alignment: common.alignment,
+            flags: SHF_ALLOC | SHF_WRITE,
+        });
+    }
+
+    let layout = layout_sections_by_permissions(start_address, page_alignment, layout_inputs)
+        .map_err(RelocatedSectionError::Layout)?;
+
     let context = build_link_context(&validated_objects, &layout)
         .map_err(RelocatedSectionError::LinkContext)?;
 
-    sections
+    let mut relocated = sections
         .into_iter()
         .map(|section| {
             let section_layout =
@@ -193,7 +214,27 @@ pub fn relocate_allocatable_sections(
                 bytes,
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, RelocatedSectionError>>()?;
+
+    if let Some(common) = common_section {
+        let common_layout = matching_layout(&layout, COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX)
+            .ok_or(RelocatedSectionError::MissingLayout {
+                object_index: COMMON_OBJECT_INDEX,
+                section_index: COMMON_SECTION_INDEX,
+            })?;
+        relocated.push(RelocatedSectionImage {
+            object_index: COMMON_OBJECT_INDEX,
+            section_index: COMMON_SECTION_INDEX,
+            section_type: SHT_NOBITS,
+            flags: SHF_ALLOC | SHF_WRITE,
+            address: common_layout.address,
+            size: common.size,
+            alignment: common.alignment,
+            bytes: Vec::new(),
+        });
+    }
+
+    Ok(relocated)
 }
 
 fn matching_layout(
@@ -225,11 +266,11 @@ fn reject_memory_only_relocation(
 mod tests {
     use super::*;
     use crate::elf64::{
-        Elf64Header, Elf64SectionHeader, Elf64Symbol, Elf64SymbolTable, EM_X86_64, SHT_NOBITS,
-        SHT_STRTAB, SHT_SYMTAB,
+        Elf64Header, Elf64SectionHeader, Elf64Symbol, Elf64SymbolTable, EM_X86_64, SHT_STRTAB,
+        SHT_SYMTAB,
     };
     use crate::input_object::{RelocatableObject, ET_REL};
-    use crate::load_segments::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE};
+    use crate::load_segments::{SHF_EXECINSTR, SHF_WRITE};
     use crate::relocations::{Elf64Rela, Elf64RelaTable};
     use crate::x86_64_relocations::R_X86_64_64;
 
