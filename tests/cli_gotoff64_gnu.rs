@@ -55,7 +55,7 @@ fn cli_links_gnu_gotoff64_against_synthetic_got_base() {
     assemble(
         &dir,
         "start",
-        ".globl _start\n.type _start,@function\n.extern anchor\n_start:\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n.section .data\n.align 8\ngotoff_value:\n  .quad anchor@GOTOFF\n",
+        ".globl _start\n.type _start,@function\n.extern anchor\n_start:\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n.section .data\n.align 8\ngotoff_value:\n  .quad 0\n  .reloc gotoff_value, R_X86_64_GOTOFF64, anchor\n",
     );
     assemble(
         &dir,
@@ -109,11 +109,13 @@ fn cli_links_gnu_gotoff64_against_synthetic_got_base() {
     }
 
     #[cfg(target_os = "linux")]
-    for output in ["ours.out", "gnu.out"] {
-        let status = Command::new(dir.join(output))
-            .status()
-            .expect("execute linked GOTOFF64 ELF");
-        assert!(status.success(), "{output} returned {status}");
+    {
+        for output in ["ours.out", "gnu.out"] {
+            let status = Command::new(dir.join(output))
+                .status()
+                .expect("execute linked GOTOFF64 ELF");
+            assert!(status.success(), "{output} returned {status}");
+        }
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
