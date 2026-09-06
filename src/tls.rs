@@ -1,17 +1,26 @@
 use core::fmt;
 
 use crate::elf64::SHT_NOBITS;
+use crate::executable_writer::{ExecutableImage, ExecutableLoadSegment, LoadSegmentPermissions};
 use crate::layout::LaidOutSection;
-use crate::link_context::LinkContext;
-use crate::linker_input::{LinkerInputObject, LinkerInputSection};
+use crate::link_context::{build_link_context, LinkContext, LinkContextBuildError};
+use crate::linker_input::{LinkerInputError, LinkerInputObject, LinkerInputSection};
+use crate::load_segments::SHF_TLS;
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
+use crate::relocated_sections::{relocate_allocatable_sections, RelocatedSectionError, RelocatedSectionImage};
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{SymbolDefinition, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
 
-pub const SHF_TLS: u64 = 0x400;
 pub const R_X86_64_TPOFF32: u32 = 23;
 const STT_TLS: u8 = 6;
+const ELF64_EHDR_SIZE: usize = 64;
+const ELF64_PHDR_SIZE: usize = 56;
+const PT_LOAD: u32 = 1;
+const PT_TLS: u32 = 7;
+const PF_X: u32 = 1;
+const PF_W: u32 = 2;
+const PF_R: u32 = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StaticTlsLayout {
@@ -326,10 +335,7 @@ pub fn apply_tpoff32_relocations(
         object.object_index,
     )
     .map_err(Tpoff32ApplyError::ObjectSymbols)?;
-    let tls_end = tls
-        .base_address
-        .checked_add(tls.memory_size)
-        .unwrap_or(u64::MAX);
+    let tls_end = tls.base_address + tls.memory_size;
 
     for (relocation_index, relocation) in table.relocations.iter().enumerate() {
         if relocation.relocation_type != R_X86_64_TPOFF32 {
@@ -423,6 +429,448 @@ pub fn apply_tpoff32_relocations(
     Ok(())
 }
 
+#[derive(Debug)]
+pub enum StaticTlsRelocationError {
+    Regular(RelocatedSectionError),
+    Input(LinkerInputError),
+    Layout(StaticTlsLayoutError),
+    Context(LinkContextBuildError),
+    MissingTlsLayout {
+        object_index: usize,
+        rela_section_index: u16,
+    },
+    MissingRelocatedTarget {
+        object_index: usize,
+        section_index: u16,
+    },
+    Tpoff32 {
+        object_index: usize,
+        section_index: u16,
+        rela_section_index: u16,
+        source: Tpoff32ApplyError,
+    },
+}
+
+impl fmt::Display for StaticTlsRelocationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Regular(source) => write!(f, "regular relocation failed: {source}"),
+            Self::Input(source) => write!(f, "cannot read TLS input sections: {source}"),
+            Self::Layout(source) => write!(f, "cannot compute static TLS layout: {source}"),
+            Self::Context(source) => write!(f, "cannot build TLS symbol context: {source}"),
+            Self::MissingTlsLayout {
+                object_index,
+                rela_section_index,
+            } => write!(
+                f,
+                "object {object_index} RELA section {rela_section_index} contains TPOFF32 but no static TLS image exists"
+            ),
+            Self::MissingRelocatedTarget {
+                object_index,
+                section_index,
+            } => write!(
+                f,
+                "TLS relocation target object {object_index} section {section_index} was not materialized"
+            ),
+            Self::Tpoff32 {
+                object_index,
+                section_index,
+                rela_section_index,
+                source,
+            } => write!(
+                f,
+                "cannot apply TPOFF32 RELA section {rela_section_index} to object {object_index} section {section_index}: {source}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for StaticTlsRelocationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Regular(source) => Some(source),
+            Self::Input(source) => Some(source),
+            Self::Layout(source) => Some(source),
+            Self::Context(source) => Some(source),
+            Self::Tpoff32 { source, .. } => Some(source),
+            Self::MissingTlsLayout { .. } | Self::MissingRelocatedTarget { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticTlsRelocationOutput {
+    pub sections: Vec<RelocatedSectionImage>,
+    pub tls_layout: Option<StaticTlsLayout>,
+}
+
+pub fn relocate_allocatable_sections_with_static_tls(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+) -> Result<StaticTlsRelocationOutput, StaticTlsRelocationError> {
+    let stripped_inputs = inputs
+        .iter()
+        .map(|input| {
+            let mut object = input.object.clone();
+            for table in &mut object.rela_tables {
+                table
+                    .relocations
+                    .retain(|relocation| relocation.relocation_type != R_X86_64_TPOFF32);
+            }
+            LinkerInputObject {
+                object_index: input.object_index,
+                file: input.file,
+                object,
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut relocated = relocate_allocatable_sections(&stripped_inputs, start_address, page_alignment)
+        .map_err(StaticTlsRelocationError::Regular)?;
+    let layout = relocated
+        .iter()
+        .map(|section| LaidOutSection {
+            object_index: section.object_index,
+            section_index: section.section_index,
+            address: section.address,
+            size: section.size,
+        })
+        .collect::<Vec<_>>();
+    let mut input_sections = Vec::new();
+    for input in inputs {
+        input_sections.extend(
+            input
+                .allocatable_sections()
+                .map_err(StaticTlsRelocationError::Input)?,
+        );
+    }
+    let tls_layout = compute_static_tls_layout(&input_sections, &layout)
+        .map_err(StaticTlsRelocationError::Layout)?;
+
+    let has_tpoff32 = inputs.iter().any(|input| {
+        input.object.rela_tables.iter().any(|table| {
+            table
+                .relocations
+                .iter()
+                .any(|relocation| relocation.relocation_type == R_X86_64_TPOFF32)
+        })
+    });
+    if !has_tpoff32 {
+        return Ok(StaticTlsRelocationOutput {
+            sections: relocated,
+            tls_layout,
+        });
+    }
+
+    let tls = tls_layout.ok_or_else(|| {
+        let (object_index, rela_section_index) = inputs
+            .iter()
+            .flat_map(|input| {
+                input
+                    .object
+                    .rela_tables
+                    .iter()
+                    .filter(|table| {
+                        table
+                            .relocations
+                            .iter()
+                            .any(|relocation| relocation.relocation_type == R_X86_64_TPOFF32)
+                    })
+                    .map(move |table| (input.object_index, table.section_index))
+            })
+            .next()
+            .unwrap_or((0, 0));
+        StaticTlsRelocationError::MissingTlsLayout {
+            object_index,
+            rela_section_index,
+        }
+    })?;
+    let validated_objects = inputs
+        .iter()
+        .map(LinkerInputObject::validated_object)
+        .collect::<Vec<_>>();
+    let context = build_link_context(&validated_objects, &layout)
+        .map_err(StaticTlsRelocationError::Context)?;
+
+    for input in inputs {
+        for table in &input.object.rela_tables {
+            if !table
+                .relocations
+                .iter()
+                .any(|relocation| relocation.relocation_type == R_X86_64_TPOFF32)
+            {
+                continue;
+            }
+            let target = relocated
+                .iter_mut()
+                .find(|section| {
+                    section.object_index == input.object_index
+                        && section.section_index == table.target_section_index
+                })
+                .ok_or(StaticTlsRelocationError::MissingRelocatedTarget {
+                    object_index: input.object_index,
+                    section_index: table.target_section_index,
+                })?;
+            apply_tpoff32_relocations(&mut target.bytes, table, input, &context, tls).map_err(
+                |source| StaticTlsRelocationError::Tpoff32 {
+                    object_index: input.object_index,
+                    section_index: table.target_section_index,
+                    rela_section_index: table.section_index,
+                    source,
+                },
+            )?;
+        }
+    }
+
+    Ok(StaticTlsRelocationOutput {
+        sections: relocated,
+        tls_layout: Some(tls),
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StaticTlsProgramHeaderError {
+    TooManyProgramHeaders,
+    InvalidSegmentAlignment {
+        alignment: u64,
+    },
+    TlsNotContainedInOneLoadSegment,
+    TlsFileRangeOutsideLoadSegment,
+    TlsMemoryRangeOutsideLoadSegment,
+    OffsetOverflow,
+    FileRangeOutOfBounds,
+    FileTooLarge,
+}
+
+impl fmt::Display for StaticTlsProgramHeaderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TooManyProgramHeaders => write!(f, "TLS program header exceeds ELF64 program-header count"),
+            Self::InvalidSegmentAlignment { alignment } => write!(
+                f,
+                "TLS executable segment alignment {alignment} must be a non-zero power of two"
+            ),
+            Self::TlsNotContainedInOneLoadSegment => {
+                write!(f, "static TLS image is not contained in one PT_LOAD segment")
+            }
+            Self::TlsFileRangeOutsideLoadSegment => {
+                write!(f, "static TLS initialization image is outside its PT_LOAD file range")
+            }
+            Self::TlsMemoryRangeOutsideLoadSegment => {
+                write!(f, "static TLS memory image is outside its PT_LOAD memory range")
+            }
+            Self::OffsetOverflow => write!(f, "TLS executable file-offset calculation overflows u64"),
+            Self::FileRangeOutOfBounds => write!(f, "existing PT_LOAD file range is outside executable bytes"),
+            Self::FileTooLarge => write!(f, "TLS executable output cannot be represented in memory"),
+        }
+    }
+}
+
+impl std::error::Error for StaticTlsProgramHeaderError {}
+
+pub fn inject_static_tls_program_header(
+    mut image: ExecutableImage,
+    tls: StaticTlsLayout,
+    segment_alignment: u64,
+) -> Result<ExecutableImage, StaticTlsProgramHeaderError> {
+    if segment_alignment == 0 || !segment_alignment.is_power_of_two() {
+        return Err(StaticTlsProgramHeaderError::InvalidSegmentAlignment {
+            alignment: segment_alignment,
+        });
+    }
+    let program_header_count = image
+        .load_segments
+        .len()
+        .checked_add(1)
+        .ok_or(StaticTlsProgramHeaderError::TooManyProgramHeaders)?;
+    let program_header_count_u16 = u16::try_from(program_header_count)
+        .map_err(|_| StaticTlsProgramHeaderError::TooManyProgramHeaders)?;
+    let metadata_end = u64::try_from(ELF64_EHDR_SIZE)
+        .ok()
+        .and_then(|header| {
+            u64::try_from(ELF64_PHDR_SIZE)
+                .ok()
+                .and_then(|phdr| phdr.checked_mul(program_header_count as u64))
+                .and_then(|size| header.checked_add(size))
+        })
+        .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
+
+    let mut old_segments = image.load_segments.clone();
+    old_segments.sort_by_key(|segment| segment.virtual_address);
+    let mut old_payloads = Vec::with_capacity(old_segments.len());
+    for segment in &old_segments {
+        let end = segment
+            .file_offset
+            .checked_add(segment.file_size)
+            .ok_or(StaticTlsProgramHeaderError::FileRangeOutOfBounds)?;
+        if end > image.bytes.len() as u64 {
+            return Err(StaticTlsProgramHeaderError::FileRangeOutOfBounds);
+        }
+        old_payloads.push(
+            image.bytes[segment.file_offset as usize..end as usize].to_vec(),
+        );
+    }
+
+    let mut new_segments = Vec::with_capacity(old_segments.len());
+    let mut next_file_offset = metadata_end;
+    for segment in &old_segments {
+        let file_offset = first_congruent_offset_at_or_after(
+            next_file_offset,
+            segment.virtual_address,
+            segment_alignment,
+        )?;
+        next_file_offset = file_offset
+            .checked_add(segment.file_size)
+            .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
+        let mut emitted = segment.clone();
+        emitted.file_offset = file_offset;
+        new_segments.push(emitted);
+    }
+
+    let tls_memory_end = tls
+        .base_address
+        .checked_add(tls.memory_size)
+        .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
+    let tls_file_end = tls
+        .base_address
+        .checked_add(tls.file_size)
+        .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
+    let containing_index = new_segments
+        .iter()
+        .position(|segment| {
+            let memory_end = segment
+                .virtual_address
+                .checked_add(segment.memory_size)
+                .unwrap_or(0);
+            tls.base_address >= segment.virtual_address && tls_memory_end <= memory_end
+        })
+        .ok_or(StaticTlsProgramHeaderError::TlsNotContainedInOneLoadSegment)?;
+    let containing = &new_segments[containing_index];
+    if tls_memory_end
+        > containing
+            .virtual_address
+            .checked_add(containing.memory_size)
+            .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?
+    {
+        return Err(StaticTlsProgramHeaderError::TlsMemoryRangeOutsideLoadSegment);
+    }
+    if tls.file_size != 0
+        && tls_file_end
+            > containing
+                .virtual_address
+                .checked_add(containing.file_size)
+                .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?
+    {
+        return Err(StaticTlsProgramHeaderError::TlsFileRangeOutsideLoadSegment);
+    }
+    let tls_file_offset = containing
+        .file_offset
+        .checked_add(tls.base_address - containing.virtual_address)
+        .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
+
+    let file_size = usize::try_from(next_file_offset)
+        .map_err(|_| StaticTlsProgramHeaderError::FileTooLarge)?;
+    let mut bytes = vec![0_u8; file_size];
+    bytes[..ELF64_EHDR_SIZE].copy_from_slice(&image.bytes[..ELF64_EHDR_SIZE]);
+    put_u16(&mut bytes, 56, program_header_count_u16);
+
+    for (index, segment) in new_segments.iter().enumerate() {
+        let start = ELF64_EHDR_SIZE + index * ELF64_PHDR_SIZE;
+        write_load_program_header(
+            &mut bytes[start..start + ELF64_PHDR_SIZE],
+            segment,
+            segment_alignment,
+        );
+    }
+    let tls_header_start = ELF64_EHDR_SIZE + new_segments.len() * ELF64_PHDR_SIZE;
+    write_tls_program_header(
+        &mut bytes[tls_header_start..tls_header_start + ELF64_PHDR_SIZE],
+        tls,
+        tls_file_offset,
+    );
+
+    for ((segment, payload), emitted) in old_segments
+        .iter()
+        .zip(old_payloads.iter())
+        .zip(new_segments.iter())
+    {
+        debug_assert_eq!(segment.file_size as usize, payload.len());
+        let start = emitted.file_offset as usize;
+        let end = start + payload.len();
+        bytes[start..end].copy_from_slice(payload);
+    }
+
+    image.bytes = bytes;
+    image.load_segments = new_segments;
+    if let Some(first) = image.load_segments.first() {
+        image.load_file_offset = first.file_offset;
+        image.load_virtual_address = first.virtual_address;
+        image.load_memory_size = first.memory_size;
+    }
+    Ok(image)
+}
+
+fn first_congruent_offset_at_or_after(
+    minimum: u64,
+    virtual_address: u64,
+    alignment: u64,
+) -> Result<u64, StaticTlsProgramHeaderError> {
+    let mask = alignment - 1;
+    let residue = virtual_address & mask;
+    let minimum_residue = minimum & mask;
+    let delta = residue.wrapping_sub(minimum_residue) & mask;
+    minimum
+        .checked_add(delta)
+        .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)
+}
+
+fn load_flags(permissions: LoadSegmentPermissions) -> u32 {
+    match permissions {
+        LoadSegmentPermissions::ReadOnly => PF_R,
+        LoadSegmentPermissions::ReadExecute => PF_R | PF_X,
+        LoadSegmentPermissions::ReadWrite => PF_R | PF_W,
+    }
+}
+
+fn write_load_program_header(
+    out: &mut [u8],
+    segment: &ExecutableLoadSegment,
+    alignment: u64,
+) {
+    put_u32(out, 0, PT_LOAD);
+    put_u32(out, 4, load_flags(segment.permissions));
+    put_u64(out, 8, segment.file_offset);
+    put_u64(out, 16, segment.virtual_address);
+    put_u64(out, 24, segment.virtual_address);
+    put_u64(out, 32, segment.file_size);
+    put_u64(out, 40, segment.memory_size);
+    put_u64(out, 48, alignment);
+}
+
+fn write_tls_program_header(out: &mut [u8], tls: StaticTlsLayout, file_offset: u64) {
+    put_u32(out, 0, PT_TLS);
+    put_u32(out, 4, PF_R);
+    put_u64(out, 8, file_offset);
+    put_u64(out, 16, tls.base_address);
+    put_u64(out, 24, tls.base_address);
+    put_u64(out, 32, tls.file_size);
+    put_u64(out, 40, tls.memory_size);
+    put_u64(out, 48, tls.alignment);
+}
+
+fn put_u16(out: &mut [u8], offset: usize, value: u16) {
+    out[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u32(out: &mut [u8], offset: usize, value: u32) {
+    out[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn put_u64(out: &mut [u8], offset: usize, value: u64) {
+    out[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
 fn align_up(value: u64, alignment: u64) -> Option<u64> {
     if alignment <= 1 {
         return Some(value);
@@ -434,7 +882,6 @@ fn align_up(value: u64, alignment: u64) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linker_input::LinkerInputSection;
 
     fn section(
         object_index: usize,
