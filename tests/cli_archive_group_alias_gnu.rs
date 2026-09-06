@@ -127,8 +127,10 @@ fn cli_short_archive_group_aliases_rescan_like_gnu_ld() {
             .output()
             .expect("run GNU readelf");
         assert!(header.status.success());
-        assert!(String::from_utf8_lossy(&header.stdout)
-            .contains("Type:                              EXEC"));
+        assert!(
+            String::from_utf8_lossy(&header.stdout)
+                .contains("Type:                              EXEC")
+        );
     }
 
     #[cfg(target_os = "linux")]
