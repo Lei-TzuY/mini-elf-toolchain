@@ -19,6 +19,7 @@ pub const R_X86_64_GOTPC32: u32 = 26;
 pub const R_X86_64_GOT64: u32 = 27;
 pub const R_X86_64_GOTPCREL64: u32 = 28;
 pub const R_X86_64_GOTPC64: u32 = 29;
+pub const R_X86_64_GOTPLT64: u32 = 30;
 pub const R_X86_64_PLTOFF64: u32 = 31;
 pub const R_X86_64_SIZE32: u32 = 32;
 pub const R_X86_64_SIZE64: u32 = 33;
@@ -44,11 +45,16 @@ pub fn is_static_gotoff_type(relocation_type: u32) -> bool {
     matches!(relocation_type, R_X86_64_GOTOFF64 | R_X86_64_PLTOFF64)
 }
 
+pub fn is_static_got_entry_address_type(relocation_type: u32) -> bool {
+    relocation_type == R_X86_64_GOTPLT64
+}
+
 pub fn is_static_got_entry_type(relocation_type: u32) -> bool {
     is_static_got_offset_type(relocation_type)
         || is_static_gotpcrel_type(relocation_type)
         || is_static_got_base_type(relocation_type)
         || is_static_gotoff_type(relocation_type)
+        || is_static_got_entry_address_type(relocation_type)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -192,7 +198,7 @@ pub fn evaluate_relocation(
     let place = i128::from(place);
 
     match relocation.relocation_type {
-        R_X86_64_64 | R_X86_64_GOT64 | R_X86_64_SIZE64 => {
+        R_X86_64_64 | R_X86_64_GOT64 | R_X86_64_GOTPLT64 | R_X86_64_SIZE64 => {
             let value = symbol_value + addend;
             let value = u64::try_from(value)
                 .map_err(|_| RelocationEvaluationError::Unsigned64OutOfRange { value })?;
