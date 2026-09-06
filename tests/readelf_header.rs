@@ -54,7 +54,9 @@ fn file_header_matches_gnu_readelf_facts_for_real_et_rel() {
     let ours_stdout = String::from_utf8_lossy(&ours.stdout);
     assert!(ours_stdout.contains("Class:                             ELF64"));
     assert!(ours_stdout.contains("Type:                              REL (Relocatable file)"));
-    assert!(ours_stdout.contains("Machine:                           Advanced Micro Devices X86-64"));
+    assert!(
+        ours_stdout.contains("Machine:                           Advanced Micro Devices X86-64")
+    );
     assert!(ours_stdout.contains("Entry point address:               0x0"));
 
     let gnu = Command::new("readelf")
