@@ -2,6 +2,8 @@ use crate::layout::LaidOutSection;
 use crate::load_segments::{SHF_EXECINSTR, SHF_WRITE};
 use core::fmt;
 
+pub const SHF_TLS: u64 = 0x400;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PermissionLayoutInput {
     pub object_index: usize,
@@ -106,11 +108,21 @@ where
         });
     }
 
+    let mut regular = Vec::new();
+    let mut tls = Vec::new();
+    for section in sections {
+        if section.flags & SHF_TLS == 0 {
+            regular.push(section);
+        } else {
+            tls.push(section);
+        }
+    }
+
     let mut cursor = start_address;
     let mut previous_permissions = None;
     let mut laid_out = Vec::new();
 
-    for section in sections {
+    for section in regular.into_iter().chain(tls) {
         if section.alignment != 0 && !section.alignment.is_power_of_two() {
             return Err(PermissionLayoutError::InvalidSectionAlignment {
                 object_index: section.object_index,
