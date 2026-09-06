@@ -25,7 +25,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -111,9 +111,10 @@ where
         let mut entry_seen = false;
 
         while let Some(argument) = remaining.first() {
-            if argument == "--map" {
+            if argument == "--map" || argument == "-Map" {
                 if remaining.len() < 2 {
-                    return Err(CliError::Usage("missing map path after --map".to_owned()));
+                    let option = argument.to_string_lossy();
+                    return Err(CliError::Usage(format!("missing map path after {option}")));
                 }
                 if map_output.is_some() {
                     return Err(CliError::Usage("duplicate --map option".to_owned()));
@@ -720,15 +721,33 @@ mod tests {
 
     #[test]
     fn link_map_requires_map_path_before_io() {
+        for option in ["--map", "-Map"] {
+            let args = [
+                OsString::from("link"),
+                OsString::from("-o"),
+                OsString::from("a.out"),
+                OsString::from(option),
+            ];
+            assert_eq!(
+                run(args.into_iter()),
+                Err(CliError::Usage(format!("missing map path after {option}")))
+            );
+        }
+    }
+
+    #[test]
+    fn link_map_rejects_empty_split_path_before_io() {
         let args = [
             OsString::from("link"),
             OsString::from("-o"),
             OsString::from("a.out"),
-            OsString::from("--map"),
+            OsString::from("-Map"),
+            OsString::new(),
+            OsString::from("input.o"),
         ];
         assert_eq!(
             run(args.into_iter()),
-            Err(CliError::Usage("missing map path after --map".to_owned()))
+            Err(CliError::Usage("map path cannot be empty".to_owned()))
         );
     }
 
@@ -749,19 +768,32 @@ mod tests {
 
     #[test]
     fn link_map_rejects_mixed_duplicate_forms_before_io() {
-        let args = [
-            OsString::from("link"),
-            OsString::from("-o"),
-            OsString::from("a.out"),
-            OsString::from("-Map=first.map"),
-            OsString::from("--map"),
-            OsString::from("second.map"),
-            OsString::from("input.o"),
+        let forms = [
+            vec![
+                OsString::from("-Map"),
+                OsString::from("first.map"),
+                OsString::from("--map"),
+                OsString::from("second.map"),
+            ],
+            vec![
+                OsString::from("-Map=first.map"),
+                OsString::from("-Map"),
+                OsString::from("second.map"),
+            ],
         ];
-        assert_eq!(
-            run(args.into_iter()),
-            Err(CliError::Usage("duplicate --map option".to_owned()))
-        );
+        for form in forms {
+            let mut args = vec![
+                OsString::from("link"),
+                OsString::from("-o"),
+                OsString::from("a.out"),
+            ];
+            args.extend(form);
+            args.push(OsString::from("input.o"));
+            assert_eq!(
+                run(args.into_iter()),
+                Err(CliError::Usage("duplicate --map option".to_owned()))
+            );
+        }
     }
 
     #[test]
