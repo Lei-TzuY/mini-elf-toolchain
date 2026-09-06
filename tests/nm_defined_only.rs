@@ -59,7 +59,10 @@ fn defined_only_matches_gnu_nm_symbol_facts() {
     assert!(mini_stdout.contains("defined_symbol"), "{mini_stdout}");
     assert!(mini_stdout.contains("weak_defined"), "{mini_stdout}");
     assert!(!mini_stdout.contains("external_symbol"), "{mini_stdout}");
-    assert!(!mini_stdout.lines().any(|line| line.contains(" UND ")), "{mini_stdout}");
+    assert!(
+        !mini_stdout.lines().any(|line| line.contains(" UND ")),
+        "{mini_stdout}"
+    );
 
     let gnu = Command::new("nm")
         .arg("--defined-only")
@@ -81,9 +84,18 @@ fn defined_only_matches_gnu_nm_symbol_facts() {
         .unwrap();
     assert!(combined.status.success());
     let combined_stdout = String::from_utf8_lossy(&combined.stdout);
-    assert!(combined_stdout.contains("defined_symbol"), "{combined_stdout}");
-    assert!(combined_stdout.contains("weak_defined"), "{combined_stdout}");
-    assert!(!combined_stdout.contains("external_symbol"), "{combined_stdout}");
+    assert!(
+        combined_stdout.contains("defined_symbol"),
+        "{combined_stdout}"
+    );
+    assert!(
+        combined_stdout.contains("weak_defined"),
+        "{combined_stdout}"
+    );
+    assert!(
+        !combined_stdout.contains("external_symbol"),
+        "{combined_stdout}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
