@@ -1,3 +1,4 @@
+use mini_elf_toolchain::archive::Archive;
 use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::symbol_names::symbol_name;
 use std::env;
@@ -5,7 +6,9 @@ use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
+const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
 const USAGE: &str = "usage: mini-elf-nm <input>";
+const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -37,20 +40,49 @@ where
 
     let file = fs::read(&input)
         .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
-    let header = Elf64Header::parse(&file)
-        .map_err(|error| format!("{}: {error}", input.to_string_lossy()))?;
-    let sections = header
-        .section_headers(&file)
-        .map_err(|error| format!("{}: {error}", input.to_string_lossy()))?;
-    let tables = header
-        .symbol_tables(&file, &sections)
-        .map_err(|error| format!("{}: {error}", input.to_string_lossy()))?;
+    let display = input.to_string_lossy();
+    if file.starts_with(ARCHIVE_MAGIC) {
+        inspect_archive(&file, &display)
+    } else {
+        inspect_elf(&file, &display)
+    }
+}
 
-    let mut output = String::from("VALUE             SIZE BIND   TYPE    SHNDX NAME\n");
+fn inspect_archive(file: &[u8], display: &str) -> Result<String, String> {
+    let archive = Archive::parse(file).map_err(|error| format!("{display}: {error}"))?;
+    let mut members = Vec::new();
+    for member in archive.ordinary_members() {
+        let member_name = String::from_utf8_lossy(&member.name);
+        let provenance = format!("{display}({member_name})");
+        let symbols = inspect_elf(member.data, &provenance)?;
+        members.push((member_name.into_owned(), symbols));
+    }
+
+    let mut output = String::new();
+    for (index, (member_name, symbols)) in members.into_iter().enumerate() {
+        if index != 0 {
+            output.push('\n');
+        }
+        output.push_str(&format!("{member_name}:\n"));
+        output.push_str(&symbols);
+    }
+    Ok(output)
+}
+
+fn inspect_elf(file: &[u8], display: &str) -> Result<String, String> {
+    let header = Elf64Header::parse(file).map_err(|error| format!("{display}: {error}"))?;
+    let sections = header
+        .section_headers(file)
+        .map_err(|error| format!("{display}: {error}"))?;
+    let tables = header
+        .symbol_tables(file, &sections)
+        .map_err(|error| format!("{display}: {error}"))?;
+
+    let mut output = String::from(TABLE_HEADER);
     for table in &tables {
         for (symbol_index, symbol) in table.symbols.iter().enumerate() {
-            let name = symbol_name(&file, &sections, table, symbol_index)
-                .map_err(|error| format!("{}: {error}", input.to_string_lossy()))?;
+            let name = symbol_name(file, &sections, table, symbol_index)
+                .map_err(|error| format!("{display}: {error}"))?;
             if name.is_empty() {
                 continue;
             }
