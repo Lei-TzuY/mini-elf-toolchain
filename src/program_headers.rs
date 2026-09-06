@@ -24,12 +24,18 @@ pub(crate) fn map_runtime_program_headers(
     if old_phentsize != ELF64_PHDR_SIZE || old_phnum == 0 {
         return Err(ExecutableWriteError::NoLoadSegments);
     }
-    let old_table_size = old_phnum
-        .checked_mul(ELF64_PHDR_SIZE)
-        .ok_or(ExecutableWriteError::FileTooLarge { file_size: u64::MAX })?;
-    let old_table_end = old_phoff
-        .checked_add(old_table_size)
-        .ok_or(ExecutableWriteError::FileTooLarge { file_size: u64::MAX })?;
+    let old_table_size =
+        old_phnum
+            .checked_mul(ELF64_PHDR_SIZE)
+            .ok_or(ExecutableWriteError::FileTooLarge {
+                file_size: u64::MAX,
+            })?;
+    let old_table_end =
+        old_phoff
+            .checked_add(old_table_size)
+            .ok_or(ExecutableWriteError::FileTooLarge {
+                file_size: u64::MAX,
+            })?;
     if old_table_end > image.bytes.len() {
         return Err(ExecutableWriteError::FileTooLarge {
             file_size: image.bytes.len() as u64,
@@ -49,20 +55,18 @@ pub(crate) fn map_runtime_program_headers(
         .map(|(index, _)| index)
         .ok_or(ExecutableWriteError::NoLoadSegments)?;
     let last = image.load_segments[last_index].clone();
-    let old_memory_file_end = last
-        .file_offset
-        .checked_add(last.memory_size)
-        .ok_or(ExecutableWriteError::FileEndOverflow {
+    let old_memory_file_end = last.file_offset.checked_add(last.memory_size).ok_or(
+        ExecutableWriteError::FileEndOverflow {
             load_file_offset: last.file_offset,
             image_size: last.memory_size,
-        })?;
-    let minimum_offset = (image.bytes.len() as u64).max(old_memory_file_end);
-    let phdr_file_offset = align_up(minimum_offset, 8).ok_or(
-        ExecutableWriteError::FileOffsetOverflow {
-            metadata_end: minimum_offset,
-            alignment: 8,
         },
     )?;
+    let minimum_offset = (image.bytes.len() as u64).max(old_memory_file_end);
+    let phdr_file_offset =
+        align_up(minimum_offset, 8).ok_or(ExecutableWriteError::FileOffsetOverflow {
+            metadata_end: minimum_offset,
+            alignment: 8,
+        })?;
     if phdr_file_offset < last.file_offset {
         return Err(ExecutableWriteError::FileOffsetOverflow {
             metadata_end: phdr_file_offset,
@@ -70,32 +74,38 @@ pub(crate) fn map_runtime_program_headers(
         });
     }
     let delta = phdr_file_offset - last.file_offset;
-    let phdr_virtual_address = last
-        .virtual_address
-        .checked_add(delta)
-        .ok_or(ExecutableWriteError::MemoryEndOverflow {
-            base_address: last.virtual_address,
-            memory_size: delta,
-        })?;
+    let phdr_virtual_address =
+        last.virtual_address
+            .checked_add(delta)
+            .ok_or(ExecutableWriteError::MemoryEndOverflow {
+                base_address: last.virtual_address,
+                memory_size: delta,
+            })?;
     let new_phnum = old_phnum + 1;
-    let new_table_size = new_phnum
-        .checked_mul(ELF64_PHDR_SIZE)
-        .ok_or(ExecutableWriteError::FileTooLarge { file_size: u64::MAX })?;
+    let new_table_size =
+        new_phnum
+            .checked_mul(ELF64_PHDR_SIZE)
+            .ok_or(ExecutableWriteError::FileTooLarge {
+                file_size: u64::MAX,
+            })?;
     let new_table_size_u64 = new_table_size as u64;
-    let new_last_size = delta
-        .checked_add(new_table_size_u64)
-        .ok_or(ExecutableWriteError::FileEndOverflow {
-            load_file_offset: last.file_offset,
-            image_size: new_table_size_u64,
-        })?;
-    let new_file_end = phdr_file_offset
-        .checked_add(new_table_size_u64)
-        .ok_or(ExecutableWriteError::FileEndOverflow {
+    let new_last_size =
+        delta
+            .checked_add(new_table_size_u64)
+            .ok_or(ExecutableWriteError::FileEndOverflow {
+                load_file_offset: last.file_offset,
+                image_size: new_table_size_u64,
+            })?;
+    let new_file_end = phdr_file_offset.checked_add(new_table_size_u64).ok_or(
+        ExecutableWriteError::FileEndOverflow {
             load_file_offset: phdr_file_offset,
             image_size: new_table_size_u64,
+        },
+    )?;
+    let new_file_len =
+        usize::try_from(new_file_end).map_err(|_| ExecutableWriteError::FileTooLarge {
+            file_size: new_file_end,
         })?;
-    let new_file_len = usize::try_from(new_file_end)
-        .map_err(|_| ExecutableWriteError::FileTooLarge { file_size: new_file_end })?;
 
     let mut last_header_index = None;
     for index in 0..old_phnum {
@@ -203,10 +213,19 @@ mod tests {
 
         assert_eq!(read_u16(&finalized.bytes, 56), 2);
         assert_eq!(read_u32(&finalized.bytes, phoff), PT_PHDR);
-        assert_eq!(read_u64(&finalized.bytes, phoff + 16), finalized.load_segments[0].virtual_address + (phoff as u64 - old_offset));
+        assert_eq!(
+            read_u64(&finalized.bytes, phoff + 16),
+            finalized.load_segments[0].virtual_address + (phoff as u64 - old_offset)
+        );
         assert_eq!(read_u32(&finalized.bytes, phoff + ELF64_PHDR_SIZE), PT_LOAD);
-        assert_eq!(read_u64(&finalized.bytes, phoff + ELF64_PHDR_SIZE + 8), old_offset);
-        assert_eq!(read_u64(&finalized.bytes, phoff + ELF64_PHDR_SIZE + 16), old_address);
+        assert_eq!(
+            read_u64(&finalized.bytes, phoff + ELF64_PHDR_SIZE + 8),
+            old_offset
+        );
+        assert_eq!(
+            read_u64(&finalized.bytes, phoff + ELF64_PHDR_SIZE + 16),
+            old_address
+        );
         assert_eq!(finalized.bytes[old_offset as usize], 0xc3);
     }
 }
