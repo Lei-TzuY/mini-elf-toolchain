@@ -18,6 +18,7 @@ pub enum ImageBaseArgumentError {
     DuplicateOption,
     NonUtf8Value,
     InvalidValue { value: String },
+    MissingEntrySymbol,
     EmptyEntrySymbol,
     MissingScriptPath,
     EmptyScriptPath,
@@ -39,6 +40,7 @@ impl fmt::Display for ImageBaseArgumentError {
                 f,
                 "invalid image base '{value}'; expected an unsigned 64-bit hexadecimal or decimal address"
             ),
+            Self::MissingEntrySymbol => write!(f, "missing entry symbol after -e"),
             Self::EmptyEntrySymbol => write!(f, "entry symbol cannot be empty"),
             Self::MissingScriptPath => write!(f, "missing linker script path after -T/--script"),
             Self::EmptyScriptPath => write!(f, "linker script path cannot be empty"),
@@ -128,6 +130,28 @@ pub fn extract_image_base_argument(
             remaining.push(entry_symbol);
             index += 1;
             continue;
+        }
+
+        if arguments[index] == "-e" {
+            let entry_symbol = arguments
+                .get(index + 1)
+                .ok_or(ImageBaseArgumentError::MissingEntrySymbol)?;
+            if entry_symbol.is_empty() {
+                return Err(ImageBaseArgumentError::EmptyEntrySymbol);
+            }
+            remaining.push(OsString::from("--entry"));
+            remaining.push(entry_symbol.clone());
+            index += 2;
+            continue;
+        }
+
+        if let Some(entry_symbol) = strip_os_prefix(&arguments[index], "-e") {
+            if !entry_symbol.is_empty() {
+                remaining.push(OsString::from("--entry"));
+                remaining.push(entry_symbol);
+                index += 1;
+                continue;
+            }
         }
 
         if let Some(path) = arguments[index]
@@ -448,22 +472,39 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_entry_equals_and_rejects_empty_before_io() {
-        let parsed = extract_image_base_argument(&[
-            OsString::from("--entry=custom_entry"),
-            OsString::from("start.o"),
-        ])
-        .unwrap();
-        assert_eq!(
-            parsed.arguments,
+    fn normalizes_entry_forms_and_rejects_empty_or_missing_short_form_before_io() {
+        for arguments in [
             vec![
-                OsString::from("--entry"),
+                OsString::from("--entry=custom_entry"),
+                OsString::from("start.o"),
+            ],
+            vec![
+                OsString::from("-e"),
                 OsString::from("custom_entry"),
-                OsString::from("start.o")
-            ]
-        );
+                OsString::from("start.o"),
+            ],
+            vec![OsString::from("-ecustom_entry"), OsString::from("start.o")],
+        ] {
+            let parsed = extract_image_base_argument(&arguments).unwrap();
+            assert_eq!(
+                parsed.arguments,
+                vec![
+                    OsString::from("--entry"),
+                    OsString::from("custom_entry"),
+                    OsString::from("start.o")
+                ]
+            );
+        }
         assert_eq!(
             extract_image_base_argument(&[OsString::from("--entry=")]).unwrap_err(),
+            ImageBaseArgumentError::EmptyEntrySymbol
+        );
+        assert_eq!(
+            extract_image_base_argument(&[OsString::from("-e")]).unwrap_err(),
+            ImageBaseArgumentError::MissingEntrySymbol
+        );
+        assert_eq!(
+            extract_image_base_argument(&[OsString::from("-e"), OsString::new()]).unwrap_err(),
             ImageBaseArgumentError::EmptyEntrySymbol
         );
     }

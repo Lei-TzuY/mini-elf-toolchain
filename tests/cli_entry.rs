@@ -53,9 +53,19 @@ fn assemble_object(dir: &Path) -> Option<PathBuf> {
     Some(stripped)
 }
 
+fn readelf_entry(path: &Path) -> String {
+    let header = Command::new("readelf")
+        .args(["-hW"])
+        .arg(path)
+        .output()
+        .expect("run readelf -hW");
+    assert!(header.status.success());
+    String::from_utf8(header.stdout).expect("readelf output must be UTF-8")
+}
+
 #[test]
-fn cli_entry_selects_named_symbol_and_matches_gnu_readelf() {
-    if !command_available("readelf") {
+fn cli_entry_selects_named_symbol_and_matches_gnu_ld() {
+    if !command_available("readelf") || !command_available("ld") {
         return;
     }
 
@@ -64,39 +74,82 @@ fn cli_entry_selects_named_symbol_and_matches_gnu_readelf() {
         let _ = fs::remove_dir_all(dir);
         return;
     };
-    let output = dir.join("linked");
+    let split_output = dir.join("linked-split");
+    let attached_output = dir.join("linked-attached");
+    let gnu_output = dir.join("linked-gnu");
 
-    let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
-        .args(["link", "-o"])
-        .arg(&output)
-        .args(["--entry", "custom_entry"])
+    for (output, entry_args) in [
+        (&split_output, vec!["-e", "custom_entry"]),
+        (&attached_output, vec!["-ecustom_entry"]),
+    ] {
+        let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+            .args(["link", "-o"])
+            .arg(output)
+            .args(entry_args)
+            .arg(&input)
+            .output()
+            .expect("run mini-elf-toolchain link");
+        assert!(
+            link.status.success(),
+            "link failed: {}",
+            String::from_utf8_lossy(&link.stderr)
+        );
+    }
+
+    let gnu_link = Command::new("ld")
+        .args(["-static", "-Ttext=0x400000", "-e", "custom_entry", "-o"])
+        .arg(&gnu_output)
         .arg(&input)
         .output()
-        .expect("run mini-elf-toolchain link");
+        .expect("run GNU ld");
     assert!(
-        link.status.success(),
-        "link failed: {}",
-        String::from_utf8_lossy(&link.stderr)
+        gnu_link.status.success(),
+        "GNU ld failed: {}",
+        String::from_utf8_lossy(&gnu_link.stderr)
     );
 
-    let header = Command::new("readelf")
-        .args(["-hW"])
-        .arg(&output)
-        .output()
-        .expect("run readelf -hW");
-    assert!(header.status.success());
-    assert!(String::from_utf8_lossy(&header.stdout)
-        .contains("Entry point address:               0x400004"));
+    for output in [&split_output, &attached_output, &gnu_output] {
+        let header = readelf_entry(output);
+        assert!(header.contains("Entry point address:               0x400004"));
+    }
 
     #[cfg(target_os = "linux")]
-    {
-        let status = Command::new(&output)
+    for output in [&split_output, &attached_output, &gnu_output] {
+        let status = Command::new(output)
             .status()
             .expect("execute linked static ELF");
         assert!(status.success(), "linked executable returned {status}");
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
+}
+
+#[test]
+fn cli_entry_short_forms_reject_malformed_and_duplicate_values_before_io() {
+    let binary = env!("CARGO_BIN_EXE_mini-elf-toolchain");
+
+    let missing = Command::new(binary)
+        .args(["link", "-o", "never-written", "-e"])
+        .output()
+        .expect("run missing short entry case");
+    assert!(!missing.status.success());
+    assert!(String::from_utf8_lossy(&missing.stderr).contains("missing entry symbol after -e"));
+
+    let duplicate = Command::new(binary)
+        .args([
+            "link",
+            "-o",
+            "never-written",
+            "-ecustom_entry",
+            "--entry",
+            "other_entry",
+            "missing-input.o",
+        ])
+        .output()
+        .expect("run duplicate short entry case");
+    assert!(!duplicate.status.success());
+    assert!(String::from_utf8_lossy(&duplicate.stderr).contains("duplicate --entry option"));
+    assert!(!Path::new("never-written").exists());
 }
 
 #[test]
