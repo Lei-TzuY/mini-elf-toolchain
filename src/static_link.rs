@@ -43,7 +43,9 @@ impl fmt::Display for StaticLinkError {
             Self::LinkMap(source) => write!(f, "cannot build link map: {source}"),
             Self::LoadSegments(source) => write!(f, "cannot build load segments: {source}"),
             Self::Write(source) => write!(f, "cannot emit executable: {source}"),
-            Self::TlsProgramHeader(source) => write!(f, "cannot emit static TLS program header: {source}"),
+            Self::TlsProgramHeader(source) => {
+                write!(f, "cannot emit static TLS program header: {source}")
+            }
         }
     }
 }
@@ -303,7 +305,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            StaticLinkError::MissingEntrySymbol { name } if name == b"_start"
+            StaticLinkError::MissingEntrySymbol { name } if name == b"other"
         ));
     }
 
