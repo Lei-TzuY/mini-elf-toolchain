@@ -743,7 +743,7 @@ pub fn inject_static_tls_program_header(
 
     let mut new_segments = Vec::with_capacity(old_segments.len());
     let mut next_file_offset = metadata_end;
-    let mut tls_anchor = None;
+    let mut tls_anchor: Option<(u64, u64)> = None;
     for (index, segment) in old_segments.iter().enumerate() {
         let file_offset = if tls_indices.binary_search(&index).is_ok() {
             if let Some((anchor_offset, anchor_address)) = tls_anchor {
