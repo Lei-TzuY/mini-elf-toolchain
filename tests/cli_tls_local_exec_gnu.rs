@@ -219,7 +219,11 @@ _start:
         let status = Command::new(executable)
             .status()
             .expect("execute static TLS fixture");
-        assert!(status.success(), "{} returned {status}", executable.display());
+        assert!(
+            status.success(),
+            "{} returned {status}",
+            executable.display()
+        );
     }
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
