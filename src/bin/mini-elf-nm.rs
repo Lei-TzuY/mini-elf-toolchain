@@ -7,7 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str = "usage: mini-elf-nm <input>";
+const USAGE: &str = "usage: mini-elf-nm <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 fn main() -> ExitCode {
@@ -23,29 +23,46 @@ fn main() -> ExitCode {
     }
 }
 
-fn run<I>(mut args: I) -> Result<String, String>
+fn run<I>(args: I) -> Result<String, String>
 where
     I: Iterator<Item = OsString>,
 {
-    let input = args.next().ok_or_else(|| USAGE.to_owned())?;
-    if input == "--help" || input == "-h" {
-        if args.next().is_some() {
+    let inputs: Vec<_> = args.collect();
+    if inputs.is_empty() {
+        return Err(USAGE.to_owned());
+    }
+    if inputs[0] == "--help" || inputs[0] == "-h" {
+        if inputs.len() != 1 {
             return Err(USAGE.to_owned());
         }
         return Ok(format!("{USAGE}\n"));
     }
-    if args.next().is_some() {
-        return Err(USAGE.to_owned());
+
+    let multiple_inputs = inputs.len() > 1;
+    let mut inspected = Vec::with_capacity(inputs.len());
+    for input in inputs {
+        let file = fs::read(&input)
+            .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
+        let display = input.to_string_lossy();
+        let symbols = if file.starts_with(ARCHIVE_MAGIC) {
+            inspect_archive(&file, &display)?
+        } else {
+            inspect_elf(&file, &display)?
+        };
+        inspected.push((display.into_owned(), symbols));
     }
 
-    let file = fs::read(&input)
-        .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
-    let display = input.to_string_lossy();
-    if file.starts_with(ARCHIVE_MAGIC) {
-        inspect_archive(&file, &display)
-    } else {
-        inspect_elf(&file, &display)
+    let mut output = String::new();
+    for (index, (display, symbols)) in inspected.into_iter().enumerate() {
+        if index != 0 {
+            output.push('\n');
+        }
+        if multiple_inputs {
+            output.push_str(&format!("{display}:\n"));
+        }
+        output.push_str(&symbols);
     }
+    Ok(output)
 }
 
 fn inspect_archive(file: &[u8], display: &str) -> Result<String, String> {
