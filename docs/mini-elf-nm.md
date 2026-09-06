@@ -12,6 +12,8 @@ mini-elf-nm --extern-only input.o libsupport.a
 mini-elf-nm -g -u input.o
 mini-elf-nm -n input.o
 mini-elf-nm --numeric-sort input.o libsupport.a
+mini-elf-nm -r input.o
+mini-elf-nm --numeric-sort --reverse-sort input.o
 ```
 
 For a single ELF input, it prints named symbols in deterministic ELF symbol-table order using these columns:
@@ -22,10 +24,10 @@ VALUE             SIZE BIND   TYPE    SHNDX NAME
 
 `VALUE` is the hexadecimal `st_value`, `SIZE` is `st_size`, `BIND` and `TYPE` decode the ELF symbol info byte, and `SHNDX` prints ordinary section indices plus `UND`, `ABS`, and `COM` for the corresponding reserved indices.
 
-`-u` and `--undefined-only` are GNU-compatible bounded filters accepted before the input list. They preserve the same checked parsing and deterministic table format but emit only named symbols whose `st_shndx` is `SHN_UNDEF`. `-g` and `--extern-only` emit only named non-local symbols by excluding `STB_LOCAL`; the filters compose, so `-g -u` selects symbols that are both externally visible and undefined. `-n` and `--numeric-sort` sort the selected symbols by ascending `st_value`; equal values retain their original checked symbol-table order. Options compose and apply consistently to ordinary ELF inputs, archive members, and multiple inputs. Archive-member order and top-level input order are not changed, and all inputs are still validated before stdout is emitted.
+`-u` and `--undefined-only` are GNU-compatible bounded filters accepted before the input list. They preserve the same checked parsing and deterministic table format but emit only named symbols whose `st_shndx` is `SHN_UNDEF`. `-g` and `--extern-only` emit only named non-local symbols by excluding `STB_LOCAL`; the filters compose, so `-g -u` selects symbols that are both externally visible and undefined. `-n` and `--numeric-sort` sort the selected symbols by ascending `st_value`; equal values retain their original checked symbol-table order. `-r` and `--reverse-sort` reverse the final selected-symbol ordering, so `-n -r` yields descending numeric order. Options compose and apply consistently to ordinary ELF inputs, archive members, and multiple inputs. Archive-member order and top-level input order are not changed, and all inputs are still validated before stdout is emitted.
 
 For a checked System V/GNU/BSD `ar` archive, `mini-elf-nm` walks ordinary members in archive order, skips special symbol/string-table members, prints a `<member>:` label, and applies the same checked ELF symbol walk to that member. The command validates every ordinary member before returning output, so a malformed member fails the invocation with `archive(member)` provenance rather than reporting a partial successful archive inspection.
 
 Malformed or truncated ELF input, malformed archives or ordinary members, invalid section/symbol tables, invalid symbol names, unreadable files, missing input, and invalid option-only invocations are rejected with a nonzero exit status.
 
-This slice intentionally does not add recursive archives, defined-only filtering, reverse or size sorting, demangling, address rewriting, dynamic-loader semantics, linker extraction behavior, or archive-index semantics changes. GNU `as`, `ar`, `readelf -Ws`, and `nm` are used in integration testing as differential evidence for real `ET_REL` and archive symbol facts when those tools are available.
+This slice intentionally does not add recursive archives, defined-only filtering, size sorting, demangling, address rewriting, dynamic-loader semantics, linker extraction behavior, or archive-index semantics changes. GNU `as`, `ar`, `readelf -Ws`, and `nm` are used in integration testing as differential evidence for real `ET_REL` and archive symbol facts when those tools are available.
