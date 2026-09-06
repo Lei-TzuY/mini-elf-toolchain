@@ -69,12 +69,7 @@ fn text_segment_matches_gnu_and_rejects_malformed_values_before_output() {
 
     let gnu = Command::new("ld")
         .current_dir(&dir)
-        .args([
-            "-o",
-            "gnu.out",
-            "-Ttext-segment=0x800000",
-            "start.o",
-        ])
+        .args(["-o", "gnu.out", "-Ttext-segment=0x800000", "start.o"])
         .output()
         .expect("run GNU ld");
     assert!(
@@ -108,11 +103,7 @@ fn text_segment_matches_gnu_and_rejects_malformed_values_before_output() {
     }
 
     for (output, value, expected) in [
-        (
-            "empty.out",
-            "-Ttext-segment=",
-            "image base cannot be empty",
-        ),
+        ("empty.out", "-Ttext-segment=", "image base cannot be empty"),
         (
             "overflow.out",
             "-Ttext-segment=0x10000000000000000",
