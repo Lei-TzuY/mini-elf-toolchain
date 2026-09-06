@@ -348,7 +348,8 @@ mod tests {
             OsString::from("tail.o"),
         ];
 
-        let resolved = resolve_static_library_arguments(&arguments).expect("canonicalize aliases");
+        let resolved =
+            resolve_static_library_arguments(&arguments).expect("canonicalize aliases");
         assert_eq!(
             resolved,
             vec![
@@ -366,7 +367,8 @@ mod tests {
     #[test]
     fn canonicalizes_unbalanced_aliases_for_existing_cli_diagnostics() {
         let arguments = vec![OsString::from("-)"), OsString::from("root.o")];
-        let resolved = resolve_static_library_arguments(&arguments).expect("canonicalize malformed alias");
+        let resolved =
+            resolve_static_library_arguments(&arguments).expect("canonicalize malformed alias");
         assert_eq!(
             resolved,
             vec![OsString::from("--end-group"), OsString::from("root.o")]
