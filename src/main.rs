@@ -22,8 +22,10 @@ const START_GROUP: &str = "--start-group";
 const END_GROUP: &str = "--end-group";
 const WHOLE_ARCHIVE: &str = "--whole-archive";
 const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
+const PUSH_STATE: &str = "--push-state";
+const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -334,8 +336,21 @@ fn load_link_input_sequence(paths: &[OsString]) -> Result<LoadedLinkInputSequenc
     let mut sequence = Vec::new();
     let mut input_index = 0usize;
     let mut whole_archive = false;
+    let mut state_stack = Vec::new();
 
     while input_index < paths.len() {
+        if paths[input_index] == PUSH_STATE {
+            state_stack.push(whole_archive);
+            input_index += 1;
+            continue;
+        }
+        if paths[input_index] == POP_STATE {
+            whole_archive = state_stack
+                .pop()
+                .ok_or_else(|| CliError::Usage("unmatched --pop-state".to_owned()))?;
+            input_index += 1;
+            continue;
+        }
         if paths[input_index] == WHOLE_ARCHIVE {
             whole_archive = true;
             input_index += 1;
@@ -372,6 +387,18 @@ fn load_link_input_sequence(paths: &[OsString]) -> Result<LoadedLinkInputSequenc
                 return Err(CliError::Usage(
                     "nested --start-group is not supported".to_owned(),
                 ));
+            }
+            if paths[input_index] == PUSH_STATE {
+                state_stack.push(whole_archive);
+                input_index += 1;
+                continue;
+            }
+            if paths[input_index] == POP_STATE {
+                whole_archive = state_stack
+                    .pop()
+                    .ok_or_else(|| CliError::Usage("unmatched --pop-state".to_owned()))?;
+                input_index += 1;
+                continue;
             }
             if paths[input_index] == WHOLE_ARCHIVE {
                 whole_archive = true;
@@ -426,6 +453,9 @@ fn load_link_input_sequence(paths: &[OsString]) -> Result<LoadedLinkInputSequenc
         input_index += 1;
     }
 
+    if !state_stack.is_empty() {
+        return Err(CliError::Usage("missing --pop-state".to_owned()));
+    }
     if sequence.is_empty() {
         return Err(CliError::Usage("missing relocatable input path".to_owned()));
     }
@@ -558,6 +588,35 @@ mod tests {
         assert_eq!(
             run(args.into_iter()),
             Err(CliError::Usage("missing relocatable input path".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_state_stack_rejects_unmatched_pop_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--pop-state"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("unmatched --pop-state".to_owned()))
+        );
+    }
+
+    #[test]
+    fn link_state_stack_requires_balanced_pop_before_io() {
+        let args = [
+            OsString::from("link"),
+            OsString::from("-o"),
+            OsString::from("a.out"),
+            OsString::from("--push-state"),
+            OsString::from("--whole-archive"),
+        ];
+        assert_eq!(
+            run(args.into_iter()),
+            Err(CliError::Usage("missing --pop-state".to_owned()))
         );
     }
 
