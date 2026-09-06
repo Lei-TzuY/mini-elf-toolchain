@@ -331,7 +331,8 @@ mod tests {
             OsString::from("--start-group"),
             OsString::from("--end-group"),
         ];
-        let resolved = resolve_static_library_arguments(&arguments).expect("preserve malformed group");
+        let resolved =
+            resolve_static_library_arguments(&arguments).expect("preserve malformed group");
         assert_eq!(resolved, arguments);
     }
 
