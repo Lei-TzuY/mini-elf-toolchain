@@ -8,7 +8,7 @@ use crate::link_map::{build_link_map, LinkMap};
 use crate::link_symbols::{resolve_validated_objects, LinkSymbolError};
 use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
-use crate::relocated_sections::RelocatedSectionImage;
+use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
 use crate::tls::{
     inject_static_tls_program_header, relocate_allocatable_sections_with_static_tls,
@@ -17,6 +17,7 @@ use crate::tls::{
 
 #[derive(Debug)]
 pub enum StaticLinkError {
+    Relocation(RelocatedSectionError),
     TlsRelocation(StaticTlsRelocationError),
     Symbols(LinkSymbolError),
     MissingEntrySymbol { name: Vec<u8> },
@@ -30,7 +31,8 @@ pub enum StaticLinkError {
 impl fmt::Display for StaticLinkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TlsRelocation(source) => write!(f, "cannot relocate input sections: {source}"),
+            Self::Relocation(source) => write!(f, "cannot relocate input sections: {source}"),
+            Self::TlsRelocation(source) => write!(f, "cannot relocate static TLS: {source}"),
             Self::Symbols(source) => write!(f, "cannot resolve entry symbol: {source}"),
             Self::MissingEntrySymbol { name } => write!(
                 f,
@@ -49,6 +51,7 @@ impl fmt::Display for StaticLinkError {
 impl std::error::Error for StaticLinkError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::Relocation(source) => Some(source),
             Self::TlsRelocation(source) => Some(source),
             Self::Symbols(source) => Some(source),
             Self::EntryAddress(source) | Self::LinkMap(source) => Some(source),
@@ -84,7 +87,10 @@ pub fn link_static_executable_with_map(
 ) -> Result<StaticLinkOutput, StaticLinkError> {
     let relocated_output =
         relocate_allocatable_sections_with_static_tls(inputs, start_address, page_alignment)
-            .map_err(StaticLinkError::TlsRelocation)?;
+            .map_err(|source| match source {
+                StaticTlsRelocationError::Regular(source) => StaticLinkError::Relocation(source),
+                source => StaticLinkError::TlsRelocation(source),
+            })?;
     let relocated = relocated_output.sections;
 
     let validated_objects = inputs
