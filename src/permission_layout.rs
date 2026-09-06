@@ -1,11 +1,15 @@
+use crate::elf64::SHT_NOBITS;
 use crate::layout::LaidOutSection;
 use crate::load_segments::{SHF_EXECINSTR, SHF_WRITE};
 use core::fmt;
+
+pub const SHF_TLS: u64 = 0x400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PermissionLayoutInput {
     pub object_index: usize,
     pub section_index: u16,
+    pub section_type: u32,
     pub size: u64,
     pub alignment: u64,
     pub flags: u64,
@@ -106,11 +110,28 @@ where
         });
     }
 
+    let mut regular = Vec::new();
+    let mut tls_file = Vec::new();
+    let mut tls_nobits = Vec::new();
+    for section in sections {
+        if section.flags & SHF_TLS == 0 {
+            regular.push(section);
+        } else if section.section_type == SHT_NOBITS {
+            tls_nobits.push(section);
+        } else {
+            tls_file.push(section);
+        }
+    }
+
+    let ordered = regular
+        .into_iter()
+        .chain(tls_file)
+        .chain(tls_nobits);
     let mut cursor = start_address;
     let mut previous_permissions = None;
     let mut laid_out = Vec::new();
 
-    for section in sections {
+    for section in ordered {
         if section.alignment != 0 && !section.alignment.is_power_of_two() {
             return Err(PermissionLayoutError::InvalidSectionAlignment {
                 object_index: section.object_index,
