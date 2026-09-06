@@ -1,0 +1,25 @@
+name: Conquest format fix
+on:
+  push:
+    branches:
+      - conquest/readelf-header-cli
+permissions:
+  contents: write
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit formatting
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "LeiZ"
+            git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+            git add src/bin/mini-elf-readelf.rs tests/readelf_header.rs
+            git commit -m "Apply canonical Rust formatting"
+            git push
+          fi
