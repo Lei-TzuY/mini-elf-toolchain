@@ -159,7 +159,9 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
     match filters.sort_mode {
         SortMode::Name => rows.sort_by(|(_, _, left, _), (_, _, right, _)| left.cmp(right)),
         SortMode::Numeric => rows.sort_by_key(|(value, _, _, _)| *value),
-        SortMode::Size => rows.sort_by_key(|(_, size, _, _)| *size),
+        SortMode::Size => rows.sort_by(|(_, left_size, left_name, _), (_, right_size, right_name, _)| {
+            left_size.cmp(right_size).then(left_name.cmp(right_name))
+        }),
         SortMode::None => {}
     }
     if filters.reverse_sort && filters.sort_mode != SortMode::None {
