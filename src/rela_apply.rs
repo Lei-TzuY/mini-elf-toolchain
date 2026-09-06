@@ -16,6 +16,10 @@ pub enum RelaTableApplyError {
         relocation_index: usize,
         symbol_index: u32,
     },
+    MissingPlaceValue {
+        relocation_index: usize,
+        relocation_type: u32,
+    },
     Relocation {
         relocation_index: usize,
         error: RelocationApplyError,
@@ -40,6 +44,13 @@ impl fmt::Display for RelaTableApplyError {
                 f,
                 "relocation {relocation_index} has no resolved value for symbol {symbol_index}"
             ),
+            Self::MissingPlaceValue {
+                relocation_index,
+                relocation_type,
+            } => write!(
+                f,
+                "relocation {relocation_index} type {relocation_type} has no resolved place/base value"
+            ),
             Self::Relocation {
                 relocation_index,
                 error,
@@ -52,7 +63,9 @@ impl std::error::Error for RelaTableApplyError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Relocation { error, .. } => Some(error),
-            Self::PlaceOverflow { .. } | Self::MissingSymbolValue { .. } => None,
+            Self::PlaceOverflow { .. }
+            | Self::MissingSymbolValue { .. }
+            | Self::MissingPlaceValue { .. } => None,
         }
     }
 }
@@ -75,10 +88,30 @@ pub fn apply_rela_table_with_values<F>(
     section: &mut [u8],
     section_address: u64,
     table: &Elf64RelaTable,
-    mut relocation_value: F,
+    relocation_value: F,
 ) -> Result<(), RelaTableApplyError>
 where
     F: FnMut(&Elf64Rela) -> Option<u64>,
+{
+    apply_rela_table_with_values_and_places(
+        section,
+        section_address,
+        table,
+        relocation_value,
+        |_relocation, default_place| Some(default_place),
+    )
+}
+
+pub fn apply_rela_table_with_values_and_places<F, P>(
+    section: &mut [u8],
+    section_address: u64,
+    table: &Elf64RelaTable,
+    mut relocation_value: F,
+    mut relocation_place: P,
+) -> Result<(), RelaTableApplyError>
+where
+    F: FnMut(&Elf64Rela) -> Option<u64>,
+    P: FnMut(&Elf64Rela, u64) -> Option<u64>,
 {
     let mut patched = section.to_vec();
 
@@ -87,11 +120,17 @@ where
             continue;
         }
 
-        let place = section_address.checked_add(relocation.offset).ok_or(
+        let default_place = section_address.checked_add(relocation.offset).ok_or(
             RelaTableApplyError::PlaceOverflow {
                 relocation_index,
                 section_address,
                 offset: relocation.offset,
+            },
+        )?;
+        let place = relocation_place(relocation, default_place).ok_or(
+            RelaTableApplyError::MissingPlaceValue {
+                relocation_index,
+                relocation_type: relocation.relocation_type,
             },
         )?;
         let value =

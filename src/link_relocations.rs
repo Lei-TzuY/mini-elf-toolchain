@@ -2,13 +2,13 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use crate::layout::LaidOutSection;
-use crate::rela_apply::{apply_rela_table_with_values, RelaTableApplyError};
+use crate::rela_apply::{apply_rela_table_with_values_and_places, RelaTableApplyError};
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{NamedSymbol, SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
 use crate::x86_64_relocations::{
     is_static_got_base_type, is_static_got_entry_type, is_static_got_offset_type,
-    is_static_gotpcrel_type, R_X86_64_SIZE32, R_X86_64_SIZE64,
+    is_static_gotoff_type, is_static_gotpcrel_type, R_X86_64_SIZE32, R_X86_64_SIZE64,
 };
 
 const R_X86_64_NONE: u32 = 0;
@@ -285,52 +285,85 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
         );
     }
 
-    apply_rela_table_with_values(section, section_address, table, |relocation| {
-        let values = values.get(&relocation.symbol_index)?;
-        if relocation.relocation_type == R_X86_64_SIZE32
-            || relocation.relocation_type == R_X86_64_SIZE64
-        {
-            Some(values.size)
-        } else if is_static_got_base_type(relocation.relocation_type) {
-            globals.got_entries.values().copied().min()
-        } else if is_static_got_offset_type(relocation.relocation_type) {
-            let symbol = symbols.iter().find(|symbol| {
-                symbol.table_section_index == table.symbol_table_index
-                    && symbol.symbol_index == relocation.symbol_index as usize
-            })?;
-            let entry = globals.got_entries.get(symbol.name).copied()?;
-            let base = globals.got_entries.values().copied().min()?;
-            entry.checked_sub(base)
-        } else if is_static_gotpcrel_type(relocation.relocation_type) {
-            let symbol = symbols.iter().find(|symbol| {
-                symbol.table_section_index == table.symbol_table_index
-                    && symbol.symbol_index == relocation.symbol_index as usize
-            })?;
-            globals.got_entries.get(symbol.name).copied()
-        } else {
-            Some(values.address)
-        }
-    })
+    let got_base = globals.got_entries.values().copied().min();
+    apply_rela_table_with_values_and_places(
+        section,
+        section_address,
+        table,
+        |relocation| {
+            let values = values.get(&relocation.symbol_index)?;
+            if relocation.relocation_type == R_X86_64_SIZE32
+                || relocation.relocation_type == R_X86_64_SIZE64
+            {
+                Some(values.size)
+            } else if is_static_got_base_type(relocation.relocation_type) {
+                got_base
+            } else if is_static_got_offset_type(relocation.relocation_type) {
+                let symbol = symbols.iter().find(|symbol| {
+                    symbol.table_section_index == table.symbol_table_index
+                        && symbol.symbol_index == relocation.symbol_index as usize
+                })?;
+                let entry = globals.got_entries.get(symbol.name).copied()?;
+                let base = got_base?;
+                entry.checked_sub(base)
+            } else if is_static_gotpcrel_type(relocation.relocation_type) {
+                let symbol = symbols.iter().find(|symbol| {
+                    symbol.table_section_index == table.symbol_table_index
+                        && symbol.symbol_index == relocation.symbol_index as usize
+                })?;
+                globals.got_entries.get(symbol.name).copied()
+            } else {
+                Some(values.address)
+            }
+        },
+        |relocation, default_place| {
+            if is_static_gotoff_type(relocation.relocation_type) {
+                got_base
+            } else {
+                Some(default_place)
+            }
+        },
+    )
     .map_err(|source| {
-        if let RelaTableApplyError::MissingSymbolValue {
-            relocation_index,
-            symbol_index,
-        } = &source
-        {
-            if let Some(relocation) = table.relocations.get(*relocation_index) {
-                if is_static_got_entry_type(relocation.relocation_type) {
-                    if let Some(symbol) = symbols.iter().find(|symbol| {
-                        symbol.table_section_index == table.symbol_table_index
-                            && symbol.symbol_index == *symbol_index as usize
-                    }) {
-                        return LinkRelocationError::MissingGotEntry {
-                            relocation_index: *relocation_index,
-                            symbol_index: *symbol_index,
-                            name: symbol.name.to_vec(),
-                        };
+        match &source {
+            RelaTableApplyError::MissingSymbolValue {
+                relocation_index,
+                symbol_index,
+            } => {
+                if let Some(relocation) = table.relocations.get(*relocation_index) {
+                    if is_static_got_entry_type(relocation.relocation_type) {
+                        if let Some(symbol) = symbols.iter().find(|symbol| {
+                            symbol.table_section_index == table.symbol_table_index
+                                && symbol.symbol_index == *symbol_index as usize
+                        }) {
+                            return LinkRelocationError::MissingGotEntry {
+                                relocation_index: *relocation_index,
+                                symbol_index: *symbol_index,
+                                name: symbol.name.to_vec(),
+                            };
+                        }
                     }
                 }
             }
+            RelaTableApplyError::MissingPlaceValue {
+                relocation_index, ..
+            } => {
+                if let Some(relocation) = table.relocations.get(*relocation_index) {
+                    if is_static_gotoff_type(relocation.relocation_type) {
+                        if let Some(symbol) = symbols.iter().find(|symbol| {
+                            symbol.table_section_index == table.symbol_table_index
+                                && symbol.symbol_index == relocation.symbol_index as usize
+                        }) {
+                            return LinkRelocationError::MissingGotEntry {
+                                relocation_index: *relocation_index,
+                                symbol_index: relocation.symbol_index,
+                                name: symbol.name.to_vec(),
+                            };
+                        }
+                    }
+                }
+            }
+            _ => {}
         }
         LinkRelocationError::Apply(source)
     })
