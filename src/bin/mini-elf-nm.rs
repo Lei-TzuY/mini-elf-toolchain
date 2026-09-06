@@ -7,13 +7,15 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [-g|--extern-only] <input>...";
+const USAGE: &str =
+    "usage: mini-elf-nm [-u|--undefined-only] [-g|--extern-only] [-n|--numeric-sort] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 #[derive(Clone, Copy, Default)]
 struct Filters {
     undefined_only: bool,
     extern_only: bool,
+    numeric_sort: bool,
 }
 
 fn main() -> ExitCode {
@@ -49,6 +51,7 @@ where
         match first {
             "-u" | "--undefined-only" => filters.undefined_only = true,
             "-g" | "--extern-only" => filters.extern_only = true,
+            "-n" | "--numeric-sort" => filters.numeric_sort = true,
             _ => break,
         }
         inputs.remove(0);
@@ -114,7 +117,7 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
         .symbol_tables(file, &sections)
         .map_err(|error| format!("{display}: {error}"))?;
 
-    let mut output = String::from(TABLE_HEADER);
+    let mut rows = Vec::new();
     for table in &tables {
         for (symbol_index, symbol) in table.symbols.iter().enumerate() {
             let name = symbol_name(file, &sections, table, symbol_index)
@@ -130,13 +133,24 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
             let symbol_type = type_name(symbol.info & 0x0f);
             let section = section_name(symbol.section_index);
             let name = String::from_utf8_lossy(name);
-            output.push_str(&format!(
-                "{:<016x} {:>4} {:<6} {:<7} {:>5} {}\n",
-                symbol.value, symbol.size, binding, symbol_type, section, name
+            rows.push((
+                symbol.value,
+                format!(
+                    "{:<016x} {:>4} {:<6} {:<7} {:>5} {}\n",
+                    symbol.value, symbol.size, binding, symbol_type, section, name
+                ),
             ));
         }
     }
 
+    if filters.numeric_sort {
+        rows.sort_by_key(|(value, _)| *value);
+    }
+
+    let mut output = String::from(TABLE_HEADER);
+    for (_, row) in rows {
+        output.push_str(&row);
+    }
     Ok(output)
 }
 
