@@ -114,7 +114,10 @@ fn cli_links_gnu_gotplt64_as_absolute_synthetic_got_entry_address() {
             let status = Command::new(dir.join(output))
                 .status()
                 .unwrap_or_else(|error| panic!("execute linked GOTPLT64 ELF {output}: {error}"));
-            assert!(status.success(), "GOTPLT64 executable {output} returned {status}");
+            assert!(
+                status.success(),
+                "GOTPLT64 executable {output} returned {status}"
+            );
         }
     }
 
