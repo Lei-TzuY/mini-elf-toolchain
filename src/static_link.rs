@@ -33,7 +33,10 @@ pub fn link_static_executable_with_map(
     )?;
     output.image = map_runtime_program_headers(output.image).map_err(StaticLinkError::Write)?;
 
-    debug_assert_eq!(output.link_map.segments.len(), output.image.load_segments.len());
+    debug_assert_eq!(
+        output.link_map.segments.len(),
+        output.image.load_segments.len()
+    );
     for (map_segment, image_segment) in output
         .link_map
         .segments
