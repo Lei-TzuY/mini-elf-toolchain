@@ -81,6 +81,7 @@ impl std::error::Error for LibrarySearchError {
 pub fn resolve_static_library_arguments(
     arguments: &[OsString],
 ) -> Result<Vec<OsString>, LibrarySearchError> {
+    let flatten_nested_groups = archive_group_markers_balanced(arguments);
     let mut search_paths = Vec::new();
     let mut resolved = Vec::with_capacity(arguments.len());
     let mut index = 0usize;
@@ -89,7 +90,7 @@ pub fn resolve_static_library_arguments(
     while index < arguments.len() {
         let argument = &arguments[index];
         if argument == START_GROUP {
-            if group_depth == 0 {
+            if !flatten_nested_groups || group_depth == 0 {
                 resolved.push(argument.clone());
             }
             group_depth += 1;
@@ -97,13 +98,15 @@ pub fn resolve_static_library_arguments(
             continue;
         }
         if argument == END_GROUP {
-            if group_depth == 0 {
+            if !flatten_nested_groups {
                 resolved.push(argument.clone());
-            } else {
+            } else if group_depth > 0 {
                 group_depth -= 1;
                 if group_depth == 0 {
                     resolved.push(argument.clone());
                 }
+            } else {
+                resolved.push(argument.clone());
             }
             index += 1;
             continue;
@@ -150,6 +153,21 @@ pub fn resolve_static_library_arguments(
     }
 
     Ok(resolved)
+}
+
+fn archive_group_markers_balanced(arguments: &[OsString]) -> bool {
+    let mut depth = 0usize;
+    for argument in arguments {
+        if argument == START_GROUP {
+            depth += 1;
+        } else if argument == END_GROUP {
+            if depth == 0 {
+                return false;
+            }
+            depth -= 1;
+        }
+    }
+    depth == 0
 }
 
 fn add_search_path(
@@ -304,6 +322,17 @@ mod tests {
                 OsString::from("tail.o"),
             ]
         );
+    }
+
+    #[test]
+    fn preserves_unbalanced_nested_group_markers_for_cli_diagnostics() {
+        let arguments = vec![
+            OsString::from("--start-group"),
+            OsString::from("--start-group"),
+            OsString::from("--end-group"),
+        ];
+        let resolved = resolve_static_library_arguments(&arguments).expect("preserve malformed group");
+        assert_eq!(resolved, arguments);
     }
 
     #[test]
