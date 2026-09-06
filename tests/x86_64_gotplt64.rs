@@ -1,8 +1,7 @@
 use mini_elf_toolchain::relocations::Elf64Rela;
 use mini_elf_toolchain::x86_64_relocations::{
-    apply_relocation, evaluate_relocation, is_static_got_entry_address_type,
-    is_static_got_entry_type, RelocationApplyError, RelocationEvaluationError, RelocationValue,
-    R_X86_64_GOTPLT64,
+    apply_relocation, evaluate_relocation, is_static_got_entry_type, is_static_got_offset_type,
+    RelocationApplyError, RelocationEvaluationError, RelocationValue, R_X86_64_GOTPLT64,
 };
 
 fn relocation(offset: u64, addend: i64) -> Elf64Rela {
@@ -15,10 +14,10 @@ fn relocation(offset: u64, addend: i64) -> Elf64Rela {
 }
 
 #[test]
-fn gotplt64_evaluates_absolute_got_entry_address_plus_addend() {
-    let value = evaluate_relocation(&relocation(0, 8), 0x401000, 0xdead_beef).unwrap();
-    assert_eq!(value, RelocationValue::U64(0x401008));
-    assert!(is_static_got_entry_address_type(R_X86_64_GOTPLT64));
+fn gotplt64_evaluates_got_entry_offset_plus_addend() {
+    let value = evaluate_relocation(&relocation(0, 8), 16, 0xdead_beef).unwrap();
+    assert_eq!(value, RelocationValue::U64(24));
+    assert!(is_static_got_offset_type(R_X86_64_GOTPLT64));
     assert!(is_static_got_entry_type(R_X86_64_GOTPLT64));
 }
 
@@ -40,7 +39,7 @@ fn gotplt64_rejects_unsigned64_overflow_and_underflow() {
 #[test]
 fn gotplt64_checks_eight_byte_target_bounds() {
     let mut section = [0_u8; 7];
-    let error = apply_relocation(&mut section, &relocation(0, 0), 0x401000, 0).unwrap_err();
+    let error = apply_relocation(&mut section, &relocation(0, 0), 16, 0).unwrap_err();
     assert_eq!(
         error,
         RelocationApplyError::TargetOutOfBounds {
