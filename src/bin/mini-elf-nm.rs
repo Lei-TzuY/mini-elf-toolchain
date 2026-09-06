@@ -38,12 +38,9 @@ where
         return Ok(format!("{USAGE}\n"));
     }
 
-    let mut undefined_only = false;
-    while matches!(
-        inputs.first().and_then(|value| value.to_str()),
-        Some("-u" | "--undefined-only")
-    ) {
-        undefined_only = true;
+    let first = inputs.first().and_then(|value| value.to_str());
+    let undefined_only = matches!(first, Some("-u") | Some("--undefined-only"));
+    if undefined_only {
         inputs.remove(0);
     }
     if inputs.is_empty() {
