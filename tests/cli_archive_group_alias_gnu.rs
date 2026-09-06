@@ -83,14 +83,7 @@ fn cli_short_archive_group_aliases_rescan_like_gnu_ld() {
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .current_dir(&dir)
         .args([
-            "link",
-            "-o",
-            "mini.out",
-            "start.o",
-            "-(",
-            "liba.a",
-            "libb.a",
-            "-)",
+            "link", "-o", "mini.out", "start.o", "-(", "liba.a", "libb.a", "-)",
         ])
         .output()
         .expect("run mini linker with archive-group aliases");
@@ -103,15 +96,7 @@ fn cli_short_archive_group_aliases_rescan_like_gnu_ld() {
 
     let gnu = Command::new("ld")
         .current_dir(&dir)
-        .args([
-            "-o",
-            "gnu.out",
-            "start.o",
-            "-(",
-            "liba.a",
-            "libb.a",
-            "-)",
-        ])
+        .args(["-o", "gnu.out", "start.o", "-(", "liba.a", "libb.a", "-)"])
         .output()
         .expect("run GNU ld with archive-group aliases");
     assert!(
@@ -127,10 +112,8 @@ fn cli_short_archive_group_aliases_rescan_like_gnu_ld() {
             .output()
             .expect("run GNU readelf");
         assert!(header.status.success());
-        assert!(
-            String::from_utf8_lossy(&header.stdout)
-                .contains("Type:                              EXEC")
-        );
+        assert!(String::from_utf8_lossy(&header.stdout)
+            .contains("Type:                              EXEC"));
     }
 
     #[cfg(target_os = "linux")]
