@@ -242,11 +242,7 @@ fn undefined_only_matches_gnu_nm_symbol_facts() {
     assert!(long.status.success());
     assert_eq!(short.stdout, long.stdout);
 
-    let gnu = Command::new("nm")
-        .arg("-u")
-        .arg(&object)
-        .output()
-        .unwrap();
+    let gnu = Command::new("nm").arg("-u").arg(&object).output().unwrap();
     assert!(gnu.status.success());
     let gnu_stdout = String::from_utf8_lossy(&gnu.stdout);
     assert!(gnu_stdout.contains("external_symbol"), "{gnu_stdout}");
