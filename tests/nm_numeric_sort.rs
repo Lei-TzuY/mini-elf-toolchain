@@ -69,17 +69,16 @@ fn numeric_sort_matches_gnu_nm_for_real_et_rel() {
     assert!(long.status.success());
     assert_eq!(short.stdout, long.stdout);
 
-    let gnu = Command::new("nm")
-        .arg("-n")
-        .arg(&object)
-        .output()
-        .unwrap();
+    let gnu = Command::new("nm").arg("-n").arg(&object).output().unwrap();
     assert!(gnu.status.success());
     let gnu_stdout = String::from_utf8_lossy(&gnu.stdout);
     let gnu_low = gnu_stdout.find(" low\n").unwrap();
     let gnu_middle = gnu_stdout.find(" middle\n").unwrap();
     let gnu_high = gnu_stdout.find(" high\n").unwrap();
-    assert!(gnu_low < gnu_middle && gnu_middle < gnu_high, "{gnu_stdout}");
+    assert!(
+        gnu_low < gnu_middle && gnu_middle < gnu_high,
+        "{gnu_stdout}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
