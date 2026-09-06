@@ -7,7 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str = "usage: mini-elf-nm <input>...";
+const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 fn main() -> ExitCode {
@@ -27,7 +27,7 @@ fn run<I>(args: I) -> Result<String, String>
 where
     I: Iterator<Item = OsString>,
 {
-    let inputs: Vec<_> = args.collect();
+    let mut inputs: Vec<_> = args.collect();
     if inputs.is_empty() {
         return Err(USAGE.to_owned());
     }
@@ -38,6 +38,18 @@ where
         return Ok(format!("{USAGE}\n"));
     }
 
+    let mut undefined_only = false;
+    while matches!(
+        inputs.first().and_then(|value| value.to_str()),
+        Some("-u" | "--undefined-only")
+    ) {
+        undefined_only = true;
+        inputs.remove(0);
+    }
+    if inputs.is_empty() {
+        return Err(USAGE.to_owned());
+    }
+
     let multiple_inputs = inputs.len() > 1;
     let mut inspected = Vec::with_capacity(inputs.len());
     for input in inputs {
@@ -45,9 +57,9 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy();
         let symbols = if file.starts_with(ARCHIVE_MAGIC) {
-            inspect_archive(&file, &display)?
+            inspect_archive(&file, &display, undefined_only)?
         } else {
-            inspect_elf(&file, &display)?
+            inspect_elf(&file, &display, undefined_only)?
         };
         inspected.push((display.into_owned(), symbols));
     }
@@ -65,13 +77,13 @@ where
     Ok(output)
 }
 
-fn inspect_archive(file: &[u8], display: &str) -> Result<String, String> {
+fn inspect_archive(file: &[u8], display: &str, undefined_only: bool) -> Result<String, String> {
     let archive = Archive::parse(file).map_err(|error| format!("{display}: {error}"))?;
     let mut members = Vec::new();
     for member in archive.ordinary_members() {
         let member_name = String::from_utf8_lossy(&member.name);
         let provenance = format!("{display}({member_name})");
-        let symbols = inspect_elf(member.data, &provenance)?;
+        let symbols = inspect_elf(member.data, &provenance, undefined_only)?;
         members.push((member_name.into_owned(), symbols));
     }
 
@@ -86,7 +98,7 @@ fn inspect_archive(file: &[u8], display: &str) -> Result<String, String> {
     Ok(output)
 }
 
-fn inspect_elf(file: &[u8], display: &str) -> Result<String, String> {
+fn inspect_elf(file: &[u8], display: &str, undefined_only: bool) -> Result<String, String> {
     let header = Elf64Header::parse(file).map_err(|error| format!("{display}: {error}"))?;
     let sections = header
         .section_headers(file)
@@ -100,7 +112,7 @@ fn inspect_elf(file: &[u8], display: &str) -> Result<String, String> {
         for (symbol_index, symbol) in table.symbols.iter().enumerate() {
             let name = symbol_name(file, &sections, table, symbol_index)
                 .map_err(|error| format!("{display}: {error}"))?;
-            if name.is_empty() {
+            if name.is_empty() || (undefined_only && symbol.section_index != 0) {
                 continue;
             }
             let binding = binding_name(symbol.info >> 4);
