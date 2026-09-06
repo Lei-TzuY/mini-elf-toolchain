@@ -324,10 +324,22 @@ fn extern_only_matches_gnu_nm_symbol_facts_and_composes_with_undefined_only() {
         .unwrap();
     assert!(combined.status.success());
     let combined_stdout = String::from_utf8_lossy(&combined.stdout);
-    assert!(combined_stdout.contains("external_symbol"), "{combined_stdout}");
-    assert!(!combined_stdout.contains("exported_symbol"), "{combined_stdout}");
-    assert!(!combined_stdout.contains("weak_symbol"), "{combined_stdout}");
-    assert!(!combined_stdout.contains("local_symbol"), "{combined_stdout}");
+    assert!(
+        combined_stdout.contains("external_symbol"),
+        "{combined_stdout}"
+    );
+    assert!(
+        !combined_stdout.contains("exported_symbol"),
+        "{combined_stdout}"
+    );
+    assert!(
+        !combined_stdout.contains("weak_symbol"),
+        "{combined_stdout}"
+    );
+    assert!(
+        !combined_stdout.contains("local_symbol"),
+        "{combined_stdout}"
+    );
 
     let gnu = Command::new("nm").arg("-g").arg(&object).output().unwrap();
     assert!(gnu.status.success());
