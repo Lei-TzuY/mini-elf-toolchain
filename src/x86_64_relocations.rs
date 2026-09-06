@@ -26,10 +26,7 @@ pub const R_X86_64_REX_GOTPCRELX: u32 = 42;
 pub fn is_static_gotpcrel_type(relocation_type: u32) -> bool {
     matches!(
         relocation_type,
-        R_X86_64_GOTPCREL
-            | R_X86_64_GOTPCREL64
-            | R_X86_64_GOTPCRELX
-            | R_X86_64_REX_GOTPCRELX
+        R_X86_64_GOTPCREL | R_X86_64_GOTPCREL64 | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
     )
 }
 
