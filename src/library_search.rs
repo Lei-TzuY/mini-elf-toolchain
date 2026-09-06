@@ -3,6 +3,9 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const START_GROUP: &str = "--start-group";
+const END_GROUP: &str = "--end-group";
+
 #[derive(Debug)]
 pub enum LibrarySearchError {
     MissingSearchPath,
@@ -81,9 +84,30 @@ pub fn resolve_static_library_arguments(
     let mut search_paths = Vec::new();
     let mut resolved = Vec::with_capacity(arguments.len());
     let mut index = 0usize;
+    let mut group_depth = 0usize;
 
     while index < arguments.len() {
         let argument = &arguments[index];
+        if argument == START_GROUP {
+            if group_depth == 0 {
+                resolved.push(argument.clone());
+            }
+            group_depth += 1;
+            index += 1;
+            continue;
+        }
+        if argument == END_GROUP {
+            if group_depth == 0 {
+                resolved.push(argument.clone());
+            } else {
+                group_depth -= 1;
+                if group_depth == 0 {
+                    resolved.push(argument.clone());
+                }
+            }
+            index += 1;
+            continue;
+        }
         if argument == "-L" || argument == "--library-path" {
             let path = arguments
                 .get(index + 1)
@@ -251,6 +275,35 @@ mod tests {
         fs::remove_dir_all(first).expect("remove first temp directory");
         fs::remove_dir_all(second).expect("remove second temp directory");
         fs::remove_dir_all(third).expect("remove third temp directory");
+    }
+
+    #[test]
+    fn flattens_nested_archive_group_markers_without_reordering_inputs() {
+        let arguments = vec![
+            OsString::from("root.o"),
+            OsString::from("--start-group"),
+            OsString::from("liba.a"),
+            OsString::from("--start-group"),
+            OsString::from("libb.a"),
+            OsString::from("--end-group"),
+            OsString::from("libc.a"),
+            OsString::from("--end-group"),
+            OsString::from("tail.o"),
+        ];
+
+        let resolved = resolve_static_library_arguments(&arguments).expect("flatten nested group");
+        assert_eq!(
+            resolved,
+            vec![
+                OsString::from("root.o"),
+                OsString::from("--start-group"),
+                OsString::from("liba.a"),
+                OsString::from("libb.a"),
+                OsString::from("libc.a"),
+                OsString::from("--end-group"),
+                OsString::from("tail.o"),
+            ]
+        );
     }
 
     #[test]
