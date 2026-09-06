@@ -34,7 +34,10 @@ pub fn is_static_gotpcrel_type(relocation_type: u32) -> bool {
 }
 
 pub fn is_static_got_offset_type(relocation_type: u32) -> bool {
-    matches!(relocation_type, R_X86_64_GOT32 | R_X86_64_GOT64)
+    matches!(
+        relocation_type,
+        R_X86_64_GOT32 | R_X86_64_GOT64 | R_X86_64_GOTPLT64
+    )
 }
 
 pub fn is_static_got_base_type(relocation_type: u32) -> bool {
@@ -45,16 +48,11 @@ pub fn is_static_gotoff_type(relocation_type: u32) -> bool {
     matches!(relocation_type, R_X86_64_GOTOFF64 | R_X86_64_PLTOFF64)
 }
 
-pub fn is_static_got_entry_address_type(relocation_type: u32) -> bool {
-    relocation_type == R_X86_64_GOTPLT64
-}
-
 pub fn is_static_got_entry_type(relocation_type: u32) -> bool {
     is_static_got_offset_type(relocation_type)
         || is_static_gotpcrel_type(relocation_type)
         || is_static_got_base_type(relocation_type)
         || is_static_gotoff_type(relocation_type)
-        || is_static_got_entry_address_type(relocation_type)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
