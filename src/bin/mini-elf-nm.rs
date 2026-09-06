@@ -7,8 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str =
-    "usage: mini-elf-nm [-u|--undefined-only] [-g|--extern-only] <input>...";
+const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [-g|--extern-only] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 #[derive(Clone, Copy, Default)]
