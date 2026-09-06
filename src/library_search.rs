@@ -348,8 +348,7 @@ mod tests {
             OsString::from("tail.o"),
         ];
 
-        let resolved =
-            resolve_static_library_arguments(&arguments).expect("canonicalize aliases");
+        let resolved = resolve_static_library_arguments(&arguments).expect("canonicalize aliases");
         assert_eq!(
             resolved,
             vec![
