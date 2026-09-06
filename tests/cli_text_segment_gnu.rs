@@ -31,8 +31,28 @@ fn temp_dir() -> PathBuf {
     path
 }
 
+fn first_load_vaddr(dir: &std::path::Path, output: &str) -> u64 {
+    let program_headers = Command::new("readelf")
+        .current_dir(dir)
+        .args(["-lW", output])
+        .output()
+        .expect("run GNU readelf program-header dump");
+    assert!(program_headers.status.success());
+    let stdout = String::from_utf8_lossy(&program_headers.stdout);
+    let load = stdout
+        .lines()
+        .find(|line| line.trim_start().starts_with("LOAD "))
+        .expect("ELF executable must contain a LOAD segment");
+    let vaddr = load
+        .split_whitespace()
+        .nth(2)
+        .expect("LOAD line must contain a virtual address");
+    u64::from_str_radix(vaddr.trim_start_matches("0x"), 16)
+        .expect("LOAD virtual address must be hexadecimal")
+}
+
 #[test]
-fn text_segment_matches_gnu_and_rejects_malformed_values_before_output() {
+fn text_segment_matches_gnu_segment_origin_and_rejects_malformed_values_before_output() {
     if !have_gnu_toolchain() {
         return;
     }
@@ -85,9 +105,9 @@ fn text_segment_matches_gnu_and_rejects_malformed_values_before_output() {
             .output()
             .expect("run GNU readelf");
         assert!(header.status.success());
-        let stdout = String::from_utf8_lossy(&header.stdout);
-        assert!(stdout.contains("Type:                              EXEC"));
-        assert!(stdout.contains("Entry point address:               0x800000"));
+        assert!(String::from_utf8_lossy(&header.stdout)
+            .contains("Type:                              EXEC"));
+        assert_eq!(first_load_vaddr(&dir, output), 0x800000);
     }
 
     #[cfg(target_os = "linux")]
