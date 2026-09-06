@@ -24,7 +24,11 @@ fn append_ar_member(archive: &mut Vec<u8>, name: &str, data: &[u8]) {
     let name_field = format!("{name}/");
     let header = format!(
         "{name_field:<16}{:<12}{:<6}{:<6}{:<8}{:<10}`\n",
-        0, 0, 0, 0, data.len()
+        0,
+        0,
+        0,
+        0,
+        data.len()
     );
     assert_eq!(header.len(), 60);
     archive.extend_from_slice(header.as_bytes());
