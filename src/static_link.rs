@@ -8,26 +8,29 @@ use crate::link_map::{build_link_map, LinkMap};
 use crate::link_symbols::{resolve_validated_objects, LinkSymbolError};
 use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
-use crate::relocated_sections::{
-    relocate_allocatable_sections, RelocatedSectionError, RelocatedSectionImage,
-};
+use crate::relocated_sections::RelocatedSectionImage;
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
+use crate::tls::{
+    inject_static_tls_program_header, relocate_allocatable_sections_with_static_tls,
+    StaticTlsProgramHeaderError, StaticTlsRelocationError,
+};
 
 #[derive(Debug)]
 pub enum StaticLinkError {
-    Relocation(RelocatedSectionError),
+    TlsRelocation(StaticTlsRelocationError),
     Symbols(LinkSymbolError),
     MissingEntrySymbol { name: Vec<u8> },
     EntryAddress(FinalSymbolAddressError),
     LinkMap(FinalSymbolAddressError),
     LoadSegments(LoadSegmentBuildError),
     Write(ExecutableWriteError),
+    TlsProgramHeader(StaticTlsProgramHeaderError),
 }
 
 impl fmt::Display for StaticLinkError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Relocation(source) => write!(f, "cannot relocate input sections: {source}"),
+            Self::TlsRelocation(source) => write!(f, "cannot relocate input sections: {source}"),
             Self::Symbols(source) => write!(f, "cannot resolve entry symbol: {source}"),
             Self::MissingEntrySymbol { name } => write!(
                 f,
@@ -38,6 +41,7 @@ impl fmt::Display for StaticLinkError {
             Self::LinkMap(source) => write!(f, "cannot build link map: {source}"),
             Self::LoadSegments(source) => write!(f, "cannot build load segments: {source}"),
             Self::Write(source) => write!(f, "cannot emit executable: {source}"),
+            Self::TlsProgramHeader(source) => write!(f, "cannot emit static TLS program header: {source}"),
         }
     }
 }
@@ -45,11 +49,12 @@ impl fmt::Display for StaticLinkError {
 impl std::error::Error for StaticLinkError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Relocation(source) => Some(source),
+            Self::TlsRelocation(source) => Some(source),
             Self::Symbols(source) => Some(source),
             Self::EntryAddress(source) | Self::LinkMap(source) => Some(source),
             Self::LoadSegments(source) => Some(source),
             Self::Write(source) => Some(source),
+            Self::TlsProgramHeader(source) => Some(source),
             Self::MissingEntrySymbol { .. } => None,
         }
     }
@@ -77,8 +82,10 @@ pub fn link_static_executable_with_map(
     page_alignment: u64,
     entry_symbol: &[u8],
 ) -> Result<StaticLinkOutput, StaticLinkError> {
-    let relocated = relocate_allocatable_sections(inputs, start_address, page_alignment)
-        .map_err(StaticLinkError::Relocation)?;
+    let relocated_output =
+        relocate_allocatable_sections_with_static_tls(inputs, start_address, page_alignment)
+            .map_err(StaticLinkError::TlsRelocation)?;
+    let relocated = relocated_output.sections;
 
     let validated_objects = inputs
         .iter()
@@ -119,9 +126,13 @@ pub fn link_static_executable_with_map(
         })
         .collect::<Vec<_>>();
 
-    let image =
+    let mut image =
         write_elf64_x86_64_executable_segments(&writer_segments, entry_address, page_alignment)
             .map_err(StaticLinkError::Write)?;
+    if let Some(tls) = relocated_output.tls_layout {
+        image = inject_static_tls_program_header(image, tls, page_alignment)
+            .map_err(StaticLinkError::TlsProgramHeader)?;
+    }
     let link_map = build_link_map(&relocated, &definitions, &image, entry_symbol)
         .map_err(StaticLinkError::LinkMap)?;
 
