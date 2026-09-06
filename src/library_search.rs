@@ -3,6 +3,9 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const START_GROUP: &str = "--start-group";
+const END_GROUP: &str = "--end-group";
+
 #[derive(Debug)]
 pub enum LibrarySearchError {
     MissingSearchPath,
@@ -78,12 +81,36 @@ impl std::error::Error for LibrarySearchError {
 pub fn resolve_static_library_arguments(
     arguments: &[OsString],
 ) -> Result<Vec<OsString>, LibrarySearchError> {
+    let flatten_nested_groups = archive_group_markers_balanced(arguments);
     let mut search_paths = Vec::new();
     let mut resolved = Vec::with_capacity(arguments.len());
     let mut index = 0usize;
+    let mut group_depth = 0usize;
 
     while index < arguments.len() {
         let argument = &arguments[index];
+        if argument == START_GROUP {
+            if !flatten_nested_groups || group_depth == 0 {
+                resolved.push(argument.clone());
+            }
+            group_depth += 1;
+            index += 1;
+            continue;
+        }
+        if argument == END_GROUP {
+            if !flatten_nested_groups {
+                resolved.push(argument.clone());
+            } else if group_depth > 0 {
+                group_depth -= 1;
+                if group_depth == 0 {
+                    resolved.push(argument.clone());
+                }
+            } else {
+                resolved.push(argument.clone());
+            }
+            index += 1;
+            continue;
+        }
         if argument == "-L" || argument == "--library-path" {
             let path = arguments
                 .get(index + 1)
@@ -126,6 +153,21 @@ pub fn resolve_static_library_arguments(
     }
 
     Ok(resolved)
+}
+
+fn archive_group_markers_balanced(arguments: &[OsString]) -> bool {
+    let mut depth = 0usize;
+    for argument in arguments {
+        if argument == START_GROUP {
+            depth += 1;
+        } else if argument == END_GROUP {
+            if depth == 0 {
+                return false;
+            }
+            depth -= 1;
+        }
+    }
+    depth == 0
 }
 
 fn add_search_path(
@@ -251,6 +293,47 @@ mod tests {
         fs::remove_dir_all(first).expect("remove first temp directory");
         fs::remove_dir_all(second).expect("remove second temp directory");
         fs::remove_dir_all(third).expect("remove third temp directory");
+    }
+
+    #[test]
+    fn flattens_nested_archive_group_markers_without_reordering_inputs() {
+        let arguments = vec![
+            OsString::from("root.o"),
+            OsString::from("--start-group"),
+            OsString::from("liba.a"),
+            OsString::from("--start-group"),
+            OsString::from("libb.a"),
+            OsString::from("--end-group"),
+            OsString::from("libc.a"),
+            OsString::from("--end-group"),
+            OsString::from("tail.o"),
+        ];
+
+        let resolved = resolve_static_library_arguments(&arguments).expect("flatten nested group");
+        assert_eq!(
+            resolved,
+            vec![
+                OsString::from("root.o"),
+                OsString::from("--start-group"),
+                OsString::from("liba.a"),
+                OsString::from("libb.a"),
+                OsString::from("libc.a"),
+                OsString::from("--end-group"),
+                OsString::from("tail.o"),
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_unbalanced_nested_group_markers_for_cli_diagnostics() {
+        let arguments = vec![
+            OsString::from("--start-group"),
+            OsString::from("--start-group"),
+            OsString::from("--end-group"),
+        ];
+        let resolved =
+            resolve_static_library_arguments(&arguments).expect("preserve malformed group");
+        assert_eq!(resolved, arguments);
     }
 
     #[test]
