@@ -245,10 +245,7 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Signed8OutOfRange { value })?;
             Ok(RelocationValue::I8(value))
         }
-        R_X86_64_PC64
-        | R_X86_64_GOTOFF64
-        | R_X86_64_GOTPCREL64
-        | R_X86_64_GOTPC64
+        R_X86_64_PC64 | R_X86_64_GOTOFF64 | R_X86_64_GOTPCREL64 | R_X86_64_GOTPC64
         | R_X86_64_PLTOFF64 => {
             let value = symbol_value + addend - place;
             let value = i64::try_from(value)
