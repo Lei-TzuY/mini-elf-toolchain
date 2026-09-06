@@ -159,3 +159,79 @@ fn attached_map_form_matches_gnu_cli_semantics() {
 
     fs::remove_dir_all(dir).expect("remove temporary test directory");
 }
+
+#[test]
+fn split_map_form_matches_gnu_cli_semantics() {
+    if !command_available("as")
+        || !command_available("objcopy")
+        || !command_available("ld")
+        || !command_available("readelf")
+    {
+        return;
+    }
+
+    let dir = temp_dir();
+    let input = assemble_start(&dir);
+    let ours = dir.join("ours-split");
+    let ours_map = dir.join("ours-split.map");
+    let gnu = dir.join("gnu-split");
+    let gnu_map = dir.join("gnu-split.map");
+
+    let ours_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&ours)
+        .arg("-Map")
+        .arg(&ours_map)
+        .arg(&input)
+        .output()
+        .expect("run mini-elf-toolchain link");
+    assert!(
+        ours_link.status.success(),
+        "link failed: {}",
+        String::from_utf8_lossy(&ours_link.stderr)
+    );
+
+    let gnu_link = Command::new("ld")
+        .arg("-o")
+        .arg(&gnu)
+        .arg("-Map")
+        .arg(&gnu_map)
+        .arg(&input)
+        .output()
+        .expect("run GNU ld");
+    assert!(
+        gnu_link.status.success(),
+        "GNU ld failed: {}",
+        String::from_utf8_lossy(&gnu_link.stderr)
+    );
+
+    for executable in [&ours, &gnu] {
+        let header = Command::new("readelf")
+            .args(["-h"])
+            .arg(executable)
+            .output()
+            .expect("run GNU readelf");
+        assert!(header.status.success());
+        let header = String::from_utf8_lossy(&header.stdout);
+        assert!(header.contains("Type:                              EXEC"));
+    }
+
+    let ours_rendered = fs::read_to_string(&ours_map).expect("read our split link map");
+    let gnu_rendered = fs::read_to_string(&gnu_map).expect("read GNU split link map");
+    assert!(ours_rendered.contains("_start"));
+    assert!(gnu_rendered.contains("_start"));
+
+    #[cfg(target_os = "linux")]
+    {
+        assert!(Command::new(&ours)
+            .status()
+            .expect("run our split executable")
+            .success());
+        assert!(Command::new(&gnu)
+            .status()
+            .expect("run GNU split executable")
+            .success());
+    }
+
+    fs::remove_dir_all(dir).expect("remove temporary test directory");
+}
