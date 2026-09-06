@@ -19,6 +19,7 @@ pub const R_X86_64_GOTPC32: u32 = 26;
 pub const R_X86_64_GOT64: u32 = 27;
 pub const R_X86_64_GOTPCREL64: u32 = 28;
 pub const R_X86_64_GOTPC64: u32 = 29;
+pub const R_X86_64_PLTOFF64: u32 = 31;
 pub const R_X86_64_SIZE32: u32 = 32;
 pub const R_X86_64_SIZE64: u32 = 33;
 pub const R_X86_64_GOTPCRELX: u32 = 41;
@@ -40,7 +41,7 @@ pub fn is_static_got_base_type(relocation_type: u32) -> bool {
 }
 
 pub fn is_static_gotoff_type(relocation_type: u32) -> bool {
-    relocation_type == R_X86_64_GOTOFF64
+    matches!(relocation_type, R_X86_64_GOTOFF64 | R_X86_64_PLTOFF64)
 }
 
 pub fn is_static_got_entry_type(relocation_type: u32) -> bool {
@@ -244,7 +245,11 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Signed8OutOfRange { value })?;
             Ok(RelocationValue::I8(value))
         }
-        R_X86_64_PC64 | R_X86_64_GOTOFF64 | R_X86_64_GOTPCREL64 | R_X86_64_GOTPC64 => {
+        R_X86_64_PC64
+        | R_X86_64_GOTOFF64
+        | R_X86_64_GOTPCREL64
+        | R_X86_64_GOTPC64
+        | R_X86_64_PLTOFF64 => {
             let value = symbol_value + addend - place;
             let value = i64::try_from(value)
                 .map_err(|_| RelocationEvaluationError::Signed64OutOfRange { value })?;
