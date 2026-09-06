@@ -7,7 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-n|--numeric-sort] [-p|--no-sort] [-r|--reverse-sort] <input>...";
+const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -15,6 +15,7 @@ enum SortMode {
     #[default]
     Name,
     Numeric,
+    Size,
     None,
 }
 
@@ -62,6 +63,7 @@ where
             "--defined-only" => filters.defined_only = true,
             "-g" | "--extern-only" => filters.extern_only = true,
             "-n" | "--numeric-sort" => filters.sort_mode = SortMode::Numeric,
+            "--size-sort" => filters.sort_mode = SortMode::Size,
             "-p" | "--no-sort" => filters.sort_mode = SortMode::None,
             "-r" | "--reverse-sort" => filters.reverse_sort = true,
             _ => break,
@@ -150,13 +152,14 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
                 "{:<016x} {:>4} {:<6} {:<7} {:>5} {}\n",
                 symbol.value, symbol.size, binding, symbol_type, section, name
             );
-            rows.push((symbol.value, name, row));
+            rows.push((symbol.value, symbol.size, name, row));
         }
     }
 
     match filters.sort_mode {
-        SortMode::Name => rows.sort_by(|(_, left, _), (_, right, _)| left.cmp(right)),
-        SortMode::Numeric => rows.sort_by_key(|(value, _, _)| *value),
+        SortMode::Name => rows.sort_by(|(_, _, left, _), (_, _, right, _)| left.cmp(right)),
+        SortMode::Numeric => rows.sort_by_key(|(value, _, _, _)| *value),
+        SortMode::Size => rows.sort_by_key(|(_, size, _, _)| *size),
         SortMode::None => {}
     }
     if filters.reverse_sort && filters.sort_mode != SortMode::None {
@@ -164,7 +167,7 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
     }
 
     let mut output = String::from(TABLE_HEADER);
-    for (_, _, row) in rows {
+    for (_, _, _, row) in rows {
         output.push_str(&row);
     }
     Ok(output)
