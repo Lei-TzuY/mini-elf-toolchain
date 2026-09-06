@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 const START_GROUP: &str = "--start-group";
 const END_GROUP: &str = "--end-group";
+const START_GROUP_ALIAS: &str = "-(";
+const END_GROUP_ALIAS: &str = "-)";
 
 #[derive(Debug)]
 pub enum LibrarySearchError {
@@ -89,24 +91,24 @@ pub fn resolve_static_library_arguments(
 
     while index < arguments.len() {
         let argument = &arguments[index];
-        if argument == START_GROUP {
+        if is_start_group(argument) {
             if !flatten_nested_groups || group_depth == 0 {
-                resolved.push(argument.clone());
+                resolved.push(OsString::from(START_GROUP));
             }
             group_depth += 1;
             index += 1;
             continue;
         }
-        if argument == END_GROUP {
+        if is_end_group(argument) {
             if !flatten_nested_groups {
-                resolved.push(argument.clone());
+                resolved.push(OsString::from(END_GROUP));
             } else if group_depth > 0 {
                 group_depth -= 1;
                 if group_depth == 0 {
-                    resolved.push(argument.clone());
+                    resolved.push(OsString::from(END_GROUP));
                 }
             } else {
-                resolved.push(argument.clone());
+                resolved.push(OsString::from(END_GROUP));
             }
             index += 1;
             continue;
@@ -155,12 +157,20 @@ pub fn resolve_static_library_arguments(
     Ok(resolved)
 }
 
+fn is_start_group(argument: &OsStr) -> bool {
+    argument == START_GROUP || argument == START_GROUP_ALIAS
+}
+
+fn is_end_group(argument: &OsStr) -> bool {
+    argument == END_GROUP || argument == END_GROUP_ALIAS
+}
+
 fn archive_group_markers_balanced(arguments: &[OsString]) -> bool {
     let mut depth = 0usize;
     for argument in arguments {
-        if argument == START_GROUP {
+        if is_start_group(argument) {
             depth += 1;
-        } else if argument == END_GROUP {
+        } else if is_end_group(argument) {
             if depth == 0 {
                 return false;
             }
@@ -321,6 +331,45 @@ mod tests {
                 OsString::from("--end-group"),
                 OsString::from("tail.o"),
             ]
+        );
+    }
+
+    #[test]
+    fn canonicalizes_gnu_short_archive_group_aliases() {
+        let arguments = vec![
+            OsString::from("root.o"),
+            OsString::from("-("),
+            OsString::from("liba.a"),
+            OsString::from("--start-group"),
+            OsString::from("libb.a"),
+            OsString::from("-)"),
+            OsString::from("libc.a"),
+            OsString::from("--end-group"),
+            OsString::from("tail.o"),
+        ];
+
+        let resolved = resolve_static_library_arguments(&arguments).expect("canonicalize aliases");
+        assert_eq!(
+            resolved,
+            vec![
+                OsString::from("root.o"),
+                OsString::from("--start-group"),
+                OsString::from("liba.a"),
+                OsString::from("libb.a"),
+                OsString::from("libc.a"),
+                OsString::from("--end-group"),
+                OsString::from("tail.o"),
+            ]
+        );
+    }
+
+    #[test]
+    fn canonicalizes_unbalanced_aliases_for_existing_cli_diagnostics() {
+        let arguments = vec![OsString::from("-)"), OsString::from("root.o")];
+        let resolved = resolve_static_library_arguments(&arguments).expect("canonicalize malformed alias");
+        assert_eq!(
+            resolved,
+            vec![OsString::from("--end-group"), OsString::from("root.o")]
         );
     }
 
