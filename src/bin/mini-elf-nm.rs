@@ -7,8 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str =
-    "usage: mini-elf-nm [-u|--undefined-only] [-g|--extern-only] [-n|--numeric-sort] <input>...";
+const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [-g|--extern-only] [-n|--numeric-sort] [-r|--reverse-sort] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 #[derive(Clone, Copy, Default)]
@@ -16,6 +15,7 @@ struct Filters {
     undefined_only: bool,
     extern_only: bool,
     numeric_sort: bool,
+    reverse_sort: bool,
 }
 
 fn main() -> ExitCode {
@@ -52,6 +52,7 @@ where
             "-u" | "--undefined-only" => filters.undefined_only = true,
             "-g" | "--extern-only" => filters.extern_only = true,
             "-n" | "--numeric-sort" => filters.numeric_sort = true,
+            "-r" | "--reverse-sort" => filters.reverse_sort = true,
             _ => break,
         }
         inputs.remove(0);
@@ -145,6 +146,9 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
 
     if filters.numeric_sort {
         rows.sort_by_key(|(value, _)| *value);
+    }
+    if filters.reverse_sort {
+        rows.reverse();
     }
 
     let mut output = String::from(TABLE_HEADER);
