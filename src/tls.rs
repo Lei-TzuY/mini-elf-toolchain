@@ -101,7 +101,10 @@ pub fn compute_static_tls_layout(
     let mut placements = Vec::new();
     let mut alignment = 1_u64;
 
-    for section in sections.iter().filter(|section| is_tls_section(section.flags)) {
+    for section in sections
+        .iter()
+        .filter(|section| is_tls_section(section.flags))
+    {
         let placed = layout
             .iter()
             .find(|placed| {
@@ -112,13 +115,12 @@ pub fn compute_static_tls_layout(
                 object_index: section.object_index,
                 section_index: section.section_index,
             })?;
-        let end = placed
-            .address
-            .checked_add(placed.size)
-            .ok_or(StaticTlsLayoutError::AddressOverflow {
+        let end = placed.address.checked_add(placed.size).ok_or(
+            StaticTlsLayoutError::AddressOverflow {
                 object_index: section.object_index,
                 section_index: section.section_index,
-            })?;
+            },
+        )?;
         alignment = alignment.max(section.alignment.max(1));
         placements.push((section, *placed, end));
     }
@@ -159,12 +161,11 @@ pub fn compute_static_tls_layout(
 
     let memory_size = memory_end - base_address;
     let file_size = file_end - base_address;
-    let block_size = align_up(memory_size, alignment).ok_or(
-        StaticTlsLayoutError::BlockSizeOverflow {
+    let block_size =
+        align_up(memory_size, alignment).ok_or(StaticTlsLayoutError::BlockSizeOverflow {
             memory_size,
             alignment,
-        },
-    )?;
+        })?;
 
     Ok(Some(StaticTlsLayout {
         base_address,
@@ -402,22 +403,21 @@ pub fn apply_tpoff32_relocations(
             });
         }
 
-        let value = i128::from(address)
-            - i128::from(tls.base_address)
-            - i128::from(tls.block_size)
+        let value = i128::from(address) - i128::from(tls.base_address) - i128::from(tls.block_size)
             + i128::from(relocation.addend);
         let value = i32::try_from(value).map_err(|_| Tpoff32ApplyError::OffsetOutOfRange {
             relocation_index,
             symbol_index: relocation.symbol_index,
             value,
         })?;
-        let end = relocation.offset.checked_add(4).ok_or(
-            Tpoff32ApplyError::TargetOutOfBounds {
+        let end = relocation
+            .offset
+            .checked_add(4)
+            .ok_or(Tpoff32ApplyError::TargetOutOfBounds {
                 relocation_index,
                 offset: relocation.offset,
                 section_len: section.len(),
-            },
-        )?;
+            })?;
         if end > section.len() as u64 {
             return Err(Tpoff32ApplyError::TargetOutOfBounds {
                 relocation_index,
@@ -528,8 +528,9 @@ pub fn relocate_allocatable_sections_with_static_tls(
         })
         .collect::<Vec<_>>();
 
-    let mut relocated = relocate_allocatable_sections(&stripped_inputs, start_address, page_alignment)
-        .map_err(StaticTlsRelocationError::Regular)?;
+    let mut relocated =
+        relocate_allocatable_sections(&stripped_inputs, start_address, page_alignment)
+            .map_err(StaticTlsRelocationError::Regular)?;
     let layout = relocated
         .iter()
         .map(|section| LaidOutSection {
@@ -634,9 +635,7 @@ pub fn relocate_allocatable_sections_with_static_tls(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StaticTlsProgramHeaderError {
     TooManyProgramHeaders,
-    InvalidSegmentAlignment {
-        alignment: u64,
-    },
+    InvalidSegmentAlignment { alignment: u64 },
     TlsMemoryHasGap,
     TlsFileRangeOutsideOutput,
     OffsetOverflow,
@@ -647,16 +646,30 @@ pub enum StaticTlsProgramHeaderError {
 impl fmt::Display for StaticTlsProgramHeaderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TooManyProgramHeaders => write!(f, "TLS program header exceeds ELF64 program-header count"),
+            Self::TooManyProgramHeaders => {
+                write!(f, "TLS program header exceeds ELF64 program-header count")
+            }
             Self::InvalidSegmentAlignment { alignment } => write!(
                 f,
                 "TLS executable segment alignment {alignment} must be a non-zero power of two"
             ),
-            Self::TlsMemoryHasGap => write!(f, "PT_LOAD coverage contains a gap inside the static TLS memory image"),
-            Self::TlsFileRangeOutsideOutput => write!(f, "static TLS initialization image is outside rebuilt executable bytes"),
-            Self::OffsetOverflow => write!(f, "TLS executable file-offset calculation overflows u64"),
-            Self::FileRangeOutOfBounds => write!(f, "existing PT_LOAD file range is outside executable bytes"),
-            Self::FileTooLarge => write!(f, "TLS executable output cannot be represented in memory"),
+            Self::TlsMemoryHasGap => write!(
+                f,
+                "PT_LOAD coverage contains a gap inside the static TLS memory image"
+            ),
+            Self::TlsFileRangeOutsideOutput => write!(
+                f,
+                "static TLS initialization image is outside rebuilt executable bytes"
+            ),
+            Self::OffsetOverflow => {
+                write!(f, "TLS executable file-offset calculation overflows u64")
+            }
+            Self::FileRangeOutOfBounds => {
+                write!(f, "existing PT_LOAD file range is outside executable bytes")
+            }
+            Self::FileTooLarge => {
+                write!(f, "TLS executable output cannot be represented in memory")
+            }
         }
     }
 }
@@ -699,9 +712,7 @@ pub fn inject_static_tls_program_header(
         if end > image.bytes.len() as u64 {
             return Err(StaticTlsProgramHeaderError::FileRangeOutOfBounds);
         }
-        old_payloads.push(
-            image.bytes[segment.file_offset as usize..end as usize].to_vec(),
-        );
+        old_payloads.push(image.bytes[segment.file_offset as usize..end as usize].to_vec());
     }
 
     let tls_memory_end = tls
@@ -778,8 +789,8 @@ pub fn inject_static_tls_program_header(
         .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
     next_file_offset = next_file_offset.max(tls_file_end);
 
-    let file_size = usize::try_from(next_file_offset)
-        .map_err(|_| StaticTlsProgramHeaderError::FileTooLarge)?;
+    let file_size =
+        usize::try_from(next_file_offset).map_err(|_| StaticTlsProgramHeaderError::FileTooLarge)?;
     let mut bytes = vec![0_u8; file_size];
     if image.bytes.len() < ELF64_EHDR_SIZE {
         return Err(StaticTlsProgramHeaderError::FileRangeOutOfBounds);
@@ -848,11 +859,7 @@ fn load_flags(permissions: LoadSegmentPermissions) -> u32 {
     }
 }
 
-fn write_load_program_header(
-    out: &mut [u8],
-    segment: &ExecutableLoadSegment,
-    alignment: u64,
-) {
+fn write_load_program_header(out: &mut [u8], segment: &ExecutableLoadSegment, alignment: u64) {
     put_u32(out, 0, PT_LOAD);
     put_u32(out, 4, load_flags(segment.permissions));
     put_u64(out, 8, segment.file_offset);
