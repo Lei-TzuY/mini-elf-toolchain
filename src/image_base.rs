@@ -720,10 +720,8 @@ mod tests {
             ImageBaseArgumentError::InvalidValue { .. }
         ));
         assert!(matches!(
-            extract_image_base_argument(&[OsString::from(
-                "-Ttext-segment=0x10000000000000000",
-            )])
-            .unwrap_err(),
+            extract_image_base_argument(&[OsString::from("-Ttext-segment=0x10000000000000000",)])
+                .unwrap_err(),
             ImageBaseArgumentError::InvalidValue { .. }
         ));
     }
