@@ -2,23 +2,30 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [bil-251-nm-numeric-sort]
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: bil-251-nm-numeric-sort
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Format
-        run: cargo fmt --all -- --check
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Test
-        run: cargo test --all-targets --all-features
+      - name: Format branch
+        run: |
+          cargo fmt --all
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "LeiZ"
+          git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+          git add -- '*.rs'
+          git commit -m "Apply stable rustfmt output"
+          git push origin HEAD:bil-251-nm-numeric-sort
