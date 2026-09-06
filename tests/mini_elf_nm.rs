@@ -192,3 +192,80 @@ fn later_malformed_input_preserves_stdout_atomicity() {
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn undefined_only_matches_gnu_nm_symbol_facts() {
+    if !tool_available("as") || !tool_available("nm") {
+        return;
+    }
+
+    let dir = temp_dir("nm-undefined-only");
+    let assembly = dir.join("sample.s");
+    let object = dir.join("sample.o");
+    fs::write(
+        &assembly,
+        ".text\n.globl defined_symbol\n.type defined_symbol,@function\ndefined_symbol:\n  call external_symbol\n  ret\n.size defined_symbol, .-defined_symbol\n",
+    )
+    .unwrap();
+    let assembled = Command::new("as")
+        .arg("-o")
+        .arg(&object)
+        .arg(&assembly)
+        .output()
+        .unwrap();
+    assert!(
+        assembled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&assembled.stderr)
+    );
+
+    let short = Command::new(env!("CARGO_BIN_EXE_mini-elf-nm"))
+        .arg("-u")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        short.status.success(),
+        "{}",
+        String::from_utf8_lossy(&short.stderr)
+    );
+    let short_stdout = String::from_utf8_lossy(&short.stdout);
+    assert!(short_stdout.contains("external_symbol"), "{short_stdout}");
+    assert!(!short_stdout.contains("defined_symbol"), "{short_stdout}");
+    assert!(short_stdout.contains("UND"), "{short_stdout}");
+
+    let long = Command::new(env!("CARGO_BIN_EXE_mini-elf-nm"))
+        .arg("--undefined-only")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(long.status.success());
+    assert_eq!(short.stdout, long.stdout);
+
+    let gnu = Command::new("nm").arg("-u").arg(&object).output().unwrap();
+    assert!(gnu.status.success());
+    let gnu_stdout = String::from_utf8_lossy(&gnu.stdout);
+    assert!(gnu_stdout.contains("external_symbol"), "{gnu_stdout}");
+    assert!(!gnu_stdout.contains("defined_symbol"), "{gnu_stdout}");
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn undefined_only_keeps_malformed_input_failure_atomic() {
+    let dir = temp_dir("nm-undefined-only-malformed");
+    let input = dir.join("bad.o");
+    fs::write(&input, b"\x7fELF").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-nm"))
+        .arg("--undefined-only")
+        .arg(&input)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "stdout must remain atomic");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("ELF64 header is truncated"), "{stderr}");
+
+    let _ = fs::remove_dir_all(dir);
+}
