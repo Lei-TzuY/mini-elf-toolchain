@@ -46,7 +46,7 @@ fn assemble(dir: &Path, stem: &str, source: &str) {
 }
 
 #[test]
-fn cli_links_gnu_gotplt64_as_absolute_synthetic_got_entry_address() {
+fn cli_links_gnu_gotplt64_as_got_relative_entry_offset() {
     if !have_gnu_toolchain() {
         return;
     }
@@ -55,7 +55,7 @@ fn cli_links_gnu_gotplt64_as_absolute_synthetic_got_entry_address() {
     assemble(
         &dir,
         "start",
-        ".globl _start\n.type _start,@function\n.extern anchor\n_start:\n  mov gotplt_value(%rip), %rax\n  lea anchor@GOTPCREL(%rip), %rdx\n  cmp %rdx, %rax\n  jne .Lbad\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n.Lbad:\n  mov $60,%rax\n  mov $1,%rdi\n  syscall\n.section .data\n.align 8\ngotplt_value:\n  .quad 0\n  .reloc gotplt_value, R_X86_64_GOTPLT64, anchor\n",
+        ".globl _start\n.type _start,@function\n.extern anchor\n_start:\n  lea gotpc_value(%rip), %rax\n  add gotpc_value(%rip), %rax\n  add gotplt_value(%rip), %rax\n  lea anchor@GOTPCREL(%rip), %rdx\n  cmp %rdx, %rax\n  jne .Lbad\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n.Lbad:\n  mov $60,%rax\n  mov $1,%rdi\n  syscall\n.section .data\n.align 8\ngotplt_value:\n  .quad 0\n  .reloc gotplt_value, R_X86_64_GOTPLT64, anchor\ngotpc_value:\n  .quad 0\n  .reloc gotpc_value, R_X86_64_GOTPC64, anchor\n",
     );
     assemble(
         &dir,
@@ -70,10 +70,12 @@ fn cli_links_gnu_gotplt64_as_absolute_synthetic_got_entry_address() {
         .expect("run GNU readelf on input");
     assert!(relocations.status.success());
     let relocation_stdout = String::from_utf8_lossy(&relocations.stdout);
-    assert!(
-        relocation_stdout.contains("R_X86_64_GOTPLT64"),
-        "assembler did not produce GOTPLT64 relocation: {relocation_stdout}"
-    );
+    for relocation in ["R_X86_64_GOTPLT64", "R_X86_64_GOTPC64"] {
+        assert!(
+            relocation_stdout.contains(relocation),
+            "assembler did not produce {relocation}: {relocation_stdout}"
+        );
+    }
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .current_dir(&dir)
