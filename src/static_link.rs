@@ -305,7 +305,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            StaticLinkError::MissingEntrySymbol { name } if name == b"other"
+            StaticLinkError::MissingEntrySymbol { name } if name == b"_start"
         ));
     }
 
