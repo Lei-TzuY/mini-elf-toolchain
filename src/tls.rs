@@ -5,9 +5,11 @@ use crate::executable_writer::{ExecutableImage, ExecutableLoadSegment, LoadSegme
 use crate::layout::LaidOutSection;
 use crate::link_context::{build_link_context, LinkContext, LinkContextBuildError};
 use crate::linker_input::{LinkerInputError, LinkerInputObject, LinkerInputSection};
-use crate::load_segments::SHF_TLS;
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
-use crate::relocated_sections::{relocate_allocatable_sections, RelocatedSectionError, RelocatedSectionImage};
+use crate::permission_layout::SHF_TLS;
+use crate::relocated_sections::{
+    relocate_allocatable_sections, RelocatedSectionError, RelocatedSectionImage,
+};
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{SymbolDefinition, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
@@ -635,9 +637,8 @@ pub enum StaticTlsProgramHeaderError {
     InvalidSegmentAlignment {
         alignment: u64,
     },
-    TlsNotContainedInOneLoadSegment,
-    TlsFileRangeOutsideLoadSegment,
-    TlsMemoryRangeOutsideLoadSegment,
+    TlsMemoryHasGap,
+    TlsFileRangeOutsideOutput,
     OffsetOverflow,
     FileRangeOutOfBounds,
     FileTooLarge,
@@ -651,15 +652,8 @@ impl fmt::Display for StaticTlsProgramHeaderError {
                 f,
                 "TLS executable segment alignment {alignment} must be a non-zero power of two"
             ),
-            Self::TlsNotContainedInOneLoadSegment => {
-                write!(f, "static TLS image is not contained in one PT_LOAD segment")
-            }
-            Self::TlsFileRangeOutsideLoadSegment => {
-                write!(f, "static TLS initialization image is outside its PT_LOAD file range")
-            }
-            Self::TlsMemoryRangeOutsideLoadSegment => {
-                write!(f, "static TLS memory image is outside its PT_LOAD memory range")
-            }
+            Self::TlsMemoryHasGap => write!(f, "PT_LOAD coverage contains a gap inside the static TLS memory image"),
+            Self::TlsFileRangeOutsideOutput => write!(f, "static TLS initialization image is outside rebuilt executable bytes"),
             Self::OffsetOverflow => write!(f, "TLS executable file-offset calculation overflows u64"),
             Self::FileRangeOutOfBounds => write!(f, "existing PT_LOAD file range is outside executable bytes"),
             Self::FileTooLarge => write!(f, "TLS executable output cannot be represented in memory"),
@@ -686,14 +680,12 @@ pub fn inject_static_tls_program_header(
         .ok_or(StaticTlsProgramHeaderError::TooManyProgramHeaders)?;
     let program_header_count_u16 = u16::try_from(program_header_count)
         .map_err(|_| StaticTlsProgramHeaderError::TooManyProgramHeaders)?;
-    let metadata_end = u64::try_from(ELF64_EHDR_SIZE)
-        .ok()
-        .and_then(|header| {
-            u64::try_from(ELF64_PHDR_SIZE)
-                .ok()
-                .and_then(|phdr| phdr.checked_mul(program_header_count as u64))
-                .and_then(|size| header.checked_add(size))
-        })
+    let metadata_end = (ELF64_EHDR_SIZE as u64)
+        .checked_add(
+            (ELF64_PHDR_SIZE as u64)
+                .checked_mul(program_header_count as u64)
+                .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?,
+        )
         .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
 
     let mut old_segments = image.load_segments.clone();
@@ -712,66 +704,86 @@ pub fn inject_static_tls_program_header(
         );
     }
 
+    let tls_memory_end = tls
+        .base_address
+        .checked_add(tls.memory_size)
+        .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
+    let mut tls_indices = Vec::new();
+    let mut covered_until = tls.base_address;
+    for (index, segment) in old_segments.iter().enumerate() {
+        let segment_end = segment
+            .virtual_address
+            .checked_add(segment.memory_size)
+            .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
+        if segment_end <= tls.base_address || segment.virtual_address >= tls_memory_end {
+            continue;
+        }
+        let overlap_start = segment.virtual_address.max(tls.base_address);
+        if overlap_start > covered_until {
+            return Err(StaticTlsProgramHeaderError::TlsMemoryHasGap);
+        }
+        covered_until = covered_until.max(segment_end.min(tls_memory_end));
+        tls_indices.push(index);
+    }
+    if covered_until < tls_memory_end || tls_indices.is_empty() {
+        return Err(StaticTlsProgramHeaderError::TlsMemoryHasGap);
+    }
+    let first_tls_index = tls_indices[0];
+
     let mut new_segments = Vec::with_capacity(old_segments.len());
     let mut next_file_offset = metadata_end;
-    for segment in &old_segments {
-        let file_offset = first_congruent_offset_at_or_after(
-            next_file_offset,
-            segment.virtual_address,
-            segment_alignment,
-        )?;
-        next_file_offset = file_offset
+    let mut tls_anchor = None;
+    for (index, segment) in old_segments.iter().enumerate() {
+        let file_offset = if tls_indices.binary_search(&index).is_ok() {
+            if let Some((anchor_offset, anchor_address)) = tls_anchor {
+                let offset = anchor_offset
+                    .checked_add(segment.virtual_address - anchor_address)
+                    .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
+                if offset < next_file_offset {
+                    return Err(StaticTlsProgramHeaderError::TlsMemoryHasGap);
+                }
+                offset
+            } else {
+                let offset = first_congruent_offset_at_or_after(
+                    next_file_offset,
+                    segment.virtual_address,
+                    segment_alignment,
+                )?;
+                tls_anchor = Some((offset, segment.virtual_address));
+                offset
+            }
+        } else {
+            first_congruent_offset_at_or_after(
+                next_file_offset,
+                segment.virtual_address,
+                segment_alignment,
+            )?
+        };
+        let file_end = file_offset
             .checked_add(segment.file_size)
             .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
+        next_file_offset = next_file_offset.max(file_end);
         let mut emitted = segment.clone();
         emitted.file_offset = file_offset;
         new_segments.push(emitted);
     }
 
-    let tls_memory_end = tls
-        .base_address
-        .checked_add(tls.memory_size)
+    let first_tls = &new_segments[first_tls_index];
+    let tls_file_offset = first_tls
+        .file_offset
+        .checked_add(tls.base_address - first_tls.virtual_address)
         .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
-    let tls_file_end = tls
-        .base_address
+    let tls_file_end = tls_file_offset
         .checked_add(tls.file_size)
         .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
-    let containing_index = new_segments
-        .iter()
-        .position(|segment| {
-            let memory_end = segment
-                .virtual_address
-                .checked_add(segment.memory_size)
-                .unwrap_or(0);
-            tls.base_address >= segment.virtual_address && tls_memory_end <= memory_end
-        })
-        .ok_or(StaticTlsProgramHeaderError::TlsNotContainedInOneLoadSegment)?;
-    let containing = &new_segments[containing_index];
-    if tls_memory_end
-        > containing
-            .virtual_address
-            .checked_add(containing.memory_size)
-            .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?
-    {
-        return Err(StaticTlsProgramHeaderError::TlsMemoryRangeOutsideLoadSegment);
-    }
-    if tls.file_size != 0
-        && tls_file_end
-            > containing
-                .virtual_address
-                .checked_add(containing.file_size)
-                .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?
-    {
-        return Err(StaticTlsProgramHeaderError::TlsFileRangeOutsideLoadSegment);
-    }
-    let tls_file_offset = containing
-        .file_offset
-        .checked_add(tls.base_address - containing.virtual_address)
-        .ok_or(StaticTlsProgramHeaderError::OffsetOverflow)?;
+    next_file_offset = next_file_offset.max(tls_file_end);
 
     let file_size = usize::try_from(next_file_offset)
         .map_err(|_| StaticTlsProgramHeaderError::FileTooLarge)?;
     let mut bytes = vec![0_u8; file_size];
+    if image.bytes.len() < ELF64_EHDR_SIZE {
+        return Err(StaticTlsProgramHeaderError::FileRangeOutOfBounds);
+    }
     bytes[..ELF64_EHDR_SIZE].copy_from_slice(&image.bytes[..ELF64_EHDR_SIZE]);
     put_u16(&mut bytes, 56, program_header_count_u16);
 
@@ -799,6 +811,9 @@ pub fn inject_static_tls_program_header(
         let start = emitted.file_offset as usize;
         let end = start + payload.len();
         bytes[start..end].copy_from_slice(payload);
+    }
+    if tls_file_end > bytes.len() as u64 {
+        return Err(StaticTlsProgramHeaderError::TlsFileRangeOutsideOutput);
     }
 
     image.bytes = bytes;
