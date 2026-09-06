@@ -7,7 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [-g|--extern-only] [-n|--numeric-sort] [-p|--no-sort] [-r|--reverse-sort] <input>...";
+const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-n|--numeric-sort] [-p|--no-sort] [-r|--reverse-sort] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -21,6 +21,7 @@ enum SortMode {
 #[derive(Clone, Copy, Default)]
 struct Filters {
     undefined_only: bool,
+    defined_only: bool,
     extern_only: bool,
     sort_mode: SortMode,
     reverse_sort: bool,
@@ -58,6 +59,7 @@ where
     while let Some(first) = inputs.first().and_then(|value| value.to_str()) {
         match first {
             "-u" | "--undefined-only" => filters.undefined_only = true,
+            "--defined-only" => filters.defined_only = true,
             "-g" | "--extern-only" => filters.extern_only = true,
             "-n" | "--numeric-sort" => filters.sort_mode = SortMode::Numeric,
             "-p" | "--no-sort" => filters.sort_mode = SortMode::None,
@@ -135,6 +137,7 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
             let binding = symbol.info >> 4;
             if name.is_empty()
                 || (filters.undefined_only && symbol.section_index != 0)
+                || (filters.defined_only && symbol.section_index == 0)
                 || (filters.extern_only && binding == 0)
             {
                 continue;
