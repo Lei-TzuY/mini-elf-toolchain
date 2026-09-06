@@ -23,7 +23,7 @@ const END_GROUP: &str = "--end-group";
 const WHOLE_ARCHIVE: &str = "--whole-archive";
 const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link -o <output> [--map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -82,14 +82,22 @@ where
         let output_flag = args
             .next()
             .ok_or_else(|| CliError::Usage("missing -o <output>".to_owned()))?;
-        if output_flag != "-o" {
+        let output = if output_flag == "-o" {
+            args.next()
+                .ok_or_else(|| CliError::Usage("missing output path after -o".to_owned()))?
+        } else if let Some(path) = output_flag
+            .to_str()
+            .and_then(|argument| argument.strip_prefix("--output="))
+        {
+            if path.is_empty() {
+                return Err(CliError::Usage("output path cannot be empty".to_owned()));
+            }
+            OsString::from(path)
+        } else {
             return Err(CliError::Usage(
                 "expected -o <output> after link".to_owned(),
             ));
-        }
-        let output = args
-            .next()
-            .ok_or_else(|| CliError::Usage("missing output path after -o".to_owned()))?;
+        };
         let raw_remaining: Vec<_> = args.collect();
         let forced =
             extract_forced_undefined_arguments(&raw_remaining).map_err(forced_undefined_error)?;
