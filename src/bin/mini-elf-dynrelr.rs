@@ -114,7 +114,10 @@ fn parse_u64(value: &str, option: &str) -> Result<u64, String> {
     if value.is_empty() {
         return Err(format!("{option} requires a non-empty address"));
     }
-    let parsed = if let Some(hex) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+    let parsed = if let Some(hex) = value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+    {
         if hex.is_empty() {
             None
         } else {
@@ -193,11 +196,10 @@ fn format_dynamic_relr(
             }
             validate_relocation_target(&program_headers, entry, index)?;
             decoded.push(entry);
-            cursor = Some(
-                entry
-                    .checked_add(ELF64_RELR_SIZE)
-                    .ok_or_else(|| format!("DT_RELR address entry {index} cursor overflows u64"))?,
-            );
+            cursor =
+                Some(entry.checked_add(ELF64_RELR_SIZE).ok_or_else(|| {
+                    format!("DT_RELR address entry {index} cursor overflows u64")
+                })?);
             continue;
         }
 
@@ -250,9 +252,7 @@ fn format_dynamic_relr(
                     "DT_RELR relocation at {address:#x} value overflows u64: load bias {load_bias:#x} + addend {addend:#x}"
                 )
             })?;
-            output.push_str(&format!(
-                "  {address:#018x} {addend:#018x} {value:#018x}\n"
-            ));
+            output.push_str(&format!("  {address:#018x} {addend:#018x} {value:#018x}\n"));
         }
     } else {
         output.push_str("  Offset\n");
