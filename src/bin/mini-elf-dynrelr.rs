@@ -49,21 +49,51 @@ where
     let args = args.collect::<Vec<_>>();
     if args.is_empty() || args[0] == "--help" || args[0] == "-h" {
         return if args.len() <= 1 {
-            Ok("usage: mini-elf-dynrelr <input>...\n".to_owned())
+            Ok("usage: mini-elf-dynrelr [--load-bias <address>] <input>...\n".to_owned())
         } else {
-            Err("usage: mini-elf-dynrelr <input>...".to_owned())
+            Err("usage: mini-elf-dynrelr [--load-bias <address>] <input>...".to_owned())
         };
     }
 
-    let multiple_inputs = args.len() > 1;
-    let mut inspected = Vec::with_capacity(args.len());
-    for input in args {
+    let mut load_bias = None;
+    let mut inputs = Vec::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = args[index].to_string_lossy();
+        if arg == "--load-bias" {
+            if load_bias.is_some() {
+                return Err("--load-bias may be specified at most once".to_owned());
+            }
+            index += 1;
+            if index == args.len() {
+                return Err("--load-bias requires an address".to_owned());
+            }
+            load_bias = Some(parse_u64(&args[index].to_string_lossy(), "--load-bias")?);
+        } else if let Some(value) = arg.strip_prefix("--load-bias=") {
+            if load_bias.is_some() {
+                return Err("--load-bias may be specified at most once".to_owned());
+            }
+            load_bias = Some(parse_u64(value, "--load-bias")?);
+        } else if arg.starts_with('-') {
+            return Err(format!("unknown option '{arg}'"));
+        } else {
+            inputs.push(args[index].clone());
+        }
+        index += 1;
+    }
+    if inputs.is_empty() {
+        return Err("usage: mini-elf-dynrelr [--load-bias <address>] <input>...".to_owned());
+    }
+
+    let multiple_inputs = inputs.len() > 1;
+    let mut inspected = Vec::with_capacity(inputs.len());
+    for input in inputs {
         let file = fs::read(&input)
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered =
-            format_dynamic_relr(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        let rendered = format_dynamic_relr(header, &file, load_bias)
+            .map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
@@ -80,7 +110,27 @@ where
     Ok(output)
 }
 
-fn format_dynamic_relr(header: Elf64Header, file: &[u8]) -> Result<String, String> {
+fn parse_u64(value: &str, option: &str) -> Result<u64, String> {
+    if value.is_empty() {
+        return Err(format!("{option} requires a non-empty address"));
+    }
+    let parsed = if let Some(hex) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+        if hex.is_empty() {
+            None
+        } else {
+            u64::from_str_radix(hex, 16).ok()
+        }
+    } else {
+        value.parse::<u64>().ok()
+    };
+    parsed.ok_or_else(|| format!("invalid {option} address '{value}'"))
+}
+
+fn format_dynamic_relr(
+    header: Elf64Header,
+    file: &[u8],
+    load_bias: Option<u64>,
+) -> Result<String, String> {
     let program_headers = program_headers(header, file)?;
     let entries = dynamic_entries(&program_headers, file)?;
     let relr = unique_tag_value(&entries, DT_RELR, "DT_RELR")?;
@@ -143,10 +193,11 @@ fn format_dynamic_relr(header: Elf64Header, file: &[u8]) -> Result<String, Strin
             }
             validate_relocation_target(&program_headers, entry, index)?;
             decoded.push(entry);
-            cursor =
-                Some(entry.checked_add(ELF64_RELR_SIZE).ok_or_else(|| {
-                    format!("DT_RELR address entry {index} cursor overflows u64")
-                })?);
+            cursor = Some(
+                entry
+                    .checked_add(ELF64_RELR_SIZE)
+                    .ok_or_else(|| format!("DT_RELR address entry {index} cursor overflows u64"))?,
+            );
             continue;
         }
 
@@ -180,9 +231,34 @@ fn format_dynamic_relr(header: Elf64Header, file: &[u8]) -> Result<String, Strin
         "DT_RELR contains {encoded_count} encoded entries, {} relocations:\n",
         decoded.len()
     );
-    output.push_str("  Offset\n");
-    for address in decoded {
-        output.push_str(&format!("  {address:#018x}\n"));
+    if let Some(load_bias) = load_bias {
+        output.push_str(&format!("Load bias: {load_bias:#018x}\n"));
+        output.push_str("  Offset             Addend             Value\n");
+        for address in decoded {
+            let target_offset = map_virtual_file_range(
+                &program_headers,
+                file.len(),
+                address,
+                ELF64_RELR_SIZE,
+                &format!("DT_RELR relocation target {address:#x}"),
+            )?;
+            let target_offset = usize::try_from(target_offset)
+                .map_err(|_| "DT_RELR relocation target offset does not fit usize".to_owned())?;
+            let addend = read_u64(file, target_offset);
+            let value = load_bias.checked_add(addend).ok_or_else(|| {
+                format!(
+                    "DT_RELR relocation at {address:#x} value overflows u64: load bias {load_bias:#x} + addend {addend:#x}"
+                )
+            })?;
+            output.push_str(&format!(
+                "  {address:#018x} {addend:#018x} {value:#018x}\n"
+            ));
+        }
+    } else {
+        output.push_str("  Offset\n");
+        for address in decoded {
+            output.push_str(&format!("  {address:#018x}\n"));
+        }
     }
     Ok(output)
 }
