@@ -58,7 +58,7 @@ fn assemble_sample(dir: &std::path::Path) -> std::path::PathBuf {
     let object = dir.join("sample.o");
     fs::write(
         &assembly,
-        ".text\n.globl sample\n.type sample,@function\nsample:\n  nop\n.size sample, .-sample\n.data\n.globl value\n.type value,@object\nvalue:\n  .quad 0x1234\n.size value, .-value\n.weak missing\n",
+        ".text\n.globl sample\n.type sample,@function\nsample:\n  nop\n.size sample, .-sample\n.data\n.globl value\n.type value,@object\nvalue:\n  .quad 0x1234\n.size value, .-value\n.weak missing\n  .quad missing\n",
     )
     .unwrap();
     let assembled = Command::new("as")
