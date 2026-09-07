@@ -164,7 +164,11 @@ fn relative_rel_matches_gnu_readelf_and_uses_implicit_addend() {
         .arg(&shared)
         .output()
         .unwrap();
-    assert!(gnu.status.success(), "{}", String::from_utf8_lossy(&gnu.stderr));
+    assert!(
+        gnu.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu.stderr)
+    );
     let gnu_text = String::from_utf8_lossy(&gnu.stdout);
     assert!(gnu_text.contains("R_X86_64_RELATIVE"), "{gnu_text}");
 
@@ -184,10 +188,20 @@ fn relative_rel_matches_gnu_readelf_and_uses_implicit_addend() {
         .arg(&shared)
         .output()
         .unwrap();
-    assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
     let ours_text = String::from_utf8_lossy(&ours.stdout);
-    assert!(ours_text.contains("1 R_X86_64_RELATIVE relocations"), "{ours_text}");
-    assert!(ours_text.contains(&format!("{expected:#018x}")), "{ours_text}");
+    assert!(
+        ours_text.contains("1 R_X86_64_RELATIVE relocations"),
+        "{ours_text}"
+    );
+    assert!(
+        ours_text.contains(&format!("{expected:#018x}")),
+        "{ours_text}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
