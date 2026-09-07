@@ -1,52 +1,16 @@
 [1m[92m   Compiling[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
-[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 2.65s
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 2.74s
 [1m[92m     Running[0m tests/dynamic_relr.rs (target/debug/deps/dynamic_relr-61f2082257386b48)
 
 running 6 tests
+test bitmap_before_address_entry_is_rejected ... ok
+test malformed_later_relrent_keeps_stdout_atomic ... ok
+test incomplete_relr_tag_tuple_is_rejected ... ok
+test dynamic_relr_matches_gnu_readelf_offsets ... ok
+test overflowing_dt_relr_virtual_range_is_rejected ... ok
+test overflowing_relr_address_cursor_is_rejected ... ok
 
-thread 'bitmap_before_address_entry_is_rejected' (2705) panicked at tests/dynamic_relr.rs:79:28:
-shared object should contain dynamic tag 36
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
 
-thread 'malformed_later_relrent_keeps_stdout_atomic' (2709) panicked at tests/dynamic_relr.rs:79:28:
-shared object should contain dynamic tag 37
 
-thread 'incomplete_relr_tag_tuple_is_rejected' (2707) panicked at tests/dynamic_relr.rs:79:28:
-shared object should contain dynamic tag 37
-test bitmap_before_address_entry_is_rejected ... FAILED
-test malformed_later_relrent_keeps_stdout_atomic ... FAILED
-test incomplete_relr_tag_tuple_is_rejected ... FAILED
-
-thread 'overflowing_dt_relr_virtual_range_is_rejected' (2724) panicked at tests/dynamic_relr.rs:79:28:
-shared object should contain dynamic tag 36
-test overflowing_dt_relr_virtual_range_is_rejected ... FAILED
-
-thread 'overflowing_relr_address_cursor_is_rejected' (2725) panicked at tests/dynamic_relr.rs:79:28:
-shared object should contain dynamic tag 36
-test overflowing_relr_address_cursor_is_rejected ... FAILED
-
-thread 'dynamic_relr_matches_gnu_readelf_offsets' (2706) panicked at tests/dynamic_relr.rs:158:5:
-
-Relocation section '.rela.dyn' at offset 0x1e8 contains 3 entries:
-    Offset             Info             Type               Symbol's Value  Symbol's Name + Addend
-0000000000002008  0000000000000008 R_X86_64_RELATIVE                         2000
-0000000000002010  0000000000000008 R_X86_64_RELATIVE                         2000
-0000000000002018  0000000000000008 R_X86_64_RELATIVE                         2000
-
-test dynamic_relr_matches_gnu_readelf_offsets ... FAILED
-
-failures:
-
-failures:
-    bitmap_before_address_entry_is_rejected
-    dynamic_relr_matches_gnu_readelf_offsets
-    incomplete_relr_tag_tuple_is_rejected
-    malformed_later_relrent_keeps_stdout_atomic
-    overflowing_dt_relr_virtual_range_is_rejected
-    overflowing_relr_address_cursor_is_rejected
-
-test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
-
-[1m[91merror[0m: test failed, to rerun pass `--test dynamic_relr`
-
-EXIT_STATUS=101
+EXIT_STATUS=0
