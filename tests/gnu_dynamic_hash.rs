@@ -199,7 +199,10 @@ fn malformed_later_bucket_outside_backed_chain_keeps_stdout_atomic() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "stdout must remain atomic");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("not backed by a PT_LOAD file range"), "{stderr}");
+    assert!(
+        stderr.contains("not backed by a PT_LOAD file range"),
+        "{stderr}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
