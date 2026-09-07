@@ -24,8 +24,12 @@ fn first_load_facts(output: &str) -> Vec<String> {
         .lines()
         .find_map(|line| {
             let fields = line.split_whitespace().collect::<Vec<_>>();
-            (fields.first().copied() == Some("LOAD") && fields.len() >= 6)
-                .then(|| fields[..6].iter().map(|field| (*field).to_owned()).collect())
+            (fields.first().copied() == Some("LOAD") && fields.len() >= 6).then(|| {
+                fields[..6]
+                    .iter()
+                    .map(|field| (*field).to_owned())
+                    .collect()
+            })
         })
         .expect("expected a LOAD program header")
 }
