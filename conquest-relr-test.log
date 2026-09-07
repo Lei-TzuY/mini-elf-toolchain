@@ -1,0 +1,16 @@
+[1m[92m   Compiling[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 2.50s
+[1m[92m     Running[0m tests/dynamic_relr.rs (target/debug/deps/dynamic_relr-61f2082257386b48)
+
+running 6 tests
+test incomplete_relr_tag_tuple_is_rejected ... ok
+test malformed_later_relrent_keeps_stdout_atomic ... ok
+test bitmap_before_address_entry_is_rejected ... ok
+test overflowing_dt_relr_virtual_range_is_rejected ... ok
+test overflowing_relr_address_cursor_is_rejected ... ok
+test dynamic_relr_matches_gnu_readelf_offsets ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.82s
+
+
+EXIT_STATUS=0
