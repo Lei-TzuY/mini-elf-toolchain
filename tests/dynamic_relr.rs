@@ -117,20 +117,45 @@ fn build_relr_shared(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     );
     let linked = Command::new("ld")
         .arg("-shared")
-        .arg("-z")
-        .arg("pack-relative-relocs")
         .arg("-o")
         .arg(&shared)
         .arg(&object)
         .output()
         .unwrap();
-    if !linked.status.success() {
-        let stderr = String::from_utf8_lossy(&linked.stderr);
-        if stderr.contains("unknown -z option") || stderr.contains("ignored") {
-            return None;
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+
+    let mut bytes = fs::read(&shared).unwrap();
+    let rela_address = read_u64(&bytes, dynamic_value_offset(&bytes, 7));
+    let rela_size = read_u64(&bytes, dynamic_value_offset(&bytes, 8));
+    assert!(rela_size >= 72, "expected at least three ELF64 Rela entries");
+    let table_offset = virtual_to_file(&bytes, rela_address, 72);
+    let first = read_u64(&bytes, table_offset);
+    let second = read_u64(&bytes, table_offset + 24);
+    let third = read_u64(&bytes, table_offset + 48);
+    assert_eq!(second, first + 8, "fixture relocations must be contiguous");
+    assert_eq!(third, first + 16, "fixture relocations must be contiguous");
+
+    for offset in dynamic_entries(&bytes) {
+        match read_i64(&bytes, offset) {
+            7 => bytes[offset..offset + 8].copy_from_slice(&36_i64.to_le_bytes()),
+            8 => {
+                bytes[offset..offset + 8].copy_from_slice(&35_i64.to_le_bytes());
+                bytes[offset + 8..offset + 16].copy_from_slice(&16_u64.to_le_bytes());
+            }
+            9 => {
+                bytes[offset..offset + 8].copy_from_slice(&37_i64.to_le_bytes());
+                bytes[offset + 8..offset + 16].copy_from_slice(&8_u64.to_le_bytes());
+            }
+            _ => {}
         }
-        panic!("{stderr}");
     }
+    bytes[table_offset..table_offset + 8].copy_from_slice(&first.to_le_bytes());
+    bytes[table_offset + 8..table_offset + 16].copy_from_slice(&7_u64.to_le_bytes());
+    fs::write(&shared, bytes).unwrap();
     Some(shared)
 }
 
@@ -145,6 +170,7 @@ fn dynamic_relr_matches_gnu_readelf_offsets() {
         return;
     };
     let gnu = Command::new("readelf")
+        .arg("--use-dynamic")
         .arg("-rW")
         .arg(&shared)
         .output()
@@ -155,7 +181,6 @@ fn dynamic_relr_matches_gnu_readelf_offsets() {
         String::from_utf8_lossy(&gnu.stderr)
     );
     let gnu_text = String::from_utf8_lossy(&gnu.stdout);
-    assert!(gnu_text.contains(".relr.dyn"), "{gnu_text}");
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrelr"))
         .arg(&shared)
@@ -172,7 +197,7 @@ fn dynamic_relr_matches_gnu_readelf_offsets() {
         .lines()
         .filter_map(|line| line.trim().strip_prefix("0x"))
         .collect::<Vec<_>>();
-    assert!(offsets.len() >= 3, "{ours_text}");
+    assert_eq!(offsets.len(), 3, "{ours_text}");
     for offset in offsets {
         assert!(
             gnu_text.contains(offset),
