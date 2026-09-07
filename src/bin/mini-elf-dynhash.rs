@@ -58,8 +58,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered = format_sysv_hash(header, &file)
-            .map_err(|error| format!("{display}: {error}"))?;
+        let rendered =
+            format_sysv_hash(header, &file).map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
@@ -83,7 +83,13 @@ fn format_sysv_hash(header: Elf64Header, file: &[u8]) -> Result<String, String> 
         return Ok("No DT_HASH entry found.\n".to_owned());
     };
 
-    let header_offset = map_virtual_range(&program_headers, file.len(), hash_address, 8, "DT_HASH header")?;
+    let header_offset = map_virtual_range(
+        &program_headers,
+        file.len(),
+        hash_address,
+        8,
+        "DT_HASH header",
+    )?;
     let header_offset = usize::try_from(header_offset)
         .map_err(|_| "DT_HASH header offset does not fit usize".to_owned())?;
     let bucket_count = read_u32(file, header_offset);
