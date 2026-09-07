@@ -132,11 +132,17 @@ fn build_relr_shared(dir: &std::path::Path) -> std::path::PathBuf {
     let mut bytes = fs::read(&shared).unwrap();
     let rela_address = read_u64(&bytes, dynamic_value_offset(&bytes, 7));
     let rela_size = read_u64(&bytes, dynamic_value_offset(&bytes, 8));
-    assert!(rela_size >= 72, "expected at least three ELF64 Rela entries");
+    assert!(
+        rela_size >= 72,
+        "expected at least three ELF64 Rela entries"
+    );
     let table_offset = virtual_to_file(&bytes, rela_address, 72);
 
     let relocations = [
-        (read_u64(&bytes, table_offset), read_u64(&bytes, table_offset + 16)),
+        (
+            read_u64(&bytes, table_offset),
+            read_u64(&bytes, table_offset + 16),
+        ),
         (
             read_u64(&bytes, table_offset + 24),
             read_u64(&bytes, table_offset + 40),
@@ -202,7 +208,10 @@ fn load_bias_simulates_relative_values_and_preserves_gnu_offsets() {
         String::from_utf8_lossy(&ours.stderr)
     );
     let ours_text = String::from_utf8_lossy(&ours.stdout);
-    assert!(ours_text.contains(&format!("Load bias: {load_bias:#018x}")), "{ours_text}");
+    assert!(
+        ours_text.contains(&format!("Load bias: {load_bias:#018x}")),
+        "{ours_text}"
+    );
     assert!(
         ours_text.contains(&format!(
             "{first_address:#018x} {first_addend:#018x} {first_value:#018x}"
