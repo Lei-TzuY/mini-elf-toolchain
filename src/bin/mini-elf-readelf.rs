@@ -4,7 +4,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: mini-elf-readelf -h|--file-header|-l|--program-headers|-S|--section-headers <input>...";
+const USAGE: &str =
+    "usage: mini-elf-readelf -h|--file-header|-l|--program-headers|-S|--section-headers <input>...";
 const ELF64_PROGRAM_HEADER_SIZE: u64 = 56;
 
 #[derive(Clone, Copy)]
