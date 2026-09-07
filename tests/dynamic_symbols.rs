@@ -268,7 +268,8 @@ fn overflowing_dt_gnu_hash_virtual_range_is_rejected() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("DT_GNU_HASH header virtual range overflows u64"));
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("DT_GNU_HASH header virtual range overflows u64"));
     let _ = fs::remove_dir_all(dir);
 }
 
