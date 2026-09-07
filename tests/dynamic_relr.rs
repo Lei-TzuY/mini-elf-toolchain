@@ -155,7 +155,7 @@ fn dynamic_relr_matches_gnu_readelf_offsets() {
         String::from_utf8_lossy(&gnu.stderr)
     );
     let gnu_text = String::from_utf8_lossy(&gnu.stdout);
-    assert!(gnu_text.contains("RELR"), "{gnu_text}");
+    assert!(gnu_text.contains(".relr.dyn"), "{gnu_text}");
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrelr"))
         .arg(&shared)
