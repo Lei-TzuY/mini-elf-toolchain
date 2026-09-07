@@ -31,7 +31,10 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
     u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
 }
 
-fn symbol_facts(output: &str, name: &str) -> (u64, u64, String, String, String, String) {
+fn symbol_facts(
+    output: &str,
+    name: &str,
+) -> (u64, u64, String, String, String, String) {
     output
         .lines()
         .find_map(|line| {
