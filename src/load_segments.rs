@@ -187,6 +187,9 @@ where
                 size: input.layout.size,
             },
         )?;
+        if input.layout.size == 0 {
+            continue;
+        }
         ordered.push((input, permissions, end));
     }
 
