@@ -15,4 +15,4 @@ Multiple inputs are validated before any output is emitted, so a malformed later
 
 The focused differential test builds a real shared object with GNU `as` and `ld --hash-style=sysv`, compares the `nchain`-derived dynamic-symbol count against GNU `readelf --dyn-syms -W`, and covers malformed bucket indices plus an overflowing `DT_HASH` virtual range.
 
-GNU hash (`DT_GNU_HASH`) is intentionally outside this slice and should be added independently rather than inferred from section metadata.
+GNU hash (`DT_GNU_HASH`) is kept as an independent runtime-style inspection path in `mini-elf-gnuhash` rather than inferred from section metadata.
