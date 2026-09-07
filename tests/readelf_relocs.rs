@@ -81,7 +81,10 @@ fn relocation_core_facts_match_gnu_readelf_for_short_and_long_flags() {
         );
         let ours = String::from_utf8_lossy(&ours.stdout);
         for relocation in ["R_X86_64_PLT32", "R_X86_64_64"] {
-            assert!(ours.contains(relocation), "ours missing {relocation}: {ours}");
+            assert!(
+                ours.contains(relocation),
+                "ours missing {relocation}: {ours}"
+            );
             assert!(gnu.contains(relocation), "GNU missing {relocation}: {gnu}");
         }
         assert!(ours.contains("target"));
