@@ -160,9 +160,7 @@ fn format_program_headers(header: Elf64Header, file: &[u8]) -> Result<String, St
         program_headers.push(program_header);
     }
 
-    let mut output = format!(
-        "Program Headers:\n  Type           Offset             VirtAddr           PhysAddr           FileSiz            MemSiz             Flg Align\n"
-    );
+    let mut output = "Program Headers:\n  Type           Offset             VirtAddr           PhysAddr           FileSiz            MemSiz             Flg Align\n".to_owned();
     for program_header in program_headers {
         output.push_str(&format!(
             "  {:<14} {:#018x} {:#018x} {:#018x} {:#018x} {:#018x} {:<3} {:#x}\n",
