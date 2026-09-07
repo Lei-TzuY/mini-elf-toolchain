@@ -190,8 +190,7 @@ fn malformed_later_bucket_below_symbol_offset_keeps_stdout_atomic() {
     let bloom_count = read_u32(&bytes, hash + 8);
     assert!(symbol_offset > 0);
     let bucket_offset = hash + 16 + bloom_count as usize * 8;
-    bytes[bucket_offset..bucket_offset + 4]
-        .copy_from_slice(&(symbol_offset - 1).to_le_bytes());
+    bytes[bucket_offset..bucket_offset + 4].copy_from_slice(&(symbol_offset - 1).to_le_bytes());
     fs::write(&bad, bytes).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-gnuhash"))
