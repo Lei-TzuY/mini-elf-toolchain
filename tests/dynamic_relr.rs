@@ -1,0 +1,346 @@
+use std::fs;
+use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+fn temp_dir(label: &str) -> std::path::PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "mini-elf-toolchain-{label}-{}-{nonce}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn tool_available(tool: &str) -> bool {
+    Command::new(tool).arg("--version").output().is_ok()
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn read_i64(bytes: &[u8], offset: usize) -> i64 {
+    i64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn program_headers(bytes: &[u8]) -> Vec<(u32, u64, u64, u64, u64)> {
+    let phoff = read_u64(bytes, 32) as usize;
+    let phentsize = read_u16(bytes, 54) as usize;
+    let phnum = read_u16(bytes, 56) as usize;
+    (0..phnum)
+        .map(|index| {
+            let offset = phoff + index * phentsize;
+            (
+                read_u32(bytes, offset),
+                read_u64(bytes, offset + 8),
+                read_u64(bytes, offset + 16),
+                read_u64(bytes, offset + 32),
+                read_u64(bytes, offset + 40),
+            )
+        })
+        .collect()
+}
+
+fn dynamic_entries(bytes: &[u8]) -> Vec<usize> {
+    let dynamic = program_headers(bytes)
+        .into_iter()
+        .find(|(segment_type, _, _, _, _)| *segment_type == 2)
+        .expect("shared object should contain PT_DYNAMIC");
+    let mut offsets = Vec::new();
+    let mut offset = dynamic.1 as usize;
+    let end = (dynamic.1 + dynamic.3) as usize;
+    while offset + 16 <= end {
+        offsets.push(offset);
+        if read_i64(bytes, offset) == 0 {
+            break;
+        }
+        offset += 16;
+    }
+    offsets
+}
+
+fn dynamic_value_offset(bytes: &[u8], wanted_tag: i64) -> usize {
+    dynamic_entries(bytes)
+        .into_iter()
+        .find(|offset| read_i64(bytes, *offset) == wanted_tag)
+        .map(|offset| offset + 8)
+        .unwrap_or_else(|| panic!("shared object should contain dynamic tag {wanted_tag}"))
+}
+
+fn virtual_to_file(bytes: &[u8], address: u64, size: u64) -> usize {
+    program_headers(bytes)
+        .into_iter()
+        .filter(|(segment_type, _, _, _, _)| *segment_type == 1)
+        .find_map(|(_, offset, virtual_address, file_size, _)| {
+            let end = virtual_address.checked_add(file_size)?;
+            let wanted_end = address.checked_add(size)?;
+            if address >= virtual_address && wanted_end <= end {
+                Some((offset + (address - virtual_address)) as usize)
+            } else {
+                None
+            }
+        })
+        .expect("virtual range should be file-backed")
+}
+
+fn build_relr_shared(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let assembly = dir.join("sample.s");
+    let object = dir.join("sample.o");
+    let shared = dir.join("libsample.so");
+    fs::write(
+        &assembly,
+        ".data\n.local target\ntarget:\n  .quad 0\n.globl ptr0\n.type ptr0,@object\n.size ptr0,8\nptr0:\n  .quad target\n.globl ptr1\n.type ptr1,@object\n.size ptr1,8\nptr1:\n  .quad target\n.globl ptr2\n.type ptr2,@object\n.size ptr2,8\nptr2:\n  .quad target\n",
+    )
+    .unwrap();
+    let assembled = Command::new("as")
+        .arg("-o")
+        .arg(&object)
+        .arg(&assembly)
+        .output()
+        .unwrap();
+    assert!(
+        assembled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&assembled.stderr)
+    );
+    let linked = Command::new("ld")
+        .arg("-shared")
+        .arg("-o")
+        .arg(&shared)
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+
+    let mut bytes = fs::read(&shared).unwrap();
+    let rela_address = read_u64(&bytes, dynamic_value_offset(&bytes, 7));
+    let rela_size = read_u64(&bytes, dynamic_value_offset(&bytes, 8));
+    assert!(
+        rela_size >= 72,
+        "expected at least three ELF64 Rela entries"
+    );
+    let table_offset = virtual_to_file(&bytes, rela_address, 72);
+    let first = read_u64(&bytes, table_offset);
+    let second = read_u64(&bytes, table_offset + 24);
+    let third = read_u64(&bytes, table_offset + 48);
+    assert_eq!(second, first + 8, "fixture relocations must be contiguous");
+    assert_eq!(third, first + 16, "fixture relocations must be contiguous");
+
+    for offset in dynamic_entries(&bytes) {
+        match read_i64(&bytes, offset) {
+            7 => bytes[offset..offset + 8].copy_from_slice(&36_i64.to_le_bytes()),
+            8 => {
+                bytes[offset..offset + 8].copy_from_slice(&35_i64.to_le_bytes());
+                bytes[offset + 8..offset + 16].copy_from_slice(&16_u64.to_le_bytes());
+            }
+            9 => {
+                bytes[offset..offset + 8].copy_from_slice(&37_i64.to_le_bytes());
+                bytes[offset + 8..offset + 16].copy_from_slice(&8_u64.to_le_bytes());
+            }
+            _ => {}
+        }
+    }
+    bytes[table_offset..table_offset + 8].copy_from_slice(&first.to_le_bytes());
+    bytes[table_offset + 8..table_offset + 16].copy_from_slice(&7_u64.to_le_bytes());
+    fs::write(&shared, bytes).unwrap();
+    Some(shared)
+}
+
+#[test]
+fn dynamic_relr_matches_gnu_readelf_offsets() {
+    if !tool_available("as") || !tool_available("ld") || !tool_available("readelf") {
+        return;
+    }
+    let dir = temp_dir("dynrelr-gnu");
+    let Some(shared) = build_relr_shared(&dir) else {
+        let _ = fs::remove_dir_all(dir);
+        return;
+    };
+    let gnu = Command::new("readelf")
+        .arg("--use-dynamic")
+        .arg("-rW")
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(
+        gnu.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu.stderr)
+    );
+    let gnu_text = String::from_utf8_lossy(&gnu.stdout);
+
+    let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrelr"))
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
+    let ours_text = String::from_utf8_lossy(&ours.stdout);
+    assert!(ours_text.contains("DT_RELR contains"), "{ours_text}");
+    let offsets = ours_text
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("0x"))
+        .collect::<Vec<_>>();
+    assert_eq!(offsets.len(), 3, "{ours_text}");
+    for offset in offsets {
+        assert!(
+            gnu_text.contains(offset),
+            "GNU readelf missing decoded offset {offset}\nours={ours_text}\ngnu={gnu_text}"
+        );
+    }
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn malformed_later_relrent_keeps_stdout_atomic() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("dynrelr-atomic");
+    let Some(good) = build_relr_shared(&dir) else {
+        let _ = fs::remove_dir_all(dir);
+        return;
+    };
+    let bad = dir.join("bad.so");
+    let mut bytes = fs::read(&good).unwrap();
+    let relrent = dynamic_value_offset(&bytes, 37);
+    bytes[relrent..relrent + 8].copy_from_slice(&16_u64.to_le_bytes());
+    fs::write(&bad, bytes).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrelr"))
+        .arg(&good)
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "stdout must remain atomic");
+    assert!(String::from_utf8_lossy(&output.stderr).contains("DT_RELRENT is 16"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn incomplete_relr_tag_tuple_is_rejected() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("dynrelr-incomplete");
+    let Some(shared) = build_relr_shared(&dir) else {
+        let _ = fs::remove_dir_all(dir);
+        return;
+    };
+    let bad = dir.join("incomplete.so");
+    let mut bytes = fs::read(&shared).unwrap();
+    let relrent_tag = dynamic_value_offset(&bytes, 37) - 8;
+    bytes[relrent_tag..relrent_tag + 8].copy_from_slice(&0x6000_0000_i64.to_le_bytes());
+    fs::write(&bad, bytes).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrelr"))
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("must provide DT_RELR"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn bitmap_before_address_entry_is_rejected() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("dynrelr-bitmap-first");
+    let Some(shared) = build_relr_shared(&dir) else {
+        let _ = fs::remove_dir_all(dir);
+        return;
+    };
+    let bad = dir.join("bitmap-first.so");
+    let mut bytes = fs::read(&shared).unwrap();
+    let relr_address = read_u64(&bytes, dynamic_value_offset(&bytes, 36));
+    let table_offset = virtual_to_file(&bytes, relr_address, 8);
+    bytes[table_offset..table_offset + 8].copy_from_slice(&3_u64.to_le_bytes());
+    fs::write(&bad, bytes).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrelr"))
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("before any address entry"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn overflowing_relr_address_cursor_is_rejected() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("dynrelr-overflow");
+    let Some(shared) = build_relr_shared(&dir) else {
+        let _ = fs::remove_dir_all(dir);
+        return;
+    };
+    let bad = dir.join("overflow.so");
+    let mut bytes = fs::read(&shared).unwrap();
+    let relr_address = read_u64(&bytes, dynamic_value_offset(&bytes, 36));
+    let table_offset = virtual_to_file(&bytes, relr_address, 8);
+    bytes[table_offset..table_offset + 8].copy_from_slice(&(u64::MAX - 7).to_le_bytes());
+    fs::write(&bad, bytes).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrelr"))
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("relocation target range overflows u64")
+            || stderr.contains("cursor overflows u64"),
+        "{stderr}"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn overflowing_dt_relr_virtual_range_is_rejected() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("dynrelr-table-overflow");
+    let Some(shared) = build_relr_shared(&dir) else {
+        let _ = fs::remove_dir_all(dir);
+        return;
+    };
+    let bad = dir.join("table-overflow.so");
+    let mut bytes = fs::read(&shared).unwrap();
+    let relr = dynamic_value_offset(&bytes, 36);
+    bytes[relr..relr + 8].copy_from_slice(&(u64::MAX - 7).to_le_bytes());
+    fs::write(&bad, bytes).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrelr"))
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("virtual range overflows u64"));
+    let _ = fs::remove_dir_all(dir);
+}
