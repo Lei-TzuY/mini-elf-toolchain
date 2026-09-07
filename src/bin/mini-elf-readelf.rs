@@ -96,8 +96,9 @@ where
             Inspection::Symbols => {
                 format_symbols(header, &file).map_err(|error| format!("{display}: {error}"))?
             }
-            Inspection::Relocations => format_relocations(header, &file)
-                .map_err(|error| format!("{display}: {error}"))?,
+            Inspection::Relocations => {
+                format_relocations(header, &file).map_err(|error| format!("{display}: {error}"))?
+            }
         };
         inspected.push((display, rendered));
     }
@@ -492,18 +493,42 @@ fn section_type_name(section_type: u32) -> String {
 
 fn section_flags(flags: u64) -> String {
     let mut rendered = String::new();
-    if flags & 0x1 != 0 { rendered.push('W'); }
-    if flags & 0x2 != 0 { rendered.push('A'); }
-    if flags & 0x4 != 0 { rendered.push('X'); }
-    if flags & 0x10 != 0 { rendered.push('M'); }
-    if flags & 0x20 != 0 { rendered.push('S'); }
-    if flags & 0x40 != 0 { rendered.push('I'); }
-    if flags & 0x80 != 0 { rendered.push('L'); }
-    if flags & 0x100 != 0 { rendered.push('O'); }
-    if flags & 0x200 != 0 { rendered.push('G'); }
-    if flags & 0x400 != 0 { rendered.push('T'); }
-    if flags & 0x800 != 0 { rendered.push('C'); }
-    if flags & 0x1000 != 0 { rendered.push('x'); }
+    if flags & 0x1 != 0 {
+        rendered.push('W');
+    }
+    if flags & 0x2 != 0 {
+        rendered.push('A');
+    }
+    if flags & 0x4 != 0 {
+        rendered.push('X');
+    }
+    if flags & 0x10 != 0 {
+        rendered.push('M');
+    }
+    if flags & 0x20 != 0 {
+        rendered.push('S');
+    }
+    if flags & 0x40 != 0 {
+        rendered.push('I');
+    }
+    if flags & 0x80 != 0 {
+        rendered.push('L');
+    }
+    if flags & 0x100 != 0 {
+        rendered.push('O');
+    }
+    if flags & 0x200 != 0 {
+        rendered.push('G');
+    }
+    if flags & 0x400 != 0 {
+        rendered.push('T');
+    }
+    if flags & 0x800 != 0 {
+        rendered.push('C');
+    }
+    if flags & 0x1000 != 0 {
+        rendered.push('x');
+    }
     rendered
 }
 
