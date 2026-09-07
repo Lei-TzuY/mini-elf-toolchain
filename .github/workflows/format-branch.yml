@@ -1,0 +1,27 @@
+name: Format candidate
+on:
+  push:
+    branches:
+      - conquest/dt-jmprel-inspection
+permissions:
+  contents: write
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/dt-jmprel-inspection
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit formatting
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "LeiZ"
+            git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+            git add src/bin/mini-elf-dynplt.rs tests/dynamic_plt.rs
+            git commit -m "style: apply rustfmt"
+            git push origin HEAD:conquest/dt-jmprel-inspection
+          fi
