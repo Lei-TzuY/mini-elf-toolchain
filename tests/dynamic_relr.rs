@@ -131,7 +131,10 @@ fn build_relr_shared(dir: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut bytes = fs::read(&shared).unwrap();
     let rela_address = read_u64(&bytes, dynamic_value_offset(&bytes, 7));
     let rela_size = read_u64(&bytes, dynamic_value_offset(&bytes, 8));
-    assert!(rela_size >= 72, "expected at least three ELF64 Rela entries");
+    assert!(
+        rela_size >= 72,
+        "expected at least three ELF64 Rela entries"
+    );
     let table_offset = virtual_to_file(&bytes, rela_address, 72);
     let first = read_u64(&bytes, table_offset);
     let second = read_u64(&bytes, table_offset + 24);
