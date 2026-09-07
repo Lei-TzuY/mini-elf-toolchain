@@ -137,7 +137,9 @@ fn format_dynamic_relocations(header: Elf64Header, file: &[u8]) -> Result<String
     let symbols = dynamic_symbols(&program_headers, &entries, file)?;
     let count = rela_size / rela_entry_size;
     let mut output = format!("DT_RELA contains {count} entries:\n");
-    output.push_str("  Offset             Info               Type                 Sym  Addend Name\n");
+    output.push_str(
+        "  Offset             Info               Type                 Sym  Addend Name\n",
+    );
     for index in 0..count {
         let relative = index
             .checked_mul(rela_entry_size)
