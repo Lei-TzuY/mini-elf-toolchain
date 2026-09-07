@@ -114,7 +114,7 @@ fn program_headers_match_gnu_readelf_first_load_facts() {
         String::from_utf8_lossy(&ours.stderr)
     );
     let gnu = Command::new("readelf")
-        .arg("-l")
+        .arg("-lW")
         .arg(&executable)
         .output()
         .unwrap();
