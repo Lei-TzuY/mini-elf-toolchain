@@ -331,8 +331,8 @@ fn dynamic_string(
         .ok_or_else(|| "dynamic string range overflows u64".to_owned())?;
     let start = usize::try_from(start)
         .map_err(|_| "dynamic symbol name offset does not fit usize".to_owned())?;
-    let end = usize::try_from(end)
-        .map_err(|_| "dynamic string end does not fit usize".to_owned())?;
+    let end =
+        usize::try_from(end).map_err(|_| "dynamic string end does not fit usize".to_owned())?;
     let bytes = &file[start..end];
     let nul = bytes.iter().position(|byte| *byte == 0).ok_or_else(|| {
         format!("dynamic symbol {symbol_index} name is not NUL-terminated within DT_STRTAB")
