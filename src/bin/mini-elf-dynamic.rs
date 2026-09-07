@@ -40,7 +40,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered = format_dynamic(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        let rendered =
+            format_dynamic(header, &file).map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
@@ -90,8 +91,9 @@ fn format_dynamic(header: Elf64Header, file: &[u8]) -> Result<String, String> {
                 file.len()
             ));
         }
-        let string_table_index = usize::try_from(section.link)
-            .map_err(|_| format!("dynamic section {section_index} string-table index does not fit usize"))?;
+        let string_table_index = usize::try_from(section.link).map_err(|_| {
+            format!("dynamic section {section_index} string-table index does not fit usize")
+        })?;
         let string_table = sections.get(string_table_index).ok_or_else(|| {
             format!(
                 "dynamic section {section_index} links to string-table section {}, outside section-header count {}",
@@ -108,7 +110,9 @@ fn format_dynamic(header: Elf64Header, file: &[u8]) -> Result<String, String> {
         let string_table_end = string_table
             .offset
             .checked_add(string_table.size)
-            .ok_or_else(|| format!("dynamic string table {string_table_index} file range overflows u64"))?;
+            .ok_or_else(|| {
+                format!("dynamic string table {string_table_index} file range overflows u64")
+            })?;
         if string_table_end > file.len() as u64 {
             return Err(format!(
                 "dynamic string table {string_table_index} ends at file offset {string_table_end}, beyond file length {}",
@@ -127,24 +131,26 @@ fn format_dynamic(header: Elf64Header, file: &[u8]) -> Result<String, String> {
         output.push_str("  Tag                Type                 Name/Value\n");
 
         for entry_index in 0..entry_count {
-            let relative = entry_index
-                .checked_mul(section.entry_size)
-                .ok_or_else(|| format!("dynamic section {section_index} entry offset overflows u64"))?;
-            let entry_offset = section
-                .offset
-                .checked_add(relative)
-                .ok_or_else(|| format!("dynamic section {section_index} entry offset overflows u64"))?;
+            let relative = entry_index.checked_mul(section.entry_size).ok_or_else(|| {
+                format!("dynamic section {section_index} entry offset overflows u64")
+            })?;
+            let entry_offset = section.offset.checked_add(relative).ok_or_else(|| {
+                format!("dynamic section {section_index} entry offset overflows u64")
+            })?;
             let entry_end = entry_offset
                 .checked_add(section.entry_size)
-                .ok_or_else(|| format!("dynamic section {section_index} entry range overflows u64"))?;
+                .ok_or_else(|| {
+                    format!("dynamic section {section_index} entry range overflows u64")
+                })?;
             if entry_end > file.len() as u64 {
                 return Err(format!(
                     "dynamic section {section_index} entry {entry_index} ends at file offset {entry_end}, beyond file length {}",
                     file.len()
                 ));
             }
-            let entry_offset = usize::try_from(entry_offset)
-                .map_err(|_| format!("dynamic section {section_index} entry offset does not fit usize"))?;
+            let entry_offset = usize::try_from(entry_offset).map_err(|_| {
+                format!("dynamic section {section_index} entry offset does not fit usize")
+            })?;
             let tag = read_i64(file, entry_offset);
             let value = read_u64(file, entry_offset + 8);
             let rendered_value = if is_string_tag(tag) {
@@ -163,7 +169,12 @@ fn format_dynamic(header: Elf64Header, file: &[u8]) -> Result<String, String> {
     Ok(output)
 }
 
-fn dynamic_string(file: &[u8], table_offset: u64, table_size: u64, name_offset: u64) -> Result<&[u8], String> {
+fn dynamic_string(
+    file: &[u8],
+    table_offset: u64,
+    table_size: u64,
+    name_offset: u64,
+) -> Result<&[u8], String> {
     if name_offset >= table_size {
         return Err(format!(
             "dynamic string offset {name_offset} is outside string-table size {table_size}"
