@@ -108,7 +108,11 @@ fn dynamic_symbols_match_gnu_readelf_facts() {
         .arg(&shared)
         .output()
         .unwrap();
-    assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
     let gnu_text = String::from_utf8_lossy(&gnu.stdout);
     let ours_text = String::from_utf8_lossy(&ours.stdout);
     assert!(gnu_text.contains("exported"), "{gnu_text}");
