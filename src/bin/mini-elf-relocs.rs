@@ -43,8 +43,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered = format_relocations(header, &file)
-            .map_err(|error| format!("{display}: {error}"))?;
+        let rendered =
+            format_relocations(header, &file).map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
@@ -138,9 +138,11 @@ fn format_relocations(header: Elf64Header, file: &[u8]) -> Result<String, String
             let entry_offset = section.offset.checked_add(relative).ok_or_else(|| {
                 format!("relocation section {section_index} entry offset overflows u64")
             })?;
-            let entry_end = entry_offset.checked_add(section.entry_size).ok_or_else(|| {
-                format!("relocation section {section_index} entry range overflows u64")
-            })?;
+            let entry_end = entry_offset
+                .checked_add(section.entry_size)
+                .ok_or_else(|| {
+                    format!("relocation section {section_index} entry range overflows u64")
+                })?;
             if entry_end > file.len() as u64 {
                 return Err(format!(
                     "relocation section {section_index} entry {relocation_index} ends at file offset {entry_end}, beyond file length {}",
