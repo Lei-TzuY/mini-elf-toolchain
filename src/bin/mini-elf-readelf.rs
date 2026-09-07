@@ -5,7 +5,8 @@ use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: mini-elf-readelf -h|--file-header|-l|--program-headers|-S|--section-headers|-s|--symbols <input>...";
+const USAGE: &str =
+    "usage: mini-elf-readelf -h|--file-header|-l|--program-headers|-S|--section-headers|-s|--symbols <input>...";
 const ELF64_PROGRAM_HEADER_SIZE: u64 = 56;
 
 #[derive(Clone, Copy)]
@@ -86,8 +87,9 @@ where
                 .map_err(|error| format!("{display}: {error}"))?,
             Inspection::SectionHeaders => format_section_headers(header, &file)
                 .map_err(|error| format!("{display}: {error}"))?,
-            Inspection::Symbols => format_symbols(header, &file)
-                .map_err(|error| format!("{display}: {error}"))?,
+            Inspection::Symbols => {
+                format_symbols(header, &file).map_err(|error| format!("{display}: {error}"))?
+            }
         };
         inspected.push((display, rendered));
     }
