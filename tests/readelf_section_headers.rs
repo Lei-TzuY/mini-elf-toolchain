@@ -156,7 +156,10 @@ fn malformed_later_section_name_keeps_stdout_atomic() {
     assert!(output.stdout.is_empty(), "stdout must remain atomic");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("name offset"), "{stderr}");
-    assert!(stderr.contains("section-name string-table size"), "{stderr}");
+    assert!(
+        stderr.contains("section-name string-table size"),
+        "{stderr}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
