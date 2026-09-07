@@ -177,7 +177,7 @@ fn gnu_hash_symbol_extent_matches_gnu_dynsym() {
 }
 
 #[test]
-fn malformed_later_bucket_below_symbol_offset_keeps_stdout_atomic() {
+fn malformed_later_bucket_outside_backed_chain_keeps_stdout_atomic() {
     if !tool_available("as") || !tool_available("ld") {
         return;
     }
@@ -186,11 +186,9 @@ fn malformed_later_bucket_below_symbol_offset_keeps_stdout_atomic() {
     let bad = dir.join("bad.so");
     let mut bytes = fs::read(&good).unwrap();
     let hash = gnu_hash_file_offset(&bytes);
-    let symbol_offset = read_u32(&bytes, hash + 4);
     let bloom_count = read_u32(&bytes, hash + 8);
-    assert!(symbol_offset > 0);
     let bucket_offset = hash + 16 + bloom_count as usize * 8;
-    bytes[bucket_offset..bucket_offset + 4].copy_from_slice(&(symbol_offset - 1).to_le_bytes());
+    bytes[bucket_offset..bucket_offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
     fs::write(&bad, bytes).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-gnuhash"))
@@ -201,7 +199,7 @@ fn malformed_later_bucket_below_symbol_offset_keeps_stdout_atomic() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "stdout must remain atomic");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("below symbol offset"), "{stderr}");
+    assert!(stderr.contains("not backed by a PT_LOAD file range"), "{stderr}");
     let _ = fs::remove_dir_all(dir);
 }
 
