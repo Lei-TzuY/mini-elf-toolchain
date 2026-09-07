@@ -62,8 +62,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered = format_dynamic_relr(header, &file)
-            .map_err(|error| format!("{display}: {error}"))?;
+        let rendered =
+            format_dynamic_relr(header, &file).map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
@@ -94,7 +94,9 @@ fn format_dynamic_relr(header: Elf64Header, file: &[u8]) -> Result<String, Strin
         return Ok("No DT_RELR relocation table found.\n".to_owned());
     }
     if present != 3 {
-        return Err("PT_DYNAMIC must provide DT_RELR, DT_RELRSZ, and DT_RELRENT together".to_owned());
+        return Err(
+            "PT_DYNAMIC must provide DT_RELR, DT_RELRSZ, and DT_RELRENT together".to_owned(),
+        );
     }
 
     let relr_address = relr.unwrap();
@@ -141,11 +143,10 @@ fn format_dynamic_relr(header: Elf64Header, file: &[u8]) -> Result<String, Strin
             }
             validate_relocation_target(&program_headers, entry, index)?;
             decoded.push(entry);
-            cursor = Some(
-                entry
-                    .checked_add(ELF64_RELR_SIZE)
-                    .ok_or_else(|| format!("DT_RELR address entry {index} cursor overflows u64"))?,
-            );
+            cursor =
+                Some(entry.checked_add(ELF64_RELR_SIZE).ok_or_else(|| {
+                    format!("DT_RELR address entry {index} cursor overflows u64")
+                })?);
             continue;
         }
 
@@ -160,9 +161,9 @@ fn format_dynamic_relr(header: Elf64Header, file: &[u8]) -> Result<String, Strin
             let delta = slot
                 .checked_mul(ELF64_RELR_SIZE)
                 .ok_or_else(|| format!("DT_RELR bitmap entry {index} slot offset overflows u64"))?;
-            let address = base
-                .checked_add(delta)
-                .ok_or_else(|| format!("DT_RELR bitmap entry {index} relocation address overflows u64"))?;
+            let address = base.checked_add(delta).ok_or_else(|| {
+                format!("DT_RELR bitmap entry {index} relocation address overflows u64")
+            })?;
             validate_relocation_target(&program_headers, address, index)?;
             decoded.push(address);
         }
