@@ -1,4 +1,4 @@
-use mini_elf_toolchain::elf64::{Elf64Header, Elf64SectionHeader};
+use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::symbol_names::symbol_name;
 use std::env;
 use std::ffi::OsString;
@@ -125,27 +125,31 @@ fn format_relocations(header: Elf64Header, file: &[u8]) -> Result<String, String
         output.push_str(&format!(
             "Relocation section {section_index} contains {relocation_count} entries:\n"
         ));
-        output.push_str("  Offset             Info               Type                 Symbol               Addend\n");
+        output.push_str(
+            "  Offset             Info               Type                 Symbol               Addend\n",
+        );
 
         for relocation_index in 0..relocation_count {
             let relative = relocation_index
                 .checked_mul(section.entry_size)
-                .ok_or_else(|| format!("relocation section {section_index} entry offset overflows u64"))?;
-            let entry_offset = section
-                .offset
-                .checked_add(relative)
-                .ok_or_else(|| format!("relocation section {section_index} entry offset overflows u64"))?;
-            let entry_end = entry_offset
-                .checked_add(section.entry_size)
-                .ok_or_else(|| format!("relocation section {section_index} entry range overflows u64"))?;
+                .ok_or_else(|| {
+                    format!("relocation section {section_index} entry offset overflows u64")
+                })?;
+            let entry_offset = section.offset.checked_add(relative).ok_or_else(|| {
+                format!("relocation section {section_index} entry offset overflows u64")
+            })?;
+            let entry_end = entry_offset.checked_add(section.entry_size).ok_or_else(|| {
+                format!("relocation section {section_index} entry range overflows u64")
+            })?;
             if entry_end > file.len() as u64 {
                 return Err(format!(
                     "relocation section {section_index} entry {relocation_index} ends at file offset {entry_end}, beyond file length {}",
                     file.len()
                 ));
             }
-            let entry_offset = usize::try_from(entry_offset)
-                .map_err(|_| format!("relocation section {section_index} entry offset does not fit usize"))?;
+            let entry_offset = usize::try_from(entry_offset).map_err(|_| {
+                format!("relocation section {section_index} entry offset does not fit usize")
+            })?;
             let offset = read_u64(file, entry_offset);
             let info = read_u64(file, entry_offset + 8);
             let symbol_index = (info >> 32) as usize;
