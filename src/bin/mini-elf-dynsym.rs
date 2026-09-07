@@ -14,6 +14,7 @@ const DT_STRTAB: i64 = 5;
 const DT_SYMTAB: i64 = 6;
 const DT_STRSZ: i64 = 10;
 const DT_SYMENT: i64 = 11;
+const DT_GNU_HASH: i64 = 0x6fff_fef5;
 
 #[derive(Clone, Copy)]
 struct ProgramHeader {
@@ -113,19 +114,7 @@ fn format_dynamic_symbols(header: Elf64Header, file: &[u8]) -> Result<String, St
         ));
     }
 
-    let Some(hash_address) = unique_tag_value(&entries, DT_HASH, "DT_HASH")? else {
-        return Err("dynamic symbol inspection requires DT_HASH to bound DT_SYMTAB".to_owned());
-    };
-    let hash_offset = map_virtual_range(
-        &program_headers,
-        file.len(),
-        hash_address,
-        8,
-        "DT_HASH header",
-    )?;
-    let hash_offset = usize::try_from(hash_offset)
-        .map_err(|_| "DT_HASH header offset does not fit usize".to_owned())?;
-    let symbol_count = u64::from(read_u32(file, hash_offset + 4));
+    let symbol_count = dynamic_symbol_count(&entries, &program_headers, file)?;
     let symtab_size = symbol_count
         .checked_mul(syment)
         .ok_or_else(|| "dynamic symbol table byte size overflows u64".to_owned())?;
@@ -171,6 +160,159 @@ fn format_dynamic_symbols(header: Elf64Header, file: &[u8]) -> Result<String, St
         ));
     }
     Ok(output)
+}
+
+fn dynamic_symbol_count(
+    entries: &[DynamicEntry],
+    program_headers: &[ProgramHeader],
+    file: &[u8],
+) -> Result<u64, String> {
+    if let Some(hash_address) = unique_tag_value(entries, DT_HASH, "DT_HASH")? {
+        let hash_offset = map_virtual_range(
+            program_headers,
+            file.len(),
+            hash_address,
+            8,
+            "DT_HASH header",
+        )?;
+        let hash_offset = usize::try_from(hash_offset)
+            .map_err(|_| "DT_HASH header offset does not fit usize".to_owned())?;
+        return Ok(u64::from(read_u32(file, hash_offset + 4)));
+    }
+
+    let Some(hash_address) = unique_tag_value(entries, DT_GNU_HASH, "DT_GNU_HASH")? else {
+        return Err(
+            "dynamic symbol inspection requires DT_HASH or DT_GNU_HASH to bound DT_SYMTAB"
+                .to_owned(),
+        );
+    };
+    gnu_hash_symbol_count(program_headers, file, hash_address)
+}
+
+fn gnu_hash_symbol_count(
+    program_headers: &[ProgramHeader],
+    file: &[u8],
+    hash_address: u64,
+) -> Result<u64, String> {
+    let header_offset = map_virtual_range(
+        program_headers,
+        file.len(),
+        hash_address,
+        16,
+        "DT_GNU_HASH header",
+    )?;
+    let header_offset = usize::try_from(header_offset)
+        .map_err(|_| "DT_GNU_HASH header offset does not fit usize".to_owned())?;
+    let bucket_count = read_u32(file, header_offset);
+    let symbol_offset = read_u32(file, header_offset + 4);
+    let bloom_count = read_u32(file, header_offset + 8);
+
+    if bucket_count == 0 {
+        return Err("DT_GNU_HASH bucket count must be non-zero".to_owned());
+    }
+    if bloom_count == 0 || !bloom_count.is_power_of_two() {
+        return Err(format!(
+            "DT_GNU_HASH bloom count {bloom_count} must be a non-zero power of two"
+        ));
+    }
+
+    let bloom_size = u64::from(bloom_count)
+        .checked_mul(8)
+        .ok_or_else(|| "DT_GNU_HASH bloom byte size overflows u64".to_owned())?;
+    let buckets_size = u64::from(bucket_count)
+        .checked_mul(4)
+        .ok_or_else(|| "DT_GNU_HASH bucket byte size overflows u64".to_owned())?;
+    let prefix_size = 16u64
+        .checked_add(bloom_size)
+        .and_then(|value| value.checked_add(buckets_size))
+        .ok_or_else(|| "DT_GNU_HASH prefix byte size overflows u64".to_owned())?;
+    let table_offset = map_virtual_range(
+        program_headers,
+        file.len(),
+        hash_address,
+        prefix_size,
+        "DT_GNU_HASH prefix",
+    )?;
+
+    let bucket_address = hash_address
+        .checked_add(16)
+        .and_then(|value| value.checked_add(bloom_size))
+        .ok_or_else(|| "DT_GNU_HASH bucket address overflows u64".to_owned())?;
+    let chain_address = bucket_address
+        .checked_add(buckets_size)
+        .ok_or_else(|| "DT_GNU_HASH chain address overflows u64".to_owned())?;
+    let bucket_file_offset = table_offset
+        .checked_add(16)
+        .and_then(|value| value.checked_add(bloom_size))
+        .ok_or_else(|| "DT_GNU_HASH bucket file offset overflows u64".to_owned())?;
+    let bucket_file_offset = usize::try_from(bucket_file_offset)
+        .map_err(|_| "DT_GNU_HASH bucket file offset does not fit usize".to_owned())?;
+
+    let mut symbol_count = symbol_offset;
+    for index in 0..bucket_count {
+        let relative = u64::from(index)
+            .checked_mul(4)
+            .ok_or_else(|| "DT_GNU_HASH bucket offset overflows u64".to_owned())?;
+        let relative = usize::try_from(relative)
+            .map_err(|_| "DT_GNU_HASH bucket offset does not fit usize".to_owned())?;
+        let symbol = read_u32(file, bucket_file_offset + relative);
+        if symbol != 0 && symbol < symbol_offset {
+            return Err(format!(
+                "DT_GNU_HASH bucket {index} starts at symbol {symbol}, below symbol offset {symbol_offset}"
+            ));
+        }
+        if symbol != 0 {
+            let end = walk_gnu_hash_chain(
+                program_headers,
+                file,
+                chain_address,
+                symbol_offset,
+                symbol,
+                index,
+            )?;
+            symbol_count = symbol_count.max(end);
+        }
+    }
+    Ok(u64::from(symbol_count))
+}
+
+fn walk_gnu_hash_chain(
+    program_headers: &[ProgramHeader],
+    file: &[u8],
+    chain_address: u64,
+    symbol_offset: u32,
+    start_symbol: u32,
+    bucket_index: u32,
+) -> Result<u32, String> {
+    let mut symbol = start_symbol;
+    loop {
+        let chain_index = symbol
+            .checked_sub(symbol_offset)
+            .ok_or_else(|| "DT_GNU_HASH chain index underflows".to_owned())?;
+        let relative = u64::from(chain_index)
+            .checked_mul(4)
+            .ok_or_else(|| "DT_GNU_HASH chain offset overflows u64".to_owned())?;
+        let address = chain_address
+            .checked_add(relative)
+            .ok_or_else(|| "DT_GNU_HASH chain address overflows u64".to_owned())?;
+        let offset = map_virtual_range(
+            program_headers,
+            file.len(),
+            address,
+            4,
+            &format!("DT_GNU_HASH bucket {bucket_index} chain entry for symbol {symbol}"),
+        )?;
+        let offset = usize::try_from(offset)
+            .map_err(|_| "DT_GNU_HASH chain entry offset does not fit usize".to_owned())?;
+        let hash = read_u32(file, offset);
+        let next = symbol
+            .checked_add(1)
+            .ok_or_else(|| "DT_GNU_HASH symbol index overflows u32".to_owned())?;
+        if hash & 1 != 0 {
+            return Ok(next);
+        }
+        symbol = next;
+    }
 }
 
 fn dynamic_entries(
