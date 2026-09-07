@@ -61,8 +61,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered =
-            format_dynamic_relocations(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        let rendered = format_dynamic_relocations(header, &file)
+            .map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
@@ -93,7 +93,9 @@ fn format_dynamic_relocations(header: Elf64Header, file: &[u8]) -> Result<String
         return Ok("No DT_RELA relocation table found.\n".to_owned());
     }
     if present != 3 {
-        return Err("PT_DYNAMIC must provide DT_RELA, DT_RELASZ, and DT_RELAENT together".to_owned());
+        return Err(
+            "PT_DYNAMIC must provide DT_RELA, DT_RELASZ, and DT_RELAENT together".to_owned(),
+        );
     }
 
     let rela_address = rela.unwrap();
@@ -142,7 +144,10 @@ fn format_dynamic_relocations(header: Elf64Header, file: &[u8]) -> Result<String
     Ok(output)
 }
 
-fn dynamic_entries(program_headers: &[ProgramHeader], file: &[u8]) -> Result<Vec<DynamicEntry>, String> {
+fn dynamic_entries(
+    program_headers: &[ProgramHeader],
+    file: &[u8],
+) -> Result<Vec<DynamicEntry>, String> {
     let dynamic_segments = program_headers
         .iter()
         .enumerate()

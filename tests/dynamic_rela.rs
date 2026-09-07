@@ -133,8 +133,14 @@ fn dynamic_rela_matches_gnu_readelf() {
         String::from_utf8_lossy(&ours.stderr)
     );
     let ours_text = String::from_utf8_lossy(&ours.stdout);
-    assert!(ours_text.contains("DT_RELA contains 1 entries"), "{ours_text}");
-    assert!(ours_text.contains("R_X86_64_64"), "ours={ours_text}\ngnu={gnu_text}");
+    assert!(
+        ours_text.contains("DT_RELA contains 1 entries"),
+        "{ours_text}"
+    );
+    assert!(
+        ours_text.contains("R_X86_64_64"),
+        "ours={ours_text}\ngnu={gnu_text}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
