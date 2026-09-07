@@ -84,9 +84,7 @@ where
 
     let load_bias = load_bias.ok_or_else(|| "--load-bias is required".to_owned())?;
     if inputs.is_empty() {
-        return Err(
-            "usage: mini-elf-dynrela-relative --load-bias <address> <input>...".to_owned(),
-        );
+        return Err("usage: mini-elf-dynrela-relative --load-bias <address> <input>...".to_owned());
     }
 
     let multiple_inputs = inputs.len() > 1;
@@ -235,9 +233,9 @@ fn validate_relocation_target(
     address: u64,
     entry_index: u64,
 ) -> Result<(), String> {
-    let end = address
-        .checked_add(8)
-        .ok_or_else(|| format!("DT_RELA entry {entry_index} relocation target range overflows u64"))?;
+    let end = address.checked_add(8).ok_or_else(|| {
+        format!("DT_RELA entry {entry_index} relocation target range overflows u64")
+    })?;
     for (index, header) in program_headers.iter().enumerate() {
         if header.segment_type != PT_LOAD {
             continue;
