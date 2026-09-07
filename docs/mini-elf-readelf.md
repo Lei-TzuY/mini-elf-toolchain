@@ -2,15 +2,21 @@
 
 `mini-elf-readelf` is the checked ELF64 x86-64 inspection companion to the linker and `mini-elf-nm`.
 
-The current bounded slice exposes only ELF file-header inspection:
+The current bounded inspection surface includes ELF file headers, program headers, and section headers:
 
 ```sh
 mini-elf-readelf -h input.o
 mini-elf-readelf --file-header input.o executable
+mini-elf-readelf -l executable
+mini-elf-readelf --program-headers executable another-executable
+mini-elf-readelf -S input.o
+mini-elf-readelf --section-headers input.o executable
 ```
 
-The command reuses the repository's checked `Elf64Header` parser and validates the referenced section-header table before producing output. Multiple inputs are validated before any stdout is emitted, so a malformed later input cannot leave a partial successful report behind.
+The command reuses the repository's checked `Elf64Header` parser. File-header inspection validates the referenced section-header table before producing output. Program-header inspection additionally validates entry bounds, segment file ranges, checked arithmetic, and alignment. Section-header inspection uses the checked section-table parser, resolves names through the declared section-name string table with bounds and NUL-termination checks, and reports each section's type, address, file offset, size, entry size, flags, link/info fields, and alignment.
 
-The output reports ELF class/data encoding, file type, machine, entry point, program/section-header offsets and sizes, flags, counts, and the section-name string-table index. GNU `readelf -h` is used as a differential oracle for core header facts on real GNU-assembled `ET_REL` inputs.
+Multiple inputs are fully inspected before any stdout is emitted, so a malformed later input cannot leave a partial successful report behind.
 
-Section dumps, program-header dumps, dynamic metadata, notes, relocations, and symbol-table rendering are intentionally outside this slice.
+GNU `readelf` is used as a differential oracle on real GNU-assembled or linked ELF inputs: `readelf -h` for core header facts, `readelf -lW` for program-header load-segment facts, and `readelf -SW` for named section-header facts.
+
+Dynamic metadata, notes, relocation-table rendering, and symbol-table rendering are intentionally outside the current bounded inspection surface.
