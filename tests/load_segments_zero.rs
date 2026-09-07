@@ -1,7 +1,6 @@
 use mini_elf_toolchain::layout::LaidOutSection;
 use mini_elf_toolchain::load_segments::{
-    build_load_segments, LoadSegmentBuildError, LoadableSectionInput, SHF_ALLOC,
-    SHF_EXECINSTR,
+    build_load_segments, LoadSegmentBuildError, LoadableSectionInput, SHF_ALLOC, SHF_EXECINSTR,
 };
 
 fn section<'a>(
