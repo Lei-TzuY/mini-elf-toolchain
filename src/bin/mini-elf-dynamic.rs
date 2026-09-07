@@ -237,7 +237,7 @@ fn dynamic_tag_name(tag: i64) -> String {
         28 => "FINI_ARRAYSZ".to_owned(),
         29 => "RUNPATH".to_owned(),
         30 => "FLAGS".to_owned(),
-        value => return format!("DT_{value:#x}"),
+        value => format!("DT_{value:#x}"),
     }
 }
 
