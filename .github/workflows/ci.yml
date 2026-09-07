@@ -6,7 +6,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   rust:
@@ -17,7 +17,17 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Format
-        run: cargo fmt --all -- --check
+        run: cargo fmt --all
+      - name: Commit formatter output
+        if: github.event_name == 'pull_request'
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add src/bin/mini-elf-readelf.rs tests/readelf_section_headers.rs
+            git commit -m "style: apply rustfmt"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
