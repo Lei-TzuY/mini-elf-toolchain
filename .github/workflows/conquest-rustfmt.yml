@@ -1,0 +1,31 @@
+name: Conquest rustfmt
+
+on:
+  push:
+    branches:
+      - conquest/dt-relr-inspector
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/dt-relr-inspector
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit canonical formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/bin/mini-elf-dynrelr.rs tests/dynamic_relr.rs
+          git commit -m "chore: apply canonical rustfmt"
+          git push origin HEAD:conquest/dt-relr-inspector
