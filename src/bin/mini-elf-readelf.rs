@@ -1,16 +1,18 @@
-use mini_elf_toolchain::elf64::Elf64Header;
+use mini_elf_toolchain::elf64::{Elf64Header, Elf64SectionHeader, SHT_STRTAB};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: mini-elf-readelf -h|--file-header|-l|--program-headers <input>...";
+const USAGE: &str =
+    "usage: mini-elf-readelf -h|--file-header|-l|--program-headers|-S|--section-headers <input>...";
 const ELF64_PROGRAM_HEADER_SIZE: u64 = 56;
 
 #[derive(Clone, Copy)]
 enum Inspection {
     FileHeader,
     ProgramHeaders,
+    SectionHeaders,
 }
 
 #[derive(Clone, Copy)]
@@ -56,6 +58,7 @@ where
     let inspection = match args[0].to_string_lossy().as_ref() {
         "-h" | "--file-header" => Inspection::FileHeader,
         "-l" | "--program-headers" => Inspection::ProgramHeaders,
+        "-S" | "--section-headers" => Inspection::SectionHeaders,
         _ => return Err(USAGE.to_owned()),
     };
     args.remove(0);
@@ -78,6 +81,8 @@ where
                 format_header(header)
             }
             Inspection::ProgramHeaders => format_program_headers(header, &file)
+                .map_err(|error| format!("{display}: {error}"))?,
+            Inspection::SectionHeaders => format_section_headers(header, &file)
                 .map_err(|error| format!("{display}: {error}"))?,
         };
         inspected.push((display, rendered));
@@ -177,6 +182,84 @@ fn format_program_headers(header: Elf64Header, file: &[u8]) -> Result<String, St
     Ok(output)
 }
 
+fn format_section_headers(header: Elf64Header, file: &[u8]) -> Result<String, String> {
+    let sections = header
+        .section_headers(file)
+        .map_err(|error| error.to_string())?;
+    let names = section_names(header, file, &sections)?;
+
+    let mut output = "Section Headers:\n  [Nr] Name                 Type             Address            Offset             Size               EntSize            Flg Lk Inf Al\n".to_owned();
+    for (index, (section, name)) in sections.iter().zip(names).enumerate() {
+        output.push_str(&format!(
+            "  [{index:2}] {:<20} {:<16} {:#018x} {:#018x} {:#018x} {:#018x} {:<3} {:>2} {:>3} {}\n",
+            name,
+            section_type_name(section.section_type),
+            section.address,
+            section.offset,
+            section.size,
+            section.entry_size,
+            section_flags(section.flags),
+            section.link,
+            section.info,
+            section.address_alignment,
+        ));
+    }
+    Ok(output)
+}
+
+fn section_names(
+    header: Elf64Header,
+    file: &[u8],
+    sections: &[Elf64SectionHeader],
+) -> Result<Vec<String>, String> {
+    if sections.is_empty() || header.section_name_string_table_index == 0 {
+        return Ok(vec![String::new(); sections.len()]);
+    }
+
+    let string_table_index = usize::from(header.section_name_string_table_index);
+    let string_table = &sections[string_table_index];
+    if string_table.section_type != SHT_STRTAB {
+        return Err(format!(
+            "section-name string table {string_table_index} has type {}, expected SHT_STRTAB",
+            string_table.section_type
+        ));
+    }
+    let start = usize::try_from(string_table.offset)
+        .map_err(|_| "section-name string-table offset does not fit usize".to_owned())?;
+    let size = usize::try_from(string_table.size)
+        .map_err(|_| "section-name string-table size does not fit usize".to_owned())?;
+    let end = start
+        .checked_add(size)
+        .ok_or_else(|| "section-name string-table range overflows usize".to_owned())?;
+    let bytes = file
+        .get(start..end)
+        .ok_or_else(|| "section-name string-table range is outside file".to_owned())?;
+
+    sections
+        .iter()
+        .enumerate()
+        .map(|(index, section)| {
+            let offset = usize::try_from(section.name_offset)
+                .map_err(|_| format!("section {index} name offset does not fit usize"))?;
+            if offset >= bytes.len() {
+                return Err(format!(
+                    "section {index} name offset {} is outside section-name string-table size {}",
+                    section.name_offset,
+                    bytes.len()
+                ));
+            }
+            let tail = &bytes[offset..];
+            let terminator = tail.iter().position(|byte| *byte == 0).ok_or_else(|| {
+                format!(
+                    "section {index} name at offset {} is not NUL-terminated within the section-name string table",
+                    section.name_offset
+                )
+            })?;
+            Ok(String::from_utf8_lossy(&tail[..terminator]).into_owned())
+        })
+        .collect()
+}
+
 fn type_name(elf_type: u16) -> String {
     match elf_type {
         0 => "NONE (None)".to_owned(),
@@ -211,6 +294,70 @@ fn program_flags(flags: u32) -> String {
     rendered.push(if flags & 4 != 0 { 'R' } else { ' ' });
     rendered.push(if flags & 2 != 0 { 'W' } else { ' ' });
     rendered.push(if flags & 1 != 0 { 'E' } else { ' ' });
+    rendered
+}
+
+fn section_type_name(section_type: u32) -> String {
+    match section_type {
+        0 => "NULL".to_owned(),
+        1 => "PROGBITS".to_owned(),
+        2 => "SYMTAB".to_owned(),
+        3 => "STRTAB".to_owned(),
+        4 => "RELA".to_owned(),
+        5 => "HASH".to_owned(),
+        6 => "DYNAMIC".to_owned(),
+        7 => "NOTE".to_owned(),
+        8 => "NOBITS".to_owned(),
+        9 => "REL".to_owned(),
+        10 => "SHLIB".to_owned(),
+        11 => "DYNSYM".to_owned(),
+        14 => "INIT_ARRAY".to_owned(),
+        15 => "FINI_ARRAY".to_owned(),
+        16 => "PREINIT_ARRAY".to_owned(),
+        17 => "GROUP".to_owned(),
+        18 => "SYMTAB_SHNDX".to_owned(),
+        value => format!("0x{value:x}"),
+    }
+}
+
+fn section_flags(flags: u64) -> String {
+    let mut rendered = String::new();
+    if flags & 0x1 != 0 {
+        rendered.push('W');
+    }
+    if flags & 0x2 != 0 {
+        rendered.push('A');
+    }
+    if flags & 0x4 != 0 {
+        rendered.push('X');
+    }
+    if flags & 0x10 != 0 {
+        rendered.push('M');
+    }
+    if flags & 0x20 != 0 {
+        rendered.push('S');
+    }
+    if flags & 0x40 != 0 {
+        rendered.push('I');
+    }
+    if flags & 0x80 != 0 {
+        rendered.push('L');
+    }
+    if flags & 0x100 != 0 {
+        rendered.push('O');
+    }
+    if flags & 0x200 != 0 {
+        rendered.push('G');
+    }
+    if flags & 0x400 != 0 {
+        rendered.push('T');
+    }
+    if flags & 0x800 != 0 {
+        rendered.push('C');
+    }
+    if flags & 0x1000 != 0 {
+        rendered.push('x');
+    }
     rendered
 }
 
