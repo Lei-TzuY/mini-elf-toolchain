@@ -144,7 +144,7 @@ pub fn compute_static_tls_layout(
         .unwrap_or(base_address);
 
     for placed in layout {
-        if placed.address < base_address || placed.address >= memory_end {
+        if placed.size == 0 || placed.address < base_address || placed.address >= memory_end {
             continue;
         }
         let is_tls = placements.iter().any(|(section, _, _)| {
@@ -955,6 +955,60 @@ mod tests {
         assert_eq!(tls.memory_size, 12);
         assert_eq!(tls.alignment, 8);
         assert_eq!(tls.block_size, 16);
+    }
+
+    #[test]
+    fn ignores_zero_sized_non_tls_marker_at_tls_base() {
+        let sections = vec![section(0, 1, 1, SHF_TLS, 8, 8)];
+        let layout = vec![
+            LaidOutSection {
+                object_index: 1,
+                section_index: 3,
+                address: 0x500000,
+                size: 0,
+            },
+            LaidOutSection {
+                object_index: 0,
+                section_index: 1,
+                address: 0x500000,
+                size: 8,
+            },
+        ];
+
+        let tls = compute_static_tls_layout(&sections, &layout)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(tls.base_address, 0x500000);
+        assert_eq!(tls.file_size, 8);
+        assert_eq!(tls.memory_size, 8);
+    }
+
+    #[test]
+    fn rejects_nonzero_non_tls_bytes_inside_tls_span() {
+        let sections = vec![section(0, 1, 1, SHF_TLS, 8, 8)];
+        let layout = vec![
+            LaidOutSection {
+                object_index: 0,
+                section_index: 1,
+                address: 0x500000,
+                size: 8,
+            },
+            LaidOutSection {
+                object_index: 1,
+                section_index: 3,
+                address: 0x500004,
+                size: 1,
+            },
+        ];
+
+        assert_eq!(
+            compute_static_tls_layout(&sections, &layout),
+            Err(StaticTlsLayoutError::NonTlsSectionInterleaves {
+                object_index: 1,
+                section_index: 3,
+            })
+        );
     }
 
     #[test]
