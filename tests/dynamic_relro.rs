@@ -184,6 +184,7 @@ fn relro_virtual_range_overflow_is_rejected() {
     let mut bytes = fs::read(&shared).unwrap();
     let ph = relro_header_offset(&bytes);
     bytes[ph + 16..ph + 24].copy_from_slice(&(u64::MAX - 3).to_le_bytes());
+    bytes[ph + 32..ph + 40].copy_from_slice(&8_u64.to_le_bytes());
     bytes[ph + 40..ph + 48].copy_from_slice(&8_u64.to_le_bytes());
     fs::write(&malformed, bytes).unwrap();
 
@@ -213,6 +214,7 @@ fn relro_must_be_contained_in_load_memory_range() {
     let mut bytes = fs::read(&shared).unwrap();
     let ph = relro_header_offset(&bytes);
     bytes[ph + 16..ph + 24].copy_from_slice(&0x7000_0000_0000_u64.to_le_bytes());
+    bytes[ph + 32..ph + 40].copy_from_slice(&8_u64.to_le_bytes());
     bytes[ph + 40..ph + 48].copy_from_slice(&8_u64.to_le_bytes());
     fs::write(&malformed, bytes).unwrap();
 
@@ -253,6 +255,7 @@ fn load_bias_overflow_and_malformed_later_input_keep_stdout_atomic() {
     let mut bytes = fs::read(&good).unwrap();
     let ph = relro_header_offset(&bytes);
     bytes[ph + 16..ph + 24].copy_from_slice(&0x7000_0000_0000_u64.to_le_bytes());
+    bytes[ph + 32..ph + 40].copy_from_slice(&8_u64.to_le_bytes());
     bytes[ph + 40..ph + 48].copy_from_slice(&8_u64.to_le_bytes());
     fs::write(&malformed, bytes).unwrap();
 
