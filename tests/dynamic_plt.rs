@@ -148,9 +148,18 @@ fn dynamic_plt_matches_gnu_readelf() {
         String::from_utf8_lossy(&ours.stderr)
     );
     let ours_text = String::from_utf8_lossy(&ours.stdout);
-    assert!(ours_text.contains("DT_JMPREL contains 1 entries"), "{ours_text}");
-    assert!(ours_text.contains("R_X86_64_JUMP_SLOT"), "ours={ours_text}\ngnu={gnu_text}");
-    assert!(ours_text.contains("external_function"), "ours={ours_text}\ngnu={gnu_text}");
+    assert!(
+        ours_text.contains("DT_JMPREL contains 1 entries"),
+        "{ours_text}"
+    );
+    assert!(
+        ours_text.contains("R_X86_64_JUMP_SLOT"),
+        "ours={ours_text}\ngnu={gnu_text}"
+    );
+    assert!(
+        ours_text.contains("external_function"),
+        "ours={ours_text}\ngnu={gnu_text}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
