@@ -162,7 +162,10 @@ fn dynamic_rel_matches_gnu_readelf_dynamic_view() {
         String::from_utf8_lossy(&ours.stderr)
     );
     let ours_text = String::from_utf8_lossy(&ours.stdout);
-    assert!(ours_text.contains("DT_REL contains 1 entries"), "{ours_text}");
+    assert!(
+        ours_text.contains("DT_REL contains 1 entries"),
+        "{ours_text}"
+    );
     assert!(
         ours_text.contains("R_X86_64_64"),
         "ours={ours_text}\ngnu={gnu_text}"

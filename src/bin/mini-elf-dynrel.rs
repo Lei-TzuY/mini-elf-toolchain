@@ -93,9 +93,7 @@ fn format_dynamic_relocations(header: Elf64Header, file: &[u8]) -> Result<String
         return Ok("No DT_REL relocation table found.\n".to_owned());
     }
     if present != 3 {
-        return Err(
-            "PT_DYNAMIC must provide DT_REL, DT_RELSZ, and DT_RELENT together".to_owned(),
-        );
+        return Err("PT_DYNAMIC must provide DT_REL, DT_RELSZ, and DT_RELENT together".to_owned());
     }
 
     let rel_address = rel.unwrap();
