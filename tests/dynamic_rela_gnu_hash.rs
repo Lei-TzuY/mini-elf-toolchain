@@ -188,9 +188,7 @@ fn malformed_gnu_hash_bucket_is_rejected() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("DT_GNU_HASH bucket 0 chain entry")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("DT_GNU_HASH bucket 0 chain entry"));
     let _ = fs::remove_dir_all(dir);
 }
 
