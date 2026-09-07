@@ -1,16 +1,2 @@
 [1m[92m    Checking[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
-[1m[91merror[0m[1m: useless use of `format!`[0m
-   [1m[94m--> [0msrc/bin/mini-elf-readelf.rs:163:22
-    [1m[94m|[0m
-[1m[94m163[0m [1m[94m|[0m       let mut output = format!(
-    [1m[94m|[0m [1m[91m ______________________^[0m
-[1m[94m164[0m [1m[94m|[0m [1m[91m|[0m         "Program Headers:\n  Type           Offset             VirtAddr           PhysAddr           FileSiz            MemSiz   [1m[94m...[0m
-[1m[94m165[0m [1m[94m|[0m [1m[91m|[0m     );
-    [1m[94m|[0m [1m[91m|_____^[0m [1m[91mhelp: consider using `.to_string()`: `"Program Headers:\n  Type           Offset             VirtAddr           PhysAddr           FileSiz            MemSiz             Flg Align\n".to_string()`[0m
-    [1m[94m|[0m
-    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#useless_format
-    [1m[94m= [0m[1mnote[0m: `-D clippy::useless-format` implied by `-D warnings`
-    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::useless_format)]`
-
-[1m[91merror[0m: could not compile `mini-elf-toolchain` (bin "mini-elf-readelf" test) due to 1 previous error
-[1m[33mwarning[0m: build failed, waiting for other jobs to finish...
+[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 1.50s
