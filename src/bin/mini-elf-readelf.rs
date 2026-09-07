@@ -1,11 +1,11 @@
 use mini_elf_toolchain::elf64::{Elf64Header, Elf64SectionHeader, SHT_STRTAB};
+use mini_elf_toolchain::symbol_names::symbol_name;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
-const USAGE: &str =
-    "usage: mini-elf-readelf -h|--file-header|-l|--program-headers|-S|--section-headers <input>...";
+const USAGE: &str = "usage: mini-elf-readelf -h|--file-header|-l|--program-headers|-S|--section-headers|-s|--symbols <input>...";
 const ELF64_PROGRAM_HEADER_SIZE: u64 = 56;
 
 #[derive(Clone, Copy)]
@@ -13,6 +13,7 @@ enum Inspection {
     FileHeader,
     ProgramHeaders,
     SectionHeaders,
+    Symbols,
 }
 
 #[derive(Clone, Copy)]
@@ -59,6 +60,7 @@ where
         "-h" | "--file-header" => Inspection::FileHeader,
         "-l" | "--program-headers" => Inspection::ProgramHeaders,
         "-S" | "--section-headers" => Inspection::SectionHeaders,
+        "-s" | "--symbols" => Inspection::Symbols,
         _ => return Err(USAGE.to_owned()),
     };
     args.remove(0);
@@ -83,6 +85,8 @@ where
             Inspection::ProgramHeaders => format_program_headers(header, &file)
                 .map_err(|error| format!("{display}: {error}"))?,
             Inspection::SectionHeaders => format_section_headers(header, &file)
+                .map_err(|error| format!("{display}: {error}"))?,
+            Inspection::Symbols => format_symbols(header, &file)
                 .map_err(|error| format!("{display}: {error}"))?,
         };
         inspected.push((display, rendered));
@@ -203,6 +207,43 @@ fn format_section_headers(header: Elf64Header, file: &[u8]) -> Result<String, St
             section.info,
             section.address_alignment,
         ));
+    }
+    Ok(output)
+}
+
+fn format_symbols(header: Elf64Header, file: &[u8]) -> Result<String, String> {
+    let sections = header
+        .section_headers(file)
+        .map_err(|error| error.to_string())?;
+    let tables = header
+        .symbol_tables(file, &sections)
+        .map_err(|error| error.to_string())?;
+
+    let mut output = String::new();
+    for (table_index, table) in tables.iter().enumerate() {
+        if table_index != 0 {
+            output.push('\n');
+        }
+        output.push_str(&format!(
+            "Symbol table section {} contains {} entries:\n",
+            table.section_index,
+            table.symbols.len()
+        ));
+        output.push_str("   Num: Value              Size Type    Bind   Vis      Ndx Name\n");
+        for (symbol_index, symbol) in table.symbols.iter().enumerate() {
+            let name = symbol_name(file, &sections, table, symbol_index)
+                .map_err(|error| error.to_string())?;
+            output.push_str(&format!(
+                "  {symbol_index:4}: {:016x} {:>5} {:<7} {:<6} {:<8} {:>3} {}\n",
+                symbol.value,
+                symbol.size,
+                symbol_type_name(symbol.info & 0x0f),
+                symbol_binding_name(symbol.info >> 4),
+                symbol_visibility_name(symbol.other & 0x03),
+                symbol_section_name(symbol.section_index),
+                String::from_utf8_lossy(name),
+            ));
+        }
     }
     Ok(output)
 }
@@ -359,6 +400,47 @@ fn section_flags(flags: u64) -> String {
         rendered.push('x');
     }
     rendered
+}
+
+fn symbol_binding_name(binding: u8) -> String {
+    match binding {
+        0 => "LOCAL".to_owned(),
+        1 => "GLOBAL".to_owned(),
+        2 => "WEAK".to_owned(),
+        value => format!("BIND{value}"),
+    }
+}
+
+fn symbol_type_name(symbol_type: u8) -> String {
+    match symbol_type {
+        0 => "NOTYPE".to_owned(),
+        1 => "OBJECT".to_owned(),
+        2 => "FUNC".to_owned(),
+        3 => "SECTION".to_owned(),
+        4 => "FILE".to_owned(),
+        5 => "COMMON".to_owned(),
+        6 => "TLS".to_owned(),
+        value => format!("TYPE{value}"),
+    }
+}
+
+fn symbol_visibility_name(visibility: u8) -> String {
+    match visibility {
+        0 => "DEFAULT".to_owned(),
+        1 => "INTERNAL".to_owned(),
+        2 => "HIDDEN".to_owned(),
+        3 => "PROTECTED".to_owned(),
+        _ => unreachable!(),
+    }
+}
+
+fn symbol_section_name(section_index: u16) -> String {
+    match section_index {
+        0 => "UND".to_owned(),
+        0xfff1 => "ABS".to_owned(),
+        0xfff2 => "COM".to_owned(),
+        value => value.to_string(),
+    }
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> u32 {
