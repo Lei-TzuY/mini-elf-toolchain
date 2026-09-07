@@ -72,6 +72,19 @@ fn dynamic_value_offset(bytes: &[u8], wanted_tag: i64) -> usize {
     panic!("shared object should contain dynamic tag {wanted_tag}")
 }
 
+fn virtual_to_file(bytes: &[u8], address: u64) -> usize {
+    for (segment_type, offset, virtual_address, file_size) in program_headers(bytes) {
+        if segment_type != 1 {
+            continue;
+        }
+        let end = virtual_address + file_size;
+        if address >= virtual_address && address < end {
+            return (offset + (address - virtual_address)) as usize;
+        }
+    }
+    panic!("address {address:#x} should be file-backed by PT_LOAD")
+}
+
 fn build_shared(dir: &std::path::Path) -> std::path::PathBuf {
     let assembly = dir.join("sample.s");
     let object = dir.join("sample.o");
@@ -94,6 +107,7 @@ fn build_shared(dir: &std::path::Path) -> std::path::PathBuf {
     );
     let linked = Command::new("ld")
         .arg("-shared")
+        .arg("--hash-style=sysv")
         .arg("-o")
         .arg(&shared)
         .arg(&object)
@@ -122,6 +136,7 @@ fn dynamic_rela_matches_gnu_readelf() {
     assert!(gnu.status.success());
     let gnu_text = String::from_utf8_lossy(&gnu.stdout);
     assert!(gnu_text.contains("R_X86_64_64"), "{gnu_text}");
+    assert!(gnu_text.contains("external_symbol"), "{gnu_text}");
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrela"))
         .arg(&shared)
@@ -139,6 +154,10 @@ fn dynamic_rela_matches_gnu_readelf() {
     );
     assert!(
         ours_text.contains("R_X86_64_64"),
+        "ours={ours_text}\ngnu={gnu_text}"
+    );
+    assert!(
+        ours_text.contains("external_symbol"),
         "ours={ours_text}\ngnu={gnu_text}"
     );
     let _ = fs::remove_dir_all(dir);
@@ -165,6 +184,31 @@ fn malformed_later_rela_entry_size_keeps_stdout_atomic() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "stdout must remain atomic");
     assert!(String::from_utf8_lossy(&output.stderr).contains("DT_RELAENT is 16"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn out_of_range_dynamic_symbol_index_is_rejected() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("dynrela-symbol-index");
+    let shared = build_shared(&dir);
+    let bad = dir.join("bad-symbol.so");
+    let mut bytes = fs::read(&shared).unwrap();
+    let rela_address = read_u64(&bytes, dynamic_value_offset(&bytes, 7));
+    let rela_offset = virtual_to_file(&bytes, rela_address);
+    let info = (u64::from(u32::MAX) << 32) | 1;
+    bytes[rela_offset + 8..rela_offset + 16].copy_from_slice(&info.to_le_bytes());
+    fs::write(&bad, bytes).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrela"))
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("outside dynamic symbol count"));
     let _ = fs::remove_dir_all(dir);
 }
 
