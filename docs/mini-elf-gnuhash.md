@@ -13,6 +13,6 @@ The GNU header fields `nbuckets`, `symoffset`, `bloom_size`, and `bloom_shift` a
 
 Multiple inputs are fully validated before output is emitted, so a malformed later input cannot leave partial stdout from an earlier file.
 
-The focused differential test builds a real shared object with GNU `as` and `ld --hash-style=gnu`, compares the GNU-hash-derived symbol extent with GNU `readelf --dyn-syms -W`, and covers a malformed bucket below `symoffset` plus an overflowing `DT_GNU_HASH` virtual range.
+The focused differential test builds a real shared object with GNU `as` and `ld --hash-style=gnu`, compares the GNU-hash-derived symbol extent with GNU `readelf --dyn-syms -W`, and covers a malformed bucket that points outside the file-backed chain range plus an overflowing `DT_GNU_HASH` virtual range.
 
 This is an inspection foundation only. Dynamic symbol lookup, symbol versioning, dynamic relocations, loader search semantics, and shared-object emission remain outside this slice.
