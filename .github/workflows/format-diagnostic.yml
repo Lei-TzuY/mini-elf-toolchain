@@ -1,0 +1,20 @@
+name: Format diagnostic
+on:
+  push:
+    branches: [conquest/readelf-symbols]
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: formatted-readelf-symbols
+          path: |
+            src/bin/mini-elf-readelf.rs
+            tests/readelf_symbols.rs
