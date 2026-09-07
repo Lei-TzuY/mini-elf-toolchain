@@ -19,16 +19,15 @@ fn tool_available(tool: &str) -> bool {
     Command::new(tool).arg("--version").output().is_ok()
 }
 
-fn first_load_facts(output: &str) -> Vec<String> {
+fn first_load_facts(output: &str) -> [u64; 5] {
     output
         .lines()
         .find_map(|line| {
             let fields = line.split_whitespace().collect::<Vec<_>>();
             (fields.first().copied() == Some("LOAD") && fields.len() >= 6).then(|| {
-                fields[..6]
-                    .iter()
-                    .map(|field| (*field).to_owned())
-                    .collect()
+                std::array::from_fn(|index| {
+                    u64::from_str_radix(fields[index + 1].trim_start_matches("0x"), 16).unwrap()
+                })
             })
         })
         .expect("expected a LOAD program header")
