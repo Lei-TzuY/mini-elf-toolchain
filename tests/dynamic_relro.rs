@@ -128,7 +128,10 @@ fn relro_matches_gnu_readelf_program_header_range() {
         String::from_utf8_lossy(&ours.stderr)
     );
     let ours_text = String::from_utf8_lossy(&ours.stdout);
-    assert!(ours_text.contains("Found 1 PT_GNU_RELRO segment(s)"), "{ours_text}");
+    assert!(
+        ours_text.contains("Found 1 PT_GNU_RELRO segment(s)"),
+        "{ours_text}"
+    );
     assert!(
         ours_text.contains(&format!("{start:#018x}..{end:#018x}")),
         "ours={ours_text}"
@@ -219,7 +222,8 @@ fn relro_must_be_contained_in_load_memory_range() {
         .unwrap();
     assert!(!ours.status.success());
     assert!(
-        String::from_utf8_lossy(&ours.stderr).contains("is not contained in a PT_LOAD memory range"),
+        String::from_utf8_lossy(&ours.stderr)
+            .contains("is not contained in a PT_LOAD memory range"),
         "{}",
         String::from_utf8_lossy(&ours.stderr)
     );
@@ -259,6 +263,7 @@ fn load_bias_overflow_and_malformed_later_input_keep_stdout_atomic() {
         .unwrap();
     assert!(!atomic.status.success());
     assert!(atomic.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&atomic.stderr).contains("is not contained in a PT_LOAD memory range"));
+    assert!(String::from_utf8_lossy(&atomic.stderr)
+        .contains("is not contained in a PT_LOAD memory range"));
     let _ = fs::remove_dir_all(dir);
 }
