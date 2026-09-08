@@ -226,7 +226,7 @@ fn format_version_requirements(header: Elf64Header, file: &[u8]) -> Result<Strin
 }
 
 fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader>, String> {
-    if header.program_header_entry_size as usize != ELF64_PROGRAM_HEADER_SIZE {
+    if header.program_header_entry_size != ELF64_PROGRAM_HEADER_SIZE {
         return Err(format!(
             "program header entry size {} does not match ELF64 size {}",
             header.program_header_entry_size, ELF64_PROGRAM_HEADER_SIZE
