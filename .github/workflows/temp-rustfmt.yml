@@ -1,0 +1,31 @@
+name: Temporary rustfmt
+
+on:
+  push:
+    branches:
+      - conquest/dynseg-phdr-invariants
+
+permissions:
+  contents: write
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/dynseg-phdr-invariants
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "LeiZ"
+          git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: apply rustfmt"
+          git push origin HEAD:conquest/dynseg-phdr-invariants
