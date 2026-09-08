@@ -411,8 +411,8 @@ fn dynamic_string(
         .iter()
         .position(|byte| *byte == 0)
         .ok_or_else(|| format!("{label} is not NUL-terminated inside DT_STRSZ"))?;
-    let name = std::str::from_utf8(&bytes[..end])
-        .map_err(|_| format!("{label} is not valid UTF-8"))?;
+    let name =
+        std::str::from_utf8(&bytes[..end]).map_err(|_| format!("{label} is not valid UTF-8"))?;
     Ok(name.to_owned())
 }
 
@@ -420,7 +420,8 @@ fn checked_file_range(file_len: usize, offset: u64, size: u64, label: &str) -> R
     let end = offset
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows u64"))?;
-    let file_len = u64::try_from(file_len).map_err(|_| "file length does not fit u64".to_owned())?;
+    let file_len =
+        u64::try_from(file_len).map_err(|_| "file length does not fit u64".to_owned())?;
     if end > file_len {
         return Err(format!(
             "{label} file range {offset:#x}..{end:#x} exceeds file size {file_len:#x}"

@@ -140,8 +140,14 @@ fn dynamic_verdef_matches_gnu_readelf() {
         String::from_utf8_lossy(&ours.stderr)
     );
     let ours_text = String::from_utf8_lossy(&ours.stdout);
-    assert!(ours_text.contains("DT_VERDEF contains"), "ours={ours_text}\ngnu={gnu_text}");
-    assert!(ours_text.contains("VERS_1"), "ours={ours_text}\ngnu={gnu_text}");
+    assert!(
+        ours_text.contains("DT_VERDEF contains"),
+        "ours={ours_text}\ngnu={gnu_text}"
+    );
+    assert!(
+        ours_text.contains("VERS_1"),
+        "ours={ours_text}\ngnu={gnu_text}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
