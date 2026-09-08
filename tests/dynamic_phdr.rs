@@ -100,11 +100,9 @@ fn phdr_matches_gnu_readelf_and_load_bias() {
         .output()
         .unwrap();
     assert!(gnu.status.success());
-    assert!(
-        String::from_utf8_lossy(&gnu.stdout)
-            .lines()
-            .any(|line| line.trim_start().starts_with("PHDR"))
-    );
+    assert!(String::from_utf8_lossy(&gnu.stdout)
+        .lines()
+        .any(|line| line.trim_start().starts_with("PHDR")));
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-phdr"))
         .arg("--load-bias=0x100000")
