@@ -187,8 +187,10 @@ fn eh_frame_virtual_range_overflow_is_rejected() {
     let malformed = dir.join("overflow.so");
     let mut bytes = fs::read(&good).unwrap();
     let ph = eh_frame_header_offset(&bytes);
-    bytes[ph + 16..ph + 24].copy_from_slice(&(u64::MAX - 3).to_le_bytes());
-    bytes[ph + 40..ph + 48].copy_from_slice(&8_u64.to_le_bytes());
+    let memory_size = read_u64(&bytes, ph + 40);
+    assert!(memory_size > 0, "fixture PT_GNU_EH_FRAME should be non-empty");
+    let overflowing_start = u64::MAX - memory_size + 1;
+    bytes[ph + 16..ph + 24].copy_from_slice(&overflowing_start.to_le_bytes());
     fs::write(&malformed, bytes).unwrap();
 
     let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-eh-frame"))
