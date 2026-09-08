@@ -1,4 +1,5 @@
 use mini_elf_toolchain::elf64::{Elf64Header, ELF64_PROGRAM_HEADER_SIZE};
+use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -8,10 +9,17 @@ const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const DT_NULL: i64 = 0;
 const DT_HASH: i64 = 4;
+const DT_STRTAB: i64 = 5;
+const DT_STRSZ: i64 = 10;
 const DT_GNU_HASH: i64 = 0x6fff_fef5;
+const DT_VERDEF: i64 = 0x6fff_fffc;
+const DT_VERDEFNUM: i64 = 0x6fff_fffd;
 const DT_VERSYM: i64 = 0x6fff_fff0;
 const ELF64_DYNAMIC_SIZE: u64 = 16;
 const ELF64_VERSYM_SIZE: u64 = 2;
+const ELF64_VERDEF_SIZE: u64 = 20;
+const ELF64_VERDAUX_SIZE: u64 = 8;
+const VER_DEF_CURRENT: u16 = 1;
 const VERSYM_HIDDEN: u16 = 0x8000;
 const VERSYM_INDEX_MASK: u16 = 0x7fff;
 
@@ -88,6 +96,7 @@ fn format_version_symbols(header: Elf64Header, file: &[u8]) -> Result<String, St
         return Ok("No DT_VERSYM version-symbol table found.\n".to_owned());
     };
     let symbol_count = dynamic_symbol_count(&entries, &program_headers, file)?;
+    let definition_names = version_definition_names(&entries, &program_headers, file)?;
 
     let table_size = u64::from(symbol_count)
         .checked_mul(ELF64_VERSYM_SIZE)
@@ -117,12 +126,158 @@ fn format_version_symbols(header: Elf64Header, file: &[u8]) -> Result<String, St
             1 => "global",
             _ => "versioned",
         };
+        let name = definition_names
+            .get(&version_index)
+            .map(|value| format!(" name={value}"))
+            .unwrap_or_default();
         output.push_str(&format!(
-            "  symbol[{symbol_index}] raw={raw:#06x} index={version_index} hidden={} class={class}\n",
+            "  symbol[{symbol_index}] raw={raw:#06x} index={version_index} hidden={} class={class}{name}\n",
             if hidden { "yes" } else { "no" }
         ));
     }
     Ok(output)
+}
+
+fn version_definition_names(
+    entries: &[DynamicEntry],
+    program_headers: &[ProgramHeader],
+    file: &[u8],
+) -> Result<BTreeMap<u16, String>, String> {
+    let verdef = unique_tag_value(entries, DT_VERDEF, "DT_VERDEF")?;
+    let verdefnum = unique_tag_value(entries, DT_VERDEFNUM, "DT_VERDEFNUM")?;
+    let present = usize::from(verdef.is_some()) + usize::from(verdefnum.is_some());
+    if present == 0 {
+        return Ok(BTreeMap::new());
+    }
+    if present != 2 {
+        return Err("PT_DYNAMIC must provide DT_VERDEF and DT_VERDEFNUM together".to_owned());
+    }
+
+    let count = verdefnum.unwrap();
+    if count == 0 {
+        return Err("DT_VERDEFNUM must be non-zero when DT_VERDEF is present".to_owned());
+    }
+    let strtab = unique_tag_value(entries, DT_STRTAB, "DT_STRTAB")?
+        .ok_or_else(|| "DT_VERDEF requires DT_STRTAB".to_owned())?;
+    let strsz = unique_tag_value(entries, DT_STRSZ, "DT_STRSZ")?
+        .ok_or_else(|| "DT_VERDEF requires DT_STRSZ".to_owned())?;
+    let strtab_offset = map_virtual_range(
+        program_headers,
+        file.len(),
+        strtab,
+        strsz,
+        "DT_STRTAB table",
+    )?;
+
+    let mut names = BTreeMap::new();
+    let mut address = verdef.unwrap();
+    for definition_index in 0..count {
+        let offset = map_virtual_range(
+            program_headers,
+            file.len(),
+            address,
+            ELF64_VERDEF_SIZE,
+            &format!("DT_VERDEF entry {definition_index}"),
+        )?;
+        let offset = usize::try_from(offset)
+            .map_err(|_| "DT_VERDEF file offset does not fit usize".to_owned())?;
+        let version = read_u16(file, offset);
+        let version_index = read_u16(file, offset + 4) & VERSYM_INDEX_MASK;
+        let aux_count = read_u16(file, offset + 6);
+        let aux_relative = read_u32(file, offset + 12);
+        let next_relative = read_u32(file, offset + 16);
+
+        if version != VER_DEF_CURRENT {
+            return Err(format!(
+                "DT_VERDEF entry {definition_index} has version {version}, expected {VER_DEF_CURRENT}"
+            ));
+        }
+        if aux_count == 0 {
+            return Err(format!(
+                "DT_VERDEF entry {definition_index} must reference at least one Verdaux record"
+            ));
+        }
+        if aux_relative == 0 {
+            return Err(format!(
+                "DT_VERDEF entry {definition_index} has zero vd_aux with non-zero vd_cnt"
+            ));
+        }
+
+        let mut aux_address = address
+            .checked_add(u64::from(aux_relative))
+            .ok_or_else(|| {
+                format!("DT_VERDEF entry {definition_index} vd_aux address overflows u64")
+            })?;
+        let mut definition_name = None;
+        for aux_index in 0..u64::from(aux_count) {
+            let aux_offset = map_virtual_range(
+                program_headers,
+                file.len(),
+                aux_address,
+                ELF64_VERDAUX_SIZE,
+                &format!("DT_VERDEF entry {definition_index} Verdaux {aux_index}"),
+            )?;
+            let aux_offset = usize::try_from(aux_offset)
+                .map_err(|_| "Verdaux file offset does not fit usize".to_owned())?;
+            let name_offset = read_u32(file, aux_offset);
+            let next = read_u32(file, aux_offset + 4);
+            let name = dynamic_string(
+                file,
+                strtab_offset,
+                strsz,
+                u64::from(name_offset),
+                "Verdaux version name",
+            )?;
+            if aux_index == 0 {
+                definition_name = Some(name);
+            }
+
+            let last_aux = aux_index + 1 == u64::from(aux_count);
+            if last_aux {
+                if next != 0 {
+                    return Err(format!(
+                        "DT_VERDEF entry {definition_index} final Verdaux record has non-zero vda_next {next}"
+                    ));
+                }
+            } else {
+                if next == 0 {
+                    return Err(format!(
+                        "DT_VERDEF entry {definition_index} Verdaux chain ends before vd_cnt {aux_count}"
+                    ));
+                }
+                aux_address = aux_address.checked_add(u64::from(next)).ok_or_else(|| {
+                    format!("DT_VERDEF entry {definition_index} Verdaux address overflows u64")
+                })?;
+            }
+        }
+
+        if version_index >= 2 {
+            let name = definition_name.expect("non-zero aux count guarantees a first name");
+            if names.insert(version_index, name).is_some() {
+                return Err(format!(
+                    "DT_VERDEF contains duplicate version index {version_index}"
+                ));
+            }
+        }
+
+        let last_definition = definition_index + 1 == count;
+        if last_definition {
+            if next_relative != 0 {
+                return Err(format!(
+                    "final DT_VERDEF entry has non-zero vd_next {next_relative} beyond DT_VERDEFNUM {count}"
+                ));
+            }
+        } else {
+            if next_relative == 0 {
+                return Err(format!("DT_VERDEF chain ends before DT_VERDEFNUM {count}"));
+            }
+            address = address
+                .checked_add(u64::from(next_relative))
+                .ok_or_else(|| "DT_VERDEF next-entry address overflows u64".to_owned())?;
+        }
+    }
+
+    Ok(names)
 }
 
 fn dynamic_symbol_count(
@@ -420,6 +575,36 @@ fn map_virtual_range(
     Err(format!(
         "{what} virtual range {address:#x}..{address_end:#x} is not backed by a PT_LOAD file range"
     ))
+}
+
+fn dynamic_string(
+    file: &[u8],
+    strtab_offset: u64,
+    strsz: u64,
+    string_offset: u64,
+    label: &str,
+) -> Result<String, String> {
+    if string_offset >= strsz {
+        return Err(format!(
+            "{label} offset {string_offset} is outside DT_STRSZ {strsz}"
+        ));
+    }
+    let start = strtab_offset
+        .checked_add(string_offset)
+        .ok_or_else(|| format!("{label} file offset overflows u64"))?;
+    let remaining = strsz
+        .checked_sub(string_offset)
+        .ok_or_else(|| format!("{label} remaining size underflows"))?;
+    let start =
+        usize::try_from(start).map_err(|_| format!("{label} file offset does not fit usize"))?;
+    let remaining = usize::try_from(remaining)
+        .map_err(|_| format!("{label} remaining size does not fit usize"))?;
+    let bytes = &file[start..start + remaining];
+    let end = bytes
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| format!("{label} is not NUL-terminated within DT_STRSZ"))?;
+    Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
 }
 
 fn unique_tag_value(
