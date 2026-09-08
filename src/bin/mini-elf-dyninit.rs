@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
+const PF_X: u32 = 1;
 const ELF64_DYNAMIC_SIZE: u64 = 16;
 const ELF64_ADDR_SIZE: u64 = 8;
 const DT_NULL: i64 = 0;
@@ -21,6 +22,7 @@ const DT_PREINIT_ARRAYSZ: i64 = 33;
 #[derive(Clone, Copy)]
 struct ProgramHeader {
     segment_type: u32,
+    flags: u32,
     offset: u64,
     virtual_address: u64,
     file_size: u64,
@@ -206,6 +208,7 @@ fn validate_hook_address(
     let address_end = address
         .checked_add(1)
         .ok_or_else(|| format!("{name} virtual address range overflows u64"))?;
+    let mut containing_load = None;
     for (index, header) in program_headers.iter().enumerate() {
         if header.segment_type != PT_LOAD {
             continue;
@@ -215,8 +218,16 @@ fn validate_hook_address(
             .checked_add(header.memory_size)
             .ok_or_else(|| format!("PT_LOAD segment {index} virtual memory range overflows u64"))?;
         if address >= header.virtual_address && address_end <= load_end {
-            return Ok(());
+            containing_load = Some((index, header.flags));
+            if header.flags & PF_X != 0 {
+                return Ok(());
+            }
         }
+    }
+    if let Some((index, _)) = containing_load {
+        return Err(format!(
+            "{name} virtual address {address:#x} is within non-executable PT_LOAD segment {index}"
+        ));
     }
     Err(format!(
         "{name} virtual address {address:#x} is not within a PT_LOAD memory range"
@@ -316,6 +327,7 @@ fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader
             .map_err(|_| "program-header entry offset does not fit usize".to_owned())?;
         let header = ProgramHeader {
             segment_type: read_u32(file, offset),
+            flags: read_u32(file, offset + 4),
             offset: read_u64(file, offset + 8),
             virtual_address: read_u64(file, offset + 16),
             file_size: read_u64(file, offset + 32),
