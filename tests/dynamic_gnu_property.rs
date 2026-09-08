@@ -146,10 +146,8 @@ fn malformed_isa_needed_size_is_rejected() {
         .unwrap();
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&result.stderr)
-            .contains("GNU_PROPERTY_X86_ISA_1_NEEDED data size is 8, expected 4")
-    );
+    assert!(String::from_utf8_lossy(&result.stderr)
+        .contains("GNU_PROPERTY_X86_ISA_1_NEEDED data size is 8, expected 4"));
     let _ = fs::remove_dir_all(dir);
 }
 
