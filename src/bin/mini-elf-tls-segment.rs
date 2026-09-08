@@ -63,9 +63,7 @@ where
         index += 1;
     }
     if inputs.is_empty() {
-        return Err(
-            "usage: mini-elf-tls-segment [--load-bias <address>] <input>...".to_owned(),
-        );
+        return Err("usage: mini-elf-tls-segment [--load-bias <address>] <input>...".to_owned());
     }
 
     let multiple = inputs.len() > 1;
@@ -75,8 +73,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered =
-            format_tls_segment(header, &file, bias).map_err(|error| format!("{display}: {error}"))?;
+        let rendered = format_tls_segment(header, &file, bias)
+            .map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
