@@ -48,12 +48,45 @@ fn interp_header_offset(bytes: &[u8]) -> usize {
 }
 
 fn build_executable(dir: &std::path::Path) -> std::path::PathBuf {
+    let provider_assembly = dir.join("provider.s");
+    let provider_object = dir.join("provider.o");
+    let provider_shared = dir.join("libprovider.so");
+    fs::write(
+        &provider_assembly,
+        ".text\n.globl external_function\n.type external_function,@function\nexternal_function:\n  ret\n.section .note.GNU-stack,\"\",@progbits\n",
+    )
+    .unwrap();
+    let assembled = Command::new("as")
+        .arg("--64")
+        .arg("-o")
+        .arg(&provider_object)
+        .arg(&provider_assembly)
+        .output()
+        .unwrap();
+    assert!(
+        assembled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&assembled.stderr)
+    );
+    let linked_provider = Command::new("ld")
+        .arg("-shared")
+        .arg("-o")
+        .arg(&provider_shared)
+        .arg(&provider_object)
+        .output()
+        .unwrap();
+    assert!(
+        linked_provider.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked_provider.stderr)
+    );
+
     let assembly = dir.join("start.s");
     let object = dir.join("start.o");
     let executable = dir.join("app");
     fs::write(
         &assembly,
-        ".text\n.globl _start\n.type _start,@function\n_start:\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n.section .note.GNU-stack,\"\",@progbits\n",
+        ".text\n.globl _start\n.type _start,@function\n_start:\n  call external_function\n  mov $60,%rax\n  xor %rdi,%rdi\n  syscall\n.section .note.GNU-stack,\"\",@progbits\n",
     )
     .unwrap();
     let assembled = Command::new("as")
@@ -74,6 +107,7 @@ fn build_executable(dir: &std::path::Path) -> std::path::PathBuf {
         .arg("-o")
         .arg(&executable)
         .arg(&object)
+        .arg(&provider_shared)
         .output()
         .unwrap();
     assert!(
