@@ -55,7 +55,7 @@ fn build_shared_object(dir: &std::path::Path) -> std::path::PathBuf {
     let shared = dir.join("libtls.so");
     fs::write(
         &assembly,
-        ".section .tdata,\"awT\",@progbits\n.globl tls_init\ntls_init:\n .quad 0x1122334455667788\n.section .tbss,\"awT\",@nobits\n.globl tls_zero\ntls_zero:\n .zero 16\n.section .note.GNU-stack,\"\",@progbits\n",
+        ".section .tdata,\"awT\",@progbits\n.p2align 3\n.globl tls_init\ntls_init:\n .quad 0x1122334455667788\n.section .tbss,\"awT\",@nobits\n.p2align 3\n.globl tls_zero\ntls_zero:\n .zero 16\n.section .note.GNU-stack,\"\",@progbits\n",
     )
     .unwrap();
     let assembled = Command::new("as")
