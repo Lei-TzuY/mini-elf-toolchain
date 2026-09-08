@@ -134,20 +134,21 @@ fn format_dynamic_segment(header: Elf64Header, file: &[u8]) -> Result<String, St
 
     let string_table_address = unique_tag_value(&entries, 5, "DT_STRTAB")?;
     let string_table_size = unique_tag_value(&entries, 10, "DT_STRSZ")?;
-    let string_table =
-        match (string_table_address, string_table_size) {
-            (Some(address), Some(size)) => Some(map_virtual_range(
-                &program_headers,
-                file.len(),
-                address,
-                size,
-            )?),
-            (None, None) => None,
-            _ => return Err(
+    let string_table = match (string_table_address, string_table_size) {
+        (Some(address), Some(size)) => Some(map_virtual_range(
+            &program_headers,
+            file.len(),
+            address,
+            size,
+        )?),
+        (None, None) => None,
+        _ => {
+            return Err(
                 "PT_DYNAMIC must provide DT_STRTAB and DT_STRSZ together for string-valued tags"
                     .to_owned(),
-            ),
-        };
+            )
+        }
+    };
 
     let mut output = format!(
         "PT_DYNAMIC segment {segment_index} contains {} entries through DT_NULL:\n",
@@ -177,6 +178,13 @@ fn format_dynamic_segment(header: Elf64Header, file: &[u8]) -> Result<String, St
 }
 
 fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader>, String> {
+    if header.program_header_entry_size != ELF64_PROGRAM_HEADER_SIZE {
+        return Err(format!(
+            "program header entry size {} does not match ELF64 size {}",
+            header.program_header_entry_size, ELF64_PROGRAM_HEADER_SIZE
+        ));
+    }
+
     let mut headers = Vec::with_capacity(usize::from(header.program_header_count));
     for index in 0..header.program_header_count {
         let relative = u64::from(index)
@@ -216,6 +224,10 @@ fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader
             file.len(),
             &format!("program header {index}"),
         )?;
+        header
+            .virtual_address
+            .checked_add(header.memory_size)
+            .ok_or_else(|| format!("program header {index} virtual range overflows u64"))?;
         headers.push(header);
     }
     Ok(headers)
