@@ -134,21 +134,20 @@ fn format_dynamic_segment(header: Elf64Header, file: &[u8]) -> Result<String, St
 
     let string_table_address = unique_tag_value(&entries, 5, "DT_STRTAB")?;
     let string_table_size = unique_tag_value(&entries, 10, "DT_STRSZ")?;
-    let string_table = match (string_table_address, string_table_size) {
-        (Some(address), Some(size)) => Some(map_virtual_range(
-            &program_headers,
-            file.len(),
-            address,
-            size,
-        )?),
-        (None, None) => None,
-        _ => {
-            return Err(
+    let string_table =
+        match (string_table_address, string_table_size) {
+            (Some(address), Some(size)) => Some(map_virtual_range(
+                &program_headers,
+                file.len(),
+                address,
+                size,
+            )?),
+            (None, None) => None,
+            _ => return Err(
                 "PT_DYNAMIC must provide DT_STRTAB and DT_STRSZ together for string-valued tags"
                     .to_owned(),
-            )
-        }
-    };
+            ),
+        };
 
     let mut output = format!(
         "PT_DYNAMIC segment {segment_index} contains {} entries through DT_NULL:\n",
