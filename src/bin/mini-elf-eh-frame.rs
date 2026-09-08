@@ -149,12 +149,7 @@ fn format_eh_frame(
         .ok_or_else(|| {
             format!("PT_GNU_EH_FRAME segment {segment_index} virtual memory range overflows u64")
         })?;
-    require_load_containment(
-        &program_headers,
-        segment.virtual_address,
-        end,
-        segment_index,
-    )?;
+    require_load_containment(&program_headers, segment.virtual_address, end, segment_index)?;
     let file_start = usize::try_from(segment.offset)
         .map_err(|_| "PT_GNU_EH_FRAME file offset does not fit usize".to_owned())?;
     if file[file_start] != 1 {
@@ -199,7 +194,10 @@ fn format_eh_frame(
         segment.virtual_address
     ));
     if let Some((runtime_start, runtime_end)) = runtime {
-        output.push_str(&format!("Load bias: {load_bias:#018x}\n", load_bias = load_bias.unwrap()));
+        output.push_str(&format!(
+            "Load bias: {load_bias:#018x}\n",
+            load_bias = load_bias.unwrap()
+        ));
         output.push_str(&format!(
             "Runtime range: {runtime_start:#018x}..{runtime_end:#018x}\n"
         ));
