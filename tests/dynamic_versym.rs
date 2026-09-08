@@ -72,11 +72,24 @@ fn dynamic_entry_offset(bytes: &[u8], wanted_tag: i64) -> usize {
     panic!("shared object should contain dynamic tag {wanted_tag}")
 }
 
-fn build_versioned_library(dir: &std::path::Path) -> std::path::PathBuf {
-    let assembly = dir.join("lib.s");
-    let object = dir.join("lib.o");
-    let shared = dir.join("libversioned.so");
-    let script = dir.join("versions.map");
+fn virtual_to_file_offset(bytes: &[u8], address: u64) -> usize {
+    for (segment_type, offset, virtual_address, file_size) in program_headers(bytes) {
+        if segment_type != 1 {
+            continue;
+        }
+        let end = virtual_address + file_size;
+        if address >= virtual_address && address < end {
+            return (offset + (address - virtual_address)) as usize;
+        }
+    }
+    panic!("virtual address {address:#x} should be file-backed")
+}
+
+fn build_versioned_library(dir: &std::path::Path, hash_style: &str) -> std::path::PathBuf {
+    let assembly = dir.join(format!("lib-{hash_style}.s"));
+    let object = dir.join(format!("lib-{hash_style}.o"));
+    let shared = dir.join(format!("libversioned-{hash_style}.so"));
+    let script = dir.join(format!("versions-{hash_style}.map"));
     fs::write(
         &assembly,
         ".text\n.globl foo\n.type foo,@function\nfoo:\n  ret\n.size foo,.-foo\n",
@@ -96,7 +109,7 @@ fn build_versioned_library(dir: &std::path::Path) -> std::path::PathBuf {
     );
     let linked = Command::new("ld")
         .arg("-shared")
-        .arg("--hash-style=sysv")
+        .arg(format!("--hash-style={hash_style}"))
         .arg("--version-script")
         .arg(&script)
         .arg("-o")
@@ -118,7 +131,7 @@ fn dynamic_versym_matches_gnu_readelf() {
         return;
     }
     let dir = temp_dir("versym-gnu");
-    let shared = build_versioned_library(&dir);
+    let shared = build_versioned_library(&dir, "sysv");
     let gnu = Command::new("readelf")
         .arg("-VW")
         .arg(&shared)
@@ -151,12 +164,80 @@ fn dynamic_versym_matches_gnu_readelf() {
 }
 
 #[test]
+fn gnu_hash_only_versym_matches_gnu_readelf() {
+    if !tool_available("as") || !tool_available("ld") || !tool_available("readelf") {
+        return;
+    }
+    let dir = temp_dir("versym-gnu-hash");
+    let shared = build_versioned_library(&dir, "gnu");
+    let bytes = fs::read(&shared).unwrap();
+    assert!(
+        program_headers(&bytes).iter().any(|_| true),
+        "fixture should contain program headers"
+    );
+    dynamic_entry_offset(&bytes, 0x6fff_fef5);
+    assert!(
+        std::panic::catch_unwind(|| dynamic_entry_offset(&bytes, 4)).is_err(),
+        "GNU-hash-only fixture unexpectedly contains DT_HASH"
+    );
+
+    let gnu = Command::new("readelf")
+        .arg("-VW")
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(gnu.status.success());
+    let gnu_text = String::from_utf8_lossy(&gnu.stdout);
+    assert!(gnu_text.contains("Version symbols section"), "{gnu_text}");
+    assert!(gnu_text.contains("VERS_1"), "{gnu_text}");
+
+    let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym"))
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
+    let ours_text = String::from_utf8_lossy(&ours.stdout);
+    assert!(ours_text.contains("DT_VERSYM"), "{ours_text}");
+    assert!(ours_text.contains("index=2"), "{ours_text}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn malformed_gnu_hash_bucket_count_is_rejected() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("versym-gnu-hash-malformed");
+    let shared = build_versioned_library(&dir, "gnu");
+    let bad = dir.join("bad-gnu-hash.so");
+    let mut bytes = fs::read(&shared).unwrap();
+    let gnu_hash_entry = dynamic_entry_offset(&bytes, 0x6fff_fef5);
+    let gnu_hash_address = read_u64(&bytes, gnu_hash_entry + 8);
+    let gnu_hash_offset = virtual_to_file_offset(&bytes, gnu_hash_address);
+    bytes[gnu_hash_offset..gnu_hash_offset + 4].copy_from_slice(&0u32.to_le_bytes());
+    fs::write(&bad, bytes).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym"))
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("bucket count must be non-zero"));
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn duplicate_versym_tag_is_rejected() {
     if !tool_available("as") || !tool_available("ld") {
         return;
     }
     let dir = temp_dir("versym-duplicate");
-    let shared = build_versioned_library(&dir);
+    let shared = build_versioned_library(&dir, "sysv");
     let bad = dir.join("duplicate.so");
     let mut bytes = fs::read(&shared).unwrap();
     let syment = dynamic_entry_offset(&bytes, 11);
@@ -179,7 +260,7 @@ fn overflowing_versym_virtual_range_is_rejected_atomically() {
         return;
     }
     let dir = temp_dir("versym-overflow");
-    let good = build_versioned_library(&dir);
+    let good = build_versioned_library(&dir, "sysv");
     let bad = dir.join("overflow.so");
     let mut bytes = fs::read(&good).unwrap();
     let versym = dynamic_entry_offset(&bytes, 0x6fff_fff0) + 8;
