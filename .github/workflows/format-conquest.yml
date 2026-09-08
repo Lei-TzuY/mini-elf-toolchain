@@ -21,6 +21,7 @@ jobs:
       - run: cargo fmt --all
       - name: Commit canonical formatting
         run: |
+          # Commit only runner-produced rustfmt changes.
           if git diff --quiet; then
             exit 0
           fi
