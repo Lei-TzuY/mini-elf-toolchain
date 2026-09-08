@@ -52,7 +52,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered = inspect_entry(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        let rendered =
+            inspect_entry(header, &file).map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
