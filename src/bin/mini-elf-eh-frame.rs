@@ -151,11 +151,18 @@ fn format_eh_frame(
         .ok_or_else(|| {
             format!("PT_GNU_EH_FRAME segment {segment_index} virtual memory range overflows u64")
         })?;
-    require_load_containment(&program_headers, segment.virtual_address, end, segment_index)?;
+    require_load_containment(
+        &program_headers,
+        segment.virtual_address,
+        end,
+        segment_index,
+    )?;
     let file_end = segment
         .offset
         .checked_add(segment.file_size)
-        .ok_or_else(|| format!("PT_GNU_EH_FRAME segment {segment_index} file range overflows u64"))?;
+        .ok_or_else(|| {
+            format!("PT_GNU_EH_FRAME segment {segment_index} file range overflows u64")
+        })?;
     let file_start = usize::try_from(segment.offset)
         .map_err(|_| "PT_GNU_EH_FRAME file offset does not fit usize".to_owned())?;
     if file[file_start] != 1 {
