@@ -3,6 +3,7 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DT_STRTAB: i64 = 5;
+const DT_STRSZ: i64 = 10;
 const DT_VERDEF: i64 = 0x6fff_fffc;
 const DT_VERDEFNUM: i64 = 0x6fff_fffd;
 
@@ -205,11 +206,8 @@ fn unterminated_verdef_name_is_rejected() {
     let shared = build_versioned_library(&dir);
     let bad = dir.join("bad-string.so");
     let mut bytes = fs::read(&shared).unwrap();
-    let strtab_entry = dynamic_entry_offset(&bytes, DT_STRTAB);
-    let strtab_address = read_u64(&bytes, strtab_entry + 8);
     let verdef_entry = dynamic_entry_offset(&bytes, DT_VERDEF);
     let verdef_address = read_u64(&bytes, verdef_entry + 8);
-
     let verdef_offset = program_headers(&bytes)
         .into_iter()
         .find_map(|(segment_type, offset, virtual_address, file_size)| {
@@ -238,27 +236,10 @@ fn unterminated_verdef_name_is_rejected() {
             }
         })
         .unwrap();
-    let name_offset = read_u32(&bytes, aux_offset) as u64;
-    let name_address = strtab_address + name_offset;
-    let name_file_offset = program_headers(&bytes)
-        .into_iter()
-        .find_map(|(segment_type, offset, virtual_address, file_size)| {
-            if segment_type == 1
-                && name_address >= virtual_address
-                && name_address < virtual_address + file_size
-            {
-                Some((offset + name_address - virtual_address) as usize)
-            } else {
-                None
-            }
-        })
-        .unwrap();
-    for byte in &mut bytes[name_file_offset..] {
-        if *byte == 0 {
-            *byte = b'X';
-            break;
-        }
-    }
+    let name_offset = u64::from(read_u32(&bytes, aux_offset));
+    let strsz_entry = dynamic_entry_offset(&bytes, DT_STRSZ);
+    let truncated_strsz = name_offset + "VERS_1".len() as u64;
+    bytes[strsz_entry + 8..strsz_entry + 16].copy_from_slice(&truncated_strsz.to_le_bytes());
     fs::write(&bad, bytes).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym"))
