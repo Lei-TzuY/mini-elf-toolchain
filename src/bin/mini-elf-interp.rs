@@ -54,7 +54,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered = format_interp(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        let rendered =
+            format_interp(header, &file).map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
@@ -105,12 +106,12 @@ fn format_interp(header: Elf64Header, file: &[u8]) -> Result<String, String> {
                 .map_err(|_| "PT_INTERP file end does not fit usize".to_owned())?;
             let bytes = &file[start..end];
             if bytes.last() != Some(&0) {
-                return Err(format!(
-                    "PT_INTERP segment {index} is not NUL-terminated"
-                ));
+                return Err(format!("PT_INTERP segment {index} is not NUL-terminated"));
             }
             if bytes.len() == 1 {
-                return Err(format!("PT_INTERP segment {index} has an empty interpreter path"));
+                return Err(format!(
+                    "PT_INTERP segment {index} has an empty interpreter path"
+                ));
             }
             if bytes[..bytes.len() - 1].contains(&0) {
                 return Err(format!(
