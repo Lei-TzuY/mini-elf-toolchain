@@ -153,7 +153,10 @@ fn preinit_array_matches_gnu_readelf_dynamic_tags() {
     );
     let ours = String::from_utf8_lossy(&ours.stdout);
     assert!(ours.contains("DT_PREINIT_ARRAY: address="), "{ours}");
-    assert!(ours.contains("DT_PREINIT_ARRAY: address=") && ours.contains("entries=1"), "{ours}");
+    assert!(
+        ours.contains("DT_PREINIT_ARRAY: address=") && ours.contains("entries=1"),
+        "{ours}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
