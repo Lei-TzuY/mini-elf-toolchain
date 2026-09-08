@@ -1,0 +1,31 @@
+name: Format PT_NOTE candidate
+
+on:
+  push:
+    branches:
+      - conquest/pt-note-build-id
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/pt-note-build-id
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply rustfmt
+        run: cargo fmt --all
+      - name: Commit formatting if needed
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add src/bin/mini-elf-note.rs tests/dynamic_note.rs
+            git commit -m "style: apply canonical rustfmt"
+            git push origin HEAD:conquest/pt-note-build-id
+          fi
