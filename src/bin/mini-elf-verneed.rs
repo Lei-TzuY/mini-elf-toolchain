@@ -156,7 +156,9 @@ fn format_version_requirements(header: Elf64Header, file: &[u8]) -> Result<Strin
 
         let mut aux_address = address
             .checked_add(u64::from(aux_relative))
-            .ok_or_else(|| format!("DT_VERNEED entry {dependency_index} vn_aux address overflows u64"))?;
+            .ok_or_else(|| {
+                format!("DT_VERNEED entry {dependency_index} vn_aux address overflows u64")
+            })?;
         for aux_index in 0..u64::from(aux_count) {
             let aux_offset = map_virtual_range(
                 &program_headers,
@@ -405,8 +407,8 @@ fn dynamic_string(
     let remaining = strsz
         .checked_sub(string_offset)
         .ok_or_else(|| format!("{label} remaining size underflows"))?;
-    let start = usize::try_from(start)
-        .map_err(|_| format!("{label} file offset does not fit usize"))?;
+    let start =
+        usize::try_from(start).map_err(|_| format!("{label} file offset does not fit usize"))?;
     let remaining = usize::try_from(remaining)
         .map_err(|_| format!("{label} remaining size does not fit usize"))?;
     let bytes = &file[start..start + remaining];
@@ -417,16 +419,12 @@ fn dynamic_string(
     Ok(String::from_utf8_lossy(&bytes[..end]).into_owned())
 }
 
-fn checked_file_range(
-    file_len: usize,
-    offset: u64,
-    size: u64,
-    label: &str,
-) -> Result<(), String> {
+fn checked_file_range(file_len: usize, offset: u64, size: u64, label: &str) -> Result<(), String> {
     let end = offset
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows u64"))?;
-    let file_len = u64::try_from(file_len).map_err(|_| "file length does not fit u64".to_owned())?;
+    let file_len =
+        u64::try_from(file_len).map_err(|_| "file length does not fit u64".to_owned())?;
     if end > file_len {
         return Err(format!(
             "{label} file range {offset}..{end} exceeds file length {file_len}"
