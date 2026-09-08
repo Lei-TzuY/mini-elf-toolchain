@@ -121,7 +121,11 @@ fn direct_init_in_non_executable_load_is_rejected_atomically() {
     let init = dynamic_value(&good_bytes, 12);
     let load_offset = containing_load_offset(&good_bytes, init);
     let flags = read_u32(&good_bytes, load_offset + 4);
-    assert_ne!(flags & PF_X, 0, "GNU ld should place DT_INIT in executable PT_LOAD");
+    assert_ne!(
+        flags & PF_X,
+        0,
+        "GNU ld should place DT_INIT in executable PT_LOAD"
+    );
 
     let readelf = Command::new("readelf")
         .arg("-dW")
@@ -139,8 +143,7 @@ fn direct_init_in_non_executable_load_is_rejected_atomically() {
 
     let bad = dir.join("non-exec-init.so");
     let mut bad_bytes = good_bytes;
-    bad_bytes[load_offset + 4..load_offset + 8]
-        .copy_from_slice(&(flags & !PF_X).to_le_bytes());
+    bad_bytes[load_offset + 4..load_offset + 8].copy_from_slice(&(flags & !PF_X).to_le_bytes());
     fs::write(&bad, bad_bytes).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dyninit"))
@@ -150,9 +153,7 @@ fn direct_init_in_non_executable_load_is_rejected_atomically() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "stdout must remain atomic");
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("DT_INIT virtual address"));
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("non-executable PT_LOAD segment"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("DT_INIT virtual address"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("non-executable PT_LOAD segment"));
     let _ = fs::remove_dir_all(dir);
 }
