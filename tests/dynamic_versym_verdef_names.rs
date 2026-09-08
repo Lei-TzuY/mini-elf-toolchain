@@ -2,7 +2,6 @@ use std::fs;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const DT_STRTAB: i64 = 5;
 const DT_STRSZ: i64 = 10;
 const DT_VERDEF: i64 = 0x6fff_fffc;
 const DT_VERDEFNUM: i64 = 0x6fff_fffd;
