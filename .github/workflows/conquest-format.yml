@@ -1,0 +1,32 @@
+name: Conquest formatter
+
+on:
+  push:
+    branches:
+      - conquest/dt-verdef-inspection
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/dt-verdef-inspection
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit canonical formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/bin/mini-elf-verdef.rs tests/dynamic_verdef.rs
+          git commit -m "style: apply stable rustfmt"
+          git push
