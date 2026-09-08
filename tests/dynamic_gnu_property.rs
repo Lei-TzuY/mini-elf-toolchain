@@ -37,7 +37,9 @@ fn program_header_offsets(bytes: &[u8]) -> Vec<usize> {
     let offset = read_u64(bytes, 32) as usize;
     let entry_size = read_u16(bytes, 54) as usize;
     let count = read_u16(bytes, 56) as usize;
-    (0..count).map(|index| offset + index * entry_size).collect()
+    (0..count)
+        .map(|index| offset + index * entry_size)
+        .collect()
 }
 
 fn property_header_offset(bytes: &[u8]) -> usize {
@@ -63,7 +65,11 @@ fn build_property_object(dir: &std::path::Path) -> std::path::PathBuf {
         .arg(&assembly)
         .output()
         .unwrap();
-    assert!(assembled.status.success(), "{}", String::from_utf8_lossy(&assembled.stderr));
+    assert!(
+        assembled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&assembled.stderr)
+    );
     let linked = Command::new("ld")
         .arg("-shared")
         .arg("-o")
@@ -71,7 +77,11 @@ fn build_property_object(dir: &std::path::Path) -> std::path::PathBuf {
         .arg(&object)
         .output()
         .unwrap();
-    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
     let bytes = fs::read(&shared).unwrap();
     property_header_offset(&bytes);
     shared
@@ -84,7 +94,11 @@ fn x86_feature_1_and_matches_gnu_readelf() {
     }
     let dir = temp_dir("gnu-property-diff");
     let shared = build_property_object(&dir);
-    let gnu = Command::new("readelf").arg("-nW").arg(&shared).output().unwrap();
+    let gnu = Command::new("readelf")
+        .arg("-nW")
+        .arg(&shared)
+        .output()
+        .unwrap();
     assert!(gnu.status.success());
     let gnu_text = String::from_utf8_lossy(&gnu.stdout);
     assert!(gnu_text.contains("IBT"), "{gnu_text}");
@@ -94,7 +108,11 @@ fn x86_feature_1_and_matches_gnu_readelf() {
         .arg(&shared)
         .output()
         .unwrap();
-    assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
     let text = String::from_utf8_lossy(&ours.stdout);
     assert!(text.contains("x86 feature_1_and=0x3 IBT SHSTK"), "{text}");
     let _ = fs::remove_dir_all(dir);
