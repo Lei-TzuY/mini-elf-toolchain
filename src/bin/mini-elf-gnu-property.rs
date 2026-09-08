@@ -208,12 +208,7 @@ fn format_properties(header: Elf64Header, file: &[u8]) -> Result<String, String>
                     let data_at = usize::try_from(data_start)
                         .map_err(|_| "property data offset does not fit usize".to_owned())?;
                     let isa = read_u32(file, data_at);
-                    push_isa_property(
-                        &mut output,
-                        segment_index,
-                        "isa_1_needed",
-                        isa,
-                    );
+                    push_isa_property(&mut output, segment_index, "isa_1_needed", isa);
                 } else if property_type == GNU_PROPERTY_X86_ISA_1_USED {
                     if isa_used_seen {
                         return Err("multiple GNU_PROPERTY_X86_ISA_1_USED entries found".to_owned());
