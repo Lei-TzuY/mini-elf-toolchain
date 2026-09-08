@@ -216,6 +216,10 @@ fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader
             file.len(),
             &format!("program header {index}"),
         )?;
+        header
+            .virtual_address
+            .checked_add(header.memory_size)
+            .ok_or_else(|| format!("program header {index} virtual range overflows u64"))?;
         headers.push(header);
     }
     Ok(headers)
