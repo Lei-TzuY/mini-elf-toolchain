@@ -114,9 +114,7 @@ fn accepts_gnu_version_requirement_backed_by_needed_library() {
         .output()
         .unwrap();
     assert!(dynamic.status.success());
-    assert!(
-        String::from_utf8_lossy(&dynamic.stdout).contains("Shared library: [libdep.so]")
-    );
+    assert!(String::from_utf8_lossy(&dynamic.stdout).contains("Shared library: [libdep.so]"));
 
     let versions = Command::new("readelf")
         .arg("-VW")

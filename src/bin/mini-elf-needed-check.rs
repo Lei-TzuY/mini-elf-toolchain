@@ -62,8 +62,7 @@ where
     let mut reports = Vec::with_capacity(args.len());
     for input in args {
         let display = input.to_string_lossy().into_owned();
-        let file = fs::read(&input)
-            .map_err(|error| format!("cannot read '{display}': {error}"))?;
+        let file = fs::read(&input).map_err(|error| format!("cannot read '{display}': {error}"))?;
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
         let report = inspect(header, &file).map_err(|error| format!("{display}: {error}"))?;
         reports.push((display, report));
@@ -347,8 +346,8 @@ fn dynamic_string(
     let start = strtab_offset
         .checked_add(offset)
         .ok_or_else(|| format!("{label} file offset overflows u64"))?;
-    let start = usize::try_from(start)
-        .map_err(|_| format!("{label} file offset does not fit usize"))?;
+    let start =
+        usize::try_from(start).map_err(|_| format!("{label} file offset does not fit usize"))?;
     let remaining = usize::try_from(strsz - offset)
         .map_err(|_| format!("{label} remaining size does not fit usize"))?;
     let bytes = &file[start..start + remaining];
