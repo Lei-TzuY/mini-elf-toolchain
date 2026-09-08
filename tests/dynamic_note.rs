@@ -124,7 +124,10 @@ fn gnu_build_id_matches_readelf() {
     let text = String::from_utf8_lossy(&ours.stdout);
     assert!(text.contains("PT_NOTE segment"), "{text}");
     assert!(text.contains("name=GNU"), "{text}");
-    assert!(text.contains(&format!("GNU build-id: {build_id}")), "{text}");
+    assert!(
+        text.contains(&format!("GNU build-id: {build_id}")),
+        "{text}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
