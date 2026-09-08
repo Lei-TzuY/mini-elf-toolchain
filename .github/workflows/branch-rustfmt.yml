@@ -2,15 +2,13 @@ name: Branch rustfmt
 
 on:
   push:
-    branches:
-      - conquest/gnu-eh-frame-segment
+    branches: [conquest/gnu-eh-frame-segment]
 
 permissions:
   contents: write
 
 jobs:
   rustfmt:
-    if: github.event.head_commit.message != 'style: apply runner rustfmt'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
