@@ -13,6 +13,8 @@ const DT_INIT_ARRAY: i64 = 25;
 const DT_FINI_ARRAY: i64 = 26;
 const DT_INIT_ARRAYSZ: i64 = 27;
 const DT_FINI_ARRAYSZ: i64 = 28;
+const DT_PREINIT_ARRAY: i64 = 32;
+const DT_PREINIT_ARRAYSZ: i64 = 33;
 
 #[derive(Clone, Copy)]
 struct ProgramHeader {
@@ -111,6 +113,15 @@ fn inspect_dynamic_arrays(header: Elf64Header, file: &[u8]) -> Result<String, St
     )?;
     let entries = dynamic_entries(dynamic, file, dynamic_end)?;
 
+    let preinit = dynamic_array(
+        &entries,
+        DT_PREINIT_ARRAY,
+        "DT_PREINIT_ARRAY",
+        DT_PREINIT_ARRAYSZ,
+        "DT_PREINIT_ARRAYSZ",
+        &program_headers,
+        file,
+    )?;
     let init = dynamic_array(
         &entries,
         DT_INIT_ARRAY,
@@ -131,6 +142,7 @@ fn inspect_dynamic_arrays(header: Elf64Header, file: &[u8]) -> Result<String, St
     )?;
 
     let mut output = format!("PT_DYNAMIC segment {segment_index} lifecycle arrays:\n");
+    render_array(&mut output, "DT_PREINIT_ARRAY", preinit);
     render_array(&mut output, "DT_INIT_ARRAY", init);
     render_array(&mut output, "DT_FINI_ARRAY", fini);
     Ok(output)
