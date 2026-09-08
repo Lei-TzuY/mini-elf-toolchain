@@ -133,7 +133,10 @@ fn rejects_nonzero_final_vernaux_next() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("final Vernaux record has non-zero vna_next 16"), "{stderr}");
+    assert!(
+        stderr.contains("final Vernaux record has non-zero vna_next 16"),
+        "{stderr}"
+    );
     assert!(output.stdout.is_empty());
 }
 
