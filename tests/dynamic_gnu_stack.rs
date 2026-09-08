@@ -48,9 +48,21 @@ fn stack_header_offset(bytes: &[u8]) -> usize {
 }
 
 fn build_shared(dir: &std::path::Path, executable_stack: bool) -> std::path::PathBuf {
-    let assembly = dir.join(if executable_stack { "exec.s" } else { "noexec.s" });
-    let object = dir.join(if executable_stack { "exec.o" } else { "noexec.o" });
-    let shared = dir.join(if executable_stack { "libexec.so" } else { "libnoexec.so" });
+    let assembly = dir.join(if executable_stack {
+        "exec.s"
+    } else {
+        "noexec.s"
+    });
+    let object = dir.join(if executable_stack {
+        "exec.o"
+    } else {
+        "noexec.o"
+    });
+    let shared = dir.join(if executable_stack {
+        "libexec.so"
+    } else {
+        "libnoexec.so"
+    });
     let stack_flags = if executable_stack { "x" } else { "" };
     fs::write(
         &assembly,
@@ -185,7 +197,9 @@ fn unknown_stack_flags_and_file_range_overflow_are_rejected() {
         .output()
         .unwrap();
     assert!(!unknown_result.status.success());
-    assert!(String::from_utf8_lossy(&unknown_result.stderr).contains("unknown permission flag bits"));
+    assert!(
+        String::from_utf8_lossy(&unknown_result.stderr).contains("unknown permission flag bits")
+    );
     assert!(unknown_result.stdout.is_empty());
 
     let overflow = dir.join("overflow.so");
