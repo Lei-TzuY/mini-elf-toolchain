@@ -6,6 +6,7 @@ use std::process::ExitCode;
 
 const PT_LOAD: u32 = 1;
 const PT_GNU_EH_FRAME: u32 = 0x6474_e550;
+const EH_FRAME_HDR_PREFIX_SIZE: u64 = 4;
 
 #[derive(Clone, Copy)]
 struct ProgramHeader {
@@ -138,9 +139,10 @@ fn format_eh_frame(
     }
 
     let (segment_index, segment) = segments[0];
-    if segment.file_size == 0 || segment.memory_size == 0 {
+    if segment.file_size < EH_FRAME_HDR_PREFIX_SIZE {
         return Err(format!(
-            "PT_GNU_EH_FRAME segment {segment_index} must be non-empty"
+            "PT_GNU_EH_FRAME segment {segment_index} file-backed .eh_frame_hdr prefix is only {} bytes; need at least {EH_FRAME_HDR_PREFIX_SIZE}",
+            segment.file_size
         ));
     }
     let end = segment
@@ -150,6 +152,10 @@ fn format_eh_frame(
             format!("PT_GNU_EH_FRAME segment {segment_index} virtual memory range overflows u64")
         })?;
     require_load_containment(&program_headers, segment.virtual_address, end, segment_index)?;
+    let file_end = segment
+        .offset
+        .checked_add(segment.file_size)
+        .ok_or_else(|| format!("PT_GNU_EH_FRAME segment {segment_index} file range overflows u64"))?;
     let file_start = usize::try_from(segment.offset)
         .map_err(|_| "PT_GNU_EH_FRAME file offset does not fit usize".to_owned())?;
     if file[file_start] != 1 {
@@ -176,7 +182,7 @@ fn format_eh_frame(
                     segment.memory_size
                 )
             })?;
-        Some((runtime_start, runtime_end))
+        Some((load_bias, runtime_start, runtime_end))
     } else {
         None
     };
@@ -185,19 +191,15 @@ fn format_eh_frame(
     output.push_str("Found 1 PT_GNU_EH_FRAME segment:\n");
     output.push_str(&format!("Header version: {}\n", file[file_start]));
     output.push_str(&format!(
-        "File range: {:#018x}..{:#018x}\n",
-        segment.offset,
-        segment.offset + segment.file_size
+        "File range: {:#018x}..{file_end:#018x}\n",
+        segment.offset
     ));
     output.push_str(&format!(
         "Link-time range: {:#018x}..{end:#018x}\n",
         segment.virtual_address
     ));
-    if let Some((runtime_start, runtime_end)) = runtime {
-        output.push_str(&format!(
-            "Load bias: {load_bias:#018x}\n",
-            load_bias = load_bias.unwrap()
-        ));
+    if let Some((load_bias, runtime_start, runtime_end)) = runtime {
+        output.push_str(&format!("Load bias: {load_bias:#018x}\n"));
         output.push_str(&format!(
             "Runtime range: {runtime_start:#018x}..{runtime_end:#018x}\n"
         ));
