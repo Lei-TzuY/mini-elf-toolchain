@@ -43,7 +43,13 @@ fn build_fixture(dir: &Path) -> PathBuf {
     )
     .unwrap();
     fs::write(&dep_map, "VERS_DEP { global: dep; };\n").unwrap();
-    command_ok(Command::new("as").arg("--64").arg("-o").arg(&dep_o).arg(&dep_s));
+    command_ok(
+        Command::new("as")
+            .arg("--64")
+            .arg("-o")
+            .arg(&dep_o)
+            .arg(&dep_s),
+    );
     command_ok(
         Command::new("ld")
             .arg("-shared")
@@ -67,7 +73,13 @@ fn build_fixture(dir: &Path) -> PathBuf {
     )
     .unwrap();
     fs::write(&use_map, "VERS_LOCAL { global: exported; };\n").unwrap();
-    command_ok(Command::new("as").arg("--64").arg("-o").arg(&use_o).arg(&use_s));
+    command_ok(
+        Command::new("as")
+            .arg("--64")
+            .arg("-o")
+            .arg(&use_o)
+            .arg(&use_s),
+    );
     command_ok(
         Command::new("ld")
             .arg("-shared")
@@ -93,10 +105,17 @@ fn resolves_definition_and_requirement_names_against_gnu_readelf() {
         .arg(&shared)
         .output()
         .unwrap();
-    assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
     let ours = String::from_utf8(ours.stdout).unwrap();
     assert!(ours.contains("source=definition name=VERS_LOCAL"), "{ours}");
-    assert!(ours.contains("source=requirement dependency=libdep.so name=VERS_DEP"), "{ours}");
+    assert!(
+        ours.contains("source=requirement dependency=libdep.so name=VERS_DEP"),
+        "{ours}"
+    );
 
     let readelf = Command::new("readelf")
         .arg("-VW")
@@ -158,7 +177,10 @@ fn rejects_verneed_virtual_range_overflow_atomically() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("DT_VERNEED entry virtual range overflows u64"), "{stderr}");
+    assert!(
+        stderr.contains("DT_VERNEED entry virtual range overflows u64"),
+        "{stderr}"
+    );
     assert!(output.stdout.is_empty());
 }
 
@@ -198,7 +220,10 @@ fn dynamic_segment(bytes: &[u8]) -> Result<(usize, usize), String> {
     for index in 0..phnum {
         let offset = phoff + index * phentsize;
         if read_u32(bytes, offset) == PT_DYNAMIC {
-            return Ok((read_u64(bytes, offset + 8) as usize, read_u64(bytes, offset + 32) as usize));
+            return Ok((
+                read_u64(bytes, offset + 8) as usize,
+                read_u64(bytes, offset + 32) as usize,
+            ));
         }
     }
     Err("PT_DYNAMIC not found".to_owned())

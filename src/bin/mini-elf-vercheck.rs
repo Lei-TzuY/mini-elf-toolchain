@@ -147,7 +147,10 @@ fn inspect(header: Elf64Header, file: &[u8]) -> Result<String, String> {
         referenced.len()
     );
     for index in referenced {
-        match namespace.get(&index).expect("referenced indices were checked") {
+        match namespace
+            .get(&index)
+            .expect("referenced indices were checked")
+        {
             VersionSource::Definition { name } => {
                 output.push_str(&format!("  index={index} source=definition name={name}\n"));
             }
@@ -206,15 +209,25 @@ fn version_definitions(
         let aux_relative = read_u32(file, offset + 12);
         let next = read_u32(file, offset + 16);
         if version != VER_DEF_CURRENT {
-            return Err(format!("DT_VERDEF entry {record_index} has unsupported version {version}"));
+            return Err(format!(
+                "DT_VERDEF entry {record_index} has unsupported version {version}"
+            ));
         }
         if aux_count == 0 || aux_relative == 0 {
-            return Err(format!("DT_VERDEF entry {record_index} has an invalid Verdaux chain"));
+            return Err(format!(
+                "DT_VERDEF entry {record_index} has an invalid Verdaux chain"
+            ));
         }
         let aux_address = current
             .checked_add(u64::from(aux_relative))
             .ok_or_else(|| "DT_VERDEF Verdaux address overflows u64".to_owned())?;
-        let aux_offset = mapped_offset(headers, file, aux_address, ELF64_VERDAUX_SIZE, "Verdaux record")?;
+        let aux_offset = mapped_offset(
+            headers,
+            file,
+            aux_address,
+            ELF64_VERDAUX_SIZE,
+            "Verdaux record",
+        )?;
         let name = dynamic_string(
             file,
             strtab_offset,
@@ -222,7 +235,14 @@ fn version_definitions(
             u64::from(read_u32(file, aux_offset)),
             "Verdaux version name",
         )?;
-        validate_verdef_aux_chain(headers, file, current, aux_relative, aux_count, record_index)?;
+        validate_verdef_aux_chain(
+            headers,
+            file,
+            current,
+            aux_relative,
+            aux_count,
+            record_index,
+        )?;
         result.push((index, VersionSource::Definition { name }));
         current = advance_record(current, next, record_index + 1 == count, "DT_VERDEF", count)?;
     }
@@ -245,11 +265,15 @@ fn validate_verdef_aux_chain(
         let next = read_u32(file, offset + 4);
         let last = aux_index + 1 == u64::from(count);
         if last && next != 0 {
-            return Err(format!("DT_VERDEF entry {record_index} final Verdaux has non-zero vda_next"));
+            return Err(format!(
+                "DT_VERDEF entry {record_index} final Verdaux has non-zero vda_next"
+            ));
         }
         if !last {
             if next == 0 {
-                return Err(format!("DT_VERDEF entry {record_index} Verdaux chain ends early"));
+                return Err(format!(
+                    "DT_VERDEF entry {record_index} Verdaux chain ends early"
+                ));
             }
             address = address
                 .checked_add(u64::from(next))
@@ -281,17 +305,27 @@ fn version_requirements(
     let mut current = address.unwrap();
     let mut result = Vec::new();
     for record_index in 0..count {
-        let offset = mapped_offset(headers, file, current, ELF64_VERNEED_SIZE, "DT_VERNEED entry")?;
+        let offset = mapped_offset(
+            headers,
+            file,
+            current,
+            ELF64_VERNEED_SIZE,
+            "DT_VERNEED entry",
+        )?;
         let version = read_u16(file, offset);
         let aux_count = read_u16(file, offset + 2);
         let dependency_offset = read_u32(file, offset + 4);
         let aux_relative = read_u32(file, offset + 8);
         let next = read_u32(file, offset + 12);
         if version != VER_NEED_CURRENT {
-            return Err(format!("DT_VERNEED entry {record_index} has unsupported version {version}"));
+            return Err(format!(
+                "DT_VERNEED entry {record_index} has unsupported version {version}"
+            ));
         }
         if aux_count == 0 || aux_relative == 0 {
-            return Err(format!("DT_VERNEED entry {record_index} has an invalid Vernaux chain"));
+            return Err(format!(
+                "DT_VERNEED entry {record_index} has an invalid Vernaux chain"
+            ));
         }
         let dependency = dynamic_string(
             file,
@@ -304,7 +338,13 @@ fn version_requirements(
             .checked_add(u64::from(aux_relative))
             .ok_or_else(|| "DT_VERNEED Vernaux address overflows u64".to_owned())?;
         for aux_index in 0..u64::from(aux_count) {
-            let aux_offset = mapped_offset(headers, file, aux_address, ELF64_VERNAUX_SIZE, "Vernaux record")?;
+            let aux_offset = mapped_offset(
+                headers,
+                file,
+                aux_address,
+                ELF64_VERNAUX_SIZE,
+                "Vernaux record",
+            )?;
             let index = read_u16(file, aux_offset + 6) & VERSYM_INDEX_MASK;
             let name = dynamic_string(
                 file,
@@ -323,26 +363,44 @@ fn version_requirements(
             let next_aux = read_u32(file, aux_offset + 12);
             let last = aux_index + 1 == u64::from(aux_count);
             if last && next_aux != 0 {
-                return Err(format!("DT_VERNEED entry {record_index} final Vernaux has non-zero vna_next"));
+                return Err(format!(
+                    "DT_VERNEED entry {record_index} final Vernaux has non-zero vna_next"
+                ));
             }
             if !last {
                 if next_aux == 0 {
-                    return Err(format!("DT_VERNEED entry {record_index} Vernaux chain ends early"));
+                    return Err(format!(
+                        "DT_VERNEED entry {record_index} Vernaux chain ends early"
+                    ));
                 }
                 aux_address = aux_address
                     .checked_add(u64::from(next_aux))
                     .ok_or_else(|| "DT_VERNEED Vernaux address overflows u64".to_owned())?;
             }
         }
-        current = advance_record(current, next, record_index + 1 == count, "DT_VERNEED", count)?;
+        current = advance_record(
+            current,
+            next,
+            record_index + 1 == count,
+            "DT_VERNEED",
+            count,
+        )?;
     }
     Ok(result)
 }
 
-fn advance_record(current: u64, next: u32, last: bool, name: &str, count: u64) -> Result<u64, String> {
+fn advance_record(
+    current: u64,
+    next: u32,
+    last: bool,
+    name: &str,
+    count: u64,
+) -> Result<u64, String> {
     if last {
         if next != 0 {
-            return Err(format!("final {name} entry has non-zero next offset beyond count {count}"));
+            return Err(format!(
+                "final {name} entry has non-zero next offset beyond count {count}"
+            ));
         }
         return Ok(current);
     }
@@ -382,7 +440,11 @@ fn dynamic_symbol_count(
     gnu_hash_symbol_count(headers, file, address)
 }
 
-fn gnu_hash_symbol_count(headers: &[ProgramHeader], file: &[u8], address: u64) -> Result<u32, String> {
+fn gnu_hash_symbol_count(
+    headers: &[ProgramHeader],
+    file: &[u8],
+    address: u64,
+) -> Result<u32, String> {
     let offset = mapped_offset(headers, file, address, 16, "DT_GNU_HASH header")?;
     let bucket_count = read_u32(file, offset);
     let symbol_offset = read_u32(file, offset + 4);
@@ -403,7 +465,13 @@ fn gnu_hash_symbol_count(headers: &[ProgramHeader], file: &[u8], address: u64) -
         .checked_add(bloom_size)
         .and_then(|value| value.checked_add(bucket_size))
         .ok_or_else(|| "DT_GNU_HASH prefix size overflows u64".to_owned())?;
-    let table_offset = map_virtual_range(headers, file.len(), address, prefix_size, "DT_GNU_HASH prefix")?;
+    let table_offset = map_virtual_range(
+        headers,
+        file.len(),
+        address,
+        prefix_size,
+        "DT_GNU_HASH prefix",
+    )?;
     let bucket_offset = usize::try_from(table_offset + 16 + bloom_size)
         .map_err(|_| "DT_GNU_HASH bucket offset does not fit usize".to_owned())?;
     let chain_address = address
@@ -411,12 +479,17 @@ fn gnu_hash_symbol_count(headers: &[ProgramHeader], file: &[u8], address: u64) -
         .ok_or_else(|| "DT_GNU_HASH chain address overflows u64".to_owned())?;
     let mut count = symbol_offset;
     for bucket_index in 0..bucket_count {
-        let symbol = read_u32(file, bucket_offset + usize::try_from(u64::from(bucket_index) * 4).unwrap());
+        let symbol = read_u32(
+            file,
+            bucket_offset + usize::try_from(u64::from(bucket_index) * 4).unwrap(),
+        );
         if symbol == 0 {
             continue;
         }
         if symbol < symbol_offset {
-            return Err(format!("DT_GNU_HASH bucket {bucket_index} starts below symbol offset"));
+            return Err(format!(
+                "DT_GNU_HASH bucket {bucket_index} starts below symbol offset"
+            ));
         }
         let mut current = symbol;
         loop {
@@ -424,7 +497,13 @@ fn gnu_hash_symbol_count(headers: &[ProgramHeader], file: &[u8], address: u64) -
             let chain_entry_address = chain_address
                 .checked_add(u64::from(chain_index) * 4)
                 .ok_or_else(|| "DT_GNU_HASH chain address overflows u64".to_owned())?;
-            let chain_offset = mapped_offset(headers, file, chain_entry_address, 4, "DT_GNU_HASH chain entry")?;
+            let chain_offset = mapped_offset(
+                headers,
+                file,
+                chain_entry_address,
+                4,
+                "DT_GNU_HASH chain entry",
+            )?;
             let hash = read_u32(file, chain_offset);
             current = current
                 .checked_add(1)
@@ -445,11 +524,16 @@ fn dynamic_entries(headers: &[ProgramHeader], file: &[u8]) -> Result<Vec<Dynamic
         .filter(|(_, header)| header.segment_type == PT_DYNAMIC)
         .collect::<Vec<_>>();
     if segments.len() != 1 {
-        return Err(format!("found {} PT_DYNAMIC segments; expected exactly one", segments.len()));
+        return Err(format!(
+            "found {} PT_DYNAMIC segments; expected exactly one",
+            segments.len()
+        ));
     }
     let (segment_index, dynamic) = segments[0];
     if dynamic.file_size % ELF64_DYNAMIC_SIZE != 0 {
-        return Err(format!("PT_DYNAMIC segment {segment_index} file size is not a multiple of 16"));
+        return Err(format!(
+            "PT_DYNAMIC segment {segment_index} file size is not a multiple of 16"
+        ));
     }
     let mut entries = Vec::new();
     for index in 0..dynamic.file_size / ELF64_DYNAMIC_SIZE {
@@ -484,7 +568,12 @@ fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader
             .program_header_offset
             .checked_add(u64::from(index) * u64::from(ELF64_PROGRAM_HEADER_SIZE))
             .ok_or_else(|| "program header offset overflows u64".to_owned())?;
-        checked_file_end(offset, u64::from(ELF64_PROGRAM_HEADER_SIZE), file.len(), "program header")?;
+        checked_file_end(
+            offset,
+            u64::from(ELF64_PROGRAM_HEADER_SIZE),
+            file.len(),
+            "program header",
+        )?;
         let offset = usize::try_from(offset)
             .map_err(|_| "program header offset does not fit usize".to_owned())?;
         let entry = ProgramHeader {
@@ -495,9 +584,16 @@ fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader
             memory_size: read_u64(file, offset + 40),
         };
         if entry.file_size > entry.memory_size {
-            return Err(format!("program header {index} has p_filesz greater than p_memsz"));
+            return Err(format!(
+                "program header {index} has p_filesz greater than p_memsz"
+            ));
         }
-        checked_file_end(entry.offset, entry.file_size, file.len(), "program header segment")?;
+        checked_file_end(
+            entry.offset,
+            entry.file_size,
+            file.len(),
+            "program header segment",
+        )?;
         entry
             .virtual_address
             .checked_add(entry.memory_size)
@@ -528,7 +624,10 @@ fn map_virtual_range(
     let end = address
         .checked_add(size)
         .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
-    for header in headers.iter().filter(|header| header.segment_type == PT_LOAD) {
+    for header in headers
+        .iter()
+        .filter(|header| header.segment_type == PT_LOAD)
+    {
         let backed_end = header
             .virtual_address
             .checked_add(header.file_size)
@@ -543,7 +642,9 @@ fn map_virtual_range(
             return Ok(offset);
         }
     }
-    Err(format!("{label} virtual range {address:#x}..{end:#x} is not file-backed by PT_LOAD"))
+    Err(format!(
+        "{label} virtual range {address:#x}..{end:#x} is not file-backed by PT_LOAD"
+    ))
 }
 
 fn dynamic_string(
@@ -554,13 +655,15 @@ fn dynamic_string(
     label: &str,
 ) -> Result<String, String> {
     if offset >= strsz {
-        return Err(format!("{label} offset {offset} is outside DT_STRSZ {strsz}"));
+        return Err(format!(
+            "{label} offset {offset} is outside DT_STRSZ {strsz}"
+        ));
     }
     let start = strtab_offset
         .checked_add(offset)
         .ok_or_else(|| format!("{label} file offset overflows u64"))?;
-    let start = usize::try_from(start)
-        .map_err(|_| format!("{label} file offset does not fit usize"))?;
+    let start =
+        usize::try_from(start).map_err(|_| format!("{label} file offset does not fit usize"))?;
     let remaining = usize::try_from(strsz - offset)
         .map_err(|_| format!("{label} remaining size does not fit usize"))?;
     let bytes = &file[start..start + remaining];
@@ -586,7 +689,9 @@ fn checked_file_end(offset: u64, size: u64, file_len: usize, label: &str) -> Res
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows u64"))?;
     if end > file_len as u64 {
-        return Err(format!("{label} ends at file offset {end}, beyond file length {file_len}"));
+        return Err(format!(
+            "{label} ends at file offset {end}, beyond file length {file_len}"
+        ));
     }
     Ok(end)
 }
