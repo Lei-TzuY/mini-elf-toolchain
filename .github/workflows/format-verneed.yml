@@ -1,0 +1,29 @@
+name: Format Verneed Branch
+
+on:
+  push:
+    branches:
+      - conquest/dynamic-verneed
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/dynamic-verneed
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all
+      - name: Commit canonical formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/bin/mini-elf-verneed.rs tests/dynamic_verneed.rs
+          git commit -m "style: apply canonical rustfmt"
+          git push origin HEAD:conquest/dynamic-verneed
