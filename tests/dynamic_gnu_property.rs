@@ -55,7 +55,7 @@ fn build_property_object(dir: &std::path::Path) -> std::path::PathBuf {
     let shared = dir.join("libproperty.so");
     fs::write(
         &assembly,
-        ".section .note.gnu.property,\"a\",@note\n.p2align 3\n.long 4\n.long 16\n.long 5\n.asciz \"GNU\"\n.p2align 3\n.long 0xc0000002\n.long 4\n.long 3\n.long 0\n.text\n.globl exported\n.type exported,@function\nexported:\n ret\n.section .note.GNU-stack,\"\",@progbits\n",
+        ".section .note.gnu.property,\"a\",@note\n.p2align 3\n.long 4\n.long 32\n.long 5\n.asciz \"GNU\"\n.p2align 3\n.long 0xc0000002\n.long 4\n.long 3\n.long 0\n.long 0xc0008002\n.long 4\n.long 5\n.long 0\n.text\n.globl exported\n.type exported,@function\nexported:\n ret\n.section .note.GNU-stack,\"\",@progbits\n",
     )
     .unwrap();
     let assembled = Command::new("as")
@@ -88,7 +88,7 @@ fn build_property_object(dir: &std::path::Path) -> std::path::PathBuf {
 }
 
 #[test]
-fn x86_feature_1_and_matches_gnu_readelf() {
+fn x86_properties_match_gnu_readelf() {
     if !available("as") || !available("ld") || !available("readelf") {
         return;
     }
@@ -103,6 +103,8 @@ fn x86_feature_1_and_matches_gnu_readelf() {
     let gnu_text = String::from_utf8_lossy(&gnu.stdout);
     assert!(gnu_text.contains("IBT"), "{gnu_text}");
     assert!(gnu_text.contains("SHSTK"), "{gnu_text}");
+    assert!(gnu_text.contains("x86-64-baseline"), "{gnu_text}");
+    assert!(gnu_text.contains("x86-64-v3"), "{gnu_text}");
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-gnu-property"))
         .arg(&shared)
@@ -115,6 +117,39 @@ fn x86_feature_1_and_matches_gnu_readelf() {
     );
     let text = String::from_utf8_lossy(&ours.stdout);
     assert!(text.contains("x86 feature_1_and=0x3 IBT SHSTK"), "{text}");
+    assert!(
+        text.contains("x86 isa_1_needed=0x5 x86-64-baseline x86-64-v3"),
+        "{text}"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn malformed_isa_needed_size_is_rejected() {
+    if !available("as") || !available("ld") {
+        return;
+    }
+    let dir = temp_dir("gnu-property-isa-size");
+    let shared = build_property_object(&dir);
+    let mut bytes = fs::read(&shared).unwrap();
+    let phdr = property_header_offset(&bytes);
+    let note_offset = read_u64(&bytes, phdr + 8) as usize;
+    let first_property = note_offset + 16;
+    let isa_property = first_property + 16;
+    bytes[isa_property + 4..isa_property + 8].copy_from_slice(&8u32.to_le_bytes());
+    let bad = dir.join("bad-isa-size");
+    fs::write(&bad, bytes).unwrap();
+
+    let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-gnu-property"))
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&result.stderr)
+            .contains("GNU_PROPERTY_X86_ISA_1_NEEDED data size is 8, expected 4")
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
