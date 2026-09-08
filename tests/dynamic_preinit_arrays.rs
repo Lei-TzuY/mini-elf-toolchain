@@ -194,8 +194,7 @@ fn overflowing_preinit_array_virtual_range_is_rejected() {
     let bad = dir.join("overflow");
     let mut bytes = fs::read(&executable).unwrap();
     let address_entry = dynamic_entry_offset(&bytes, 32);
-    bytes[address_entry + 8..address_entry + 16]
-        .copy_from_slice(&(u64::MAX - 3).to_le_bytes());
+    bytes[address_entry + 8..address_entry + 16].copy_from_slice(&(u64::MAX - 3).to_le_bytes());
     fs::write(&bad, bytes).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dyninit"))
