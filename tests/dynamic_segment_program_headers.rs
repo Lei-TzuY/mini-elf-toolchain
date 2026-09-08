@@ -113,8 +113,10 @@ fn overflowing_program_header_virtual_range_is_rejected() {
     let bad = dir.join("bad-vaddr.so");
     let mut bytes = fs::read(&shared).unwrap();
     let load = first_load_program_header(&bytes);
-    bytes[load + 16..load + 24].copy_from_slice(&(u64::MAX - 7).to_le_bytes());
-    bytes[load + 40..load + 48].copy_from_slice(&16u64.to_le_bytes());
+    let memory_size = read_u64(&bytes, load + 40);
+    assert!(memory_size > 0);
+    let virtual_address = u64::MAX - memory_size + 1;
+    bytes[load + 16..load + 24].copy_from_slice(&virtual_address.to_le_bytes());
     fs::write(&bad, bytes).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynseg"))
