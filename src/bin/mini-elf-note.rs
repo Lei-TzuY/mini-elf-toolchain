@@ -40,7 +40,10 @@ where
             Err("usage: mini-elf-note <input>...".to_owned())
         };
     }
-    if args.iter().any(|arg| arg.to_string_lossy().starts_with('-')) {
+    if args
+        .iter()
+        .any(|arg| arg.to_string_lossy().starts_with('-'))
+    {
         return Err("usage: mini-elf-note <input>...".to_owned());
     }
 
@@ -51,7 +54,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered = format_notes(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        let rendered =
+            format_notes(header, &file).map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
@@ -94,8 +98,9 @@ fn format_notes(header: Elf64Header, file: &[u8]) -> Result<String, String> {
                     "PT_NOTE segment {segment_index} has {remaining} trailing bytes, too small for an ELF note header"
                 ));
             }
-            let header_offset = usize::try_from(cursor)
-                .map_err(|_| format!("PT_NOTE segment {segment_index} note offset does not fit usize"))?;
+            let header_offset = usize::try_from(cursor).map_err(|_| {
+                format!("PT_NOTE segment {segment_index} note offset does not fit usize")
+            })?;
             let name_size = u64::from(read_u32(file, header_offset));
             let desc_size = u64::from(read_u32(file, header_offset + 4));
             let note_type = read_u32(file, header_offset + 8);
@@ -119,9 +124,9 @@ fn format_notes(header: Elf64Header, file: &[u8]) -> Result<String, String> {
                     "PT_NOTE segment {segment_index} note {note_index} name padding ends beyond the segment"
                 ));
             }
-            let desc_end = desc_start
-                .checked_add(desc_size)
-                .ok_or_else(|| format!("PT_NOTE segment {segment_index} descriptor range overflows u64"))?;
+            let desc_end = desc_start.checked_add(desc_size).ok_or_else(|| {
+                format!("PT_NOTE segment {segment_index} descriptor range overflows u64")
+            })?;
             if desc_end > segment_end {
                 return Err(format!(
                     "PT_NOTE segment {segment_index} note {note_index} descriptor ends beyond the segment"
@@ -243,7 +248,12 @@ fn align_up(value: u64, alignment: u64) -> Option<u64> {
     value.checked_add(mask).map(|rounded| rounded & !mask)
 }
 
-fn slice<'a>(file: &'a [u8], start: u64, end: u64, label: &str) -> Result<&'a [u8], String> {
+fn slice<'a>(
+    file: &'a [u8],
+    start: u64,
+    end: u64,
+    label: &str,
+) -> Result<&'a [u8], String> {
     let start = usize::try_from(start).map_err(|_| format!("{label} offset does not fit usize"))?;
     let end = usize::try_from(end).map_err(|_| format!("{label} end does not fit usize"))?;
     file.get(start..end)
