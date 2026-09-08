@@ -177,13 +177,6 @@ fn format_dynamic_segment(header: Elf64Header, file: &[u8]) -> Result<String, St
 }
 
 fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader>, String> {
-    if header.program_header_entry_size != ELF64_PROGRAM_HEADER_SIZE {
-        return Err(format!(
-            "program header entry size {} does not match ELF64 size {}",
-            header.program_header_entry_size, ELF64_PROGRAM_HEADER_SIZE
-        ));
-    }
-
     let mut headers = Vec::with_capacity(usize::from(header.program_header_count));
     for index in 0..header.program_header_count {
         let relative = u64::from(index)
