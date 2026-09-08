@@ -473,13 +473,8 @@ fn dynamic_symbol_names(
     let table_size = u64::from(symbol_count)
         .checked_mul(ELF64_SYM_SIZE)
         .ok_or_else(|| "DT_SYMTAB table size overflows u64".to_owned())?;
-    let table_offset = map_virtual_range(
-        headers,
-        file.len(),
-        address,
-        table_size,
-        "DT_SYMTAB table",
-    )?;
+    let table_offset =
+        map_virtual_range(headers, file.len(), address, table_size, "DT_SYMTAB table")?;
     let table_offset = usize::try_from(table_offset)
         .map_err(|_| "DT_SYMTAB table offset does not fit usize".to_owned())?;
     let (strtab_offset, strsz) = dynamic_string_table(entries, headers, file, "DT_SYMTAB")?;

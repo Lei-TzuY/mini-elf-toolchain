@@ -145,7 +145,10 @@ fn rejects_non_elf64_dt_syment() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("DT_SYMENT is 16; expected ELF64 symbol size 24"), "{stderr}");
+    assert!(
+        stderr.contains("DT_SYMENT is 16; expected ELF64 symbol size 24"),
+        "{stderr}"
+    );
     assert!(output.stdout.is_empty());
 }
 
@@ -165,7 +168,10 @@ fn rejects_dynsym_virtual_range_overflow_atomically() {
         .unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("DT_SYMTAB table virtual range overflows u64"), "{stderr}");
+    assert!(
+        stderr.contains("DT_SYMTAB table virtual range overflows u64"),
+        "{stderr}"
+    );
     assert!(output.stdout.is_empty());
 }
 
