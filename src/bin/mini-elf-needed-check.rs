@@ -15,6 +15,7 @@ const DT_VERNEED: i64 = 0x6fff_fffe;
 const DT_VERNEEDNUM: i64 = 0x6fff_ffff;
 const ELF64_DYNAMIC_SIZE: u64 = 16;
 const ELF64_VERNEED_SIZE: u64 = 16;
+const ELF64_VERNAUX_SIZE: u64 = 16;
 const VER_NEED_CURRENT: u16 = 1;
 
 #[derive(Clone, Copy)]
@@ -160,6 +161,17 @@ fn inspect(header: Elf64Header, file: &[u8]) -> Result<String, String> {
         }
         requirements.insert(dependency);
 
+        validate_vernaux_chain(
+            &headers,
+            file,
+            strtab_offset,
+            strsz,
+            current,
+            record_index,
+            aux_count,
+            aux_relative,
+        )?;
+
         let last = record_index + 1 == count;
         if last {
             if next != 0 {
@@ -186,6 +198,60 @@ fn inspect(header: Elf64Header, file: &[u8]) -> Result<String, String> {
         output.push_str(&format!("  dependency={dependency}\n"));
     }
     Ok(output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_vernaux_chain(
+    headers: &[ProgramHeader],
+    file: &[u8],
+    strtab_offset: u64,
+    strsz: u64,
+    verneed_address: u64,
+    record_index: u64,
+    aux_count: u16,
+    aux_relative: u32,
+) -> Result<(), String> {
+    let mut aux_address = verneed_address
+        .checked_add(u64::from(aux_relative))
+        .ok_or_else(|| format!("DT_VERNEED entry {record_index} vn_aux address overflows u64"))?;
+
+    for aux_index in 0..u64::from(aux_count) {
+        let offset = mapped_offset(
+            headers,
+            file,
+            aux_address,
+            ELF64_VERNAUX_SIZE,
+            &format!("DT_VERNEED entry {record_index} Vernaux {aux_index}"),
+        )?;
+        let name_offset = u64::from(read_u32(file, offset + 8));
+        let next = read_u32(file, offset + 12);
+        dynamic_string(
+            file,
+            strtab_offset,
+            strsz,
+            name_offset,
+            "Vernaux version name",
+        )?;
+
+        let last = aux_index + 1 == u64::from(aux_count);
+        if last {
+            if next != 0 {
+                return Err(format!(
+                    "DT_VERNEED entry {record_index} final Vernaux record has non-zero vna_next {next}"
+                ));
+            }
+        } else {
+            if next == 0 {
+                return Err(format!(
+                    "DT_VERNEED entry {record_index} Vernaux chain ends before vn_cnt {aux_count}"
+                ));
+            }
+            aux_address = aux_address.checked_add(u64::from(next)).ok_or_else(|| {
+                format!("DT_VERNEED entry {record_index} Vernaux address overflows u64")
+            })?;
+        }
+    }
+    Ok(())
 }
 
 fn dynamic_string_table(
