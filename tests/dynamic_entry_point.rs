@@ -88,7 +88,11 @@ fn link_image(object: &std::path::Path, output: &std::path::Path, pie: bool) {
         .arg(object)
         .output()
         .unwrap();
-    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
 }
 
 fn assert_readelf_entry(path: &std::path::Path, entry: u64) {
@@ -115,10 +119,9 @@ fn gnu_exec_and_pie_entries_resolve_to_executable_loads() {
     link_image(&object, &executable, false);
     link_image(&object, &pie, true);
 
-    for (path, expected_type, expected_name) in [
-        (&executable, ET_EXEC, "ET_EXEC"),
-        (&pie, ET_DYN, "ET_DYN"),
-    ] {
+    for (path, expected_type, expected_name) in
+        [(&executable, ET_EXEC, "ET_EXEC"), (&pie, ET_DYN, "ET_DYN")]
+    {
         let bytes = fs::read(path).unwrap();
         assert_eq!(read_u16(&bytes, 16), expected_type);
         let entry = read_u64(&bytes, 24);
