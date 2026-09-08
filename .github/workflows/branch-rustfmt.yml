@@ -1,0 +1,32 @@
+name: Branch rustfmt
+
+on:
+  push:
+    branches:
+      - conquest/gnu-eh-frame-segment
+
+permissions:
+  contents: write
+
+jobs:
+  rustfmt:
+    if: github.event.head_commit.message != 'style: apply runner rustfmt'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/gnu-eh-frame-segment
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit canonical formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name LeiZ
+          git config user.email 52287354+Lei-TzuY@users.noreply.github.com
+          git add src/bin/mini-elf-eh-frame.rs tests/dynamic_eh_frame.rs
+          git commit -m 'style: apply runner rustfmt'
+          git push origin HEAD:conquest/gnu-eh-frame-segment
