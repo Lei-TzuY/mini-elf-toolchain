@@ -216,10 +216,8 @@ fn direct_init_address_overflow_is_rejected() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("DT_INIT virtual address range overflows u64")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("DT_INIT virtual address range overflows u64"));
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -243,9 +241,7 @@ fn malformed_later_hook_input_keeps_stdout_atomic() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "stdout must remain atomic");
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("DT_FINI virtual address range overflows u64")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("DT_FINI virtual address range overflows u64"));
     let _ = fs::remove_dir_all(dir);
 }
