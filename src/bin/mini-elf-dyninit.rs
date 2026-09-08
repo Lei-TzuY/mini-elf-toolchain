@@ -9,6 +9,8 @@ const PT_DYNAMIC: u32 = 2;
 const ELF64_DYNAMIC_SIZE: u64 = 16;
 const ELF64_ADDR_SIZE: u64 = 8;
 const DT_NULL: i64 = 0;
+const DT_INIT: i64 = 12;
+const DT_FINI: i64 = 13;
 const DT_INIT_ARRAY: i64 = 25;
 const DT_FINI_ARRAY: i64 = 26;
 const DT_INIT_ARRAYSZ: i64 = 27;
@@ -64,8 +66,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered =
-            inspect_dynamic_arrays(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        let rendered = inspect_dynamic_lifecycle(header, &file)
+            .map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
@@ -82,7 +84,7 @@ where
     Ok(output)
 }
 
-fn inspect_dynamic_arrays(header: Elf64Header, file: &[u8]) -> Result<String, String> {
+fn inspect_dynamic_lifecycle(header: Elf64Header, file: &[u8]) -> Result<String, String> {
     let program_headers = program_headers(header, file)?;
     let dynamic_segments = program_headers
         .iter()
@@ -122,6 +124,7 @@ fn inspect_dynamic_arrays(header: Elf64Header, file: &[u8]) -> Result<String, St
         &program_headers,
         file,
     )?;
+    let init_hook = dynamic_hook(&entries, DT_INIT, "DT_INIT", &program_headers)?;
     let init = dynamic_array(
         &entries,
         DT_INIT_ARRAY,
@@ -140,11 +143,14 @@ fn inspect_dynamic_arrays(header: Elf64Header, file: &[u8]) -> Result<String, St
         &program_headers,
         file,
     )?;
+    let fini_hook = dynamic_hook(&entries, DT_FINI, "DT_FINI", &program_headers)?;
 
-    let mut output = format!("PT_DYNAMIC segment {segment_index} lifecycle arrays:\n");
+    let mut output = format!("PT_DYNAMIC segment {segment_index} lifecycle metadata:\n");
     render_array(&mut output, "DT_PREINIT_ARRAY", preinit);
+    render_hook(&mut output, "DT_INIT", init_hook);
     render_array(&mut output, "DT_INIT_ARRAY", init);
     render_array(&mut output, "DT_FINI_ARRAY", fini);
+    render_hook(&mut output, "DT_FINI", fini_hook);
     Ok(output)
 }
 
@@ -176,6 +182,44 @@ fn dynamic_entries(
     }
     Err(format!(
         "PT_DYNAMIC segment has no DT_NULL terminator before file offset {dynamic_end}"
+    ))
+}
+
+fn dynamic_hook(
+    entries: &[DynamicEntry],
+    tag: i64,
+    name: &str,
+    program_headers: &[ProgramHeader],
+) -> Result<Option<u64>, String> {
+    let Some(address) = unique_tag_value(entries, tag, name)? else {
+        return Ok(None);
+    };
+    validate_hook_address(program_headers, address, name)?;
+    Ok(Some(address))
+}
+
+fn validate_hook_address(
+    program_headers: &[ProgramHeader],
+    address: u64,
+    name: &str,
+) -> Result<(), String> {
+    let address_end = address
+        .checked_add(1)
+        .ok_or_else(|| format!("{name} virtual address range overflows u64"))?;
+    for (index, header) in program_headers.iter().enumerate() {
+        if header.segment_type != PT_LOAD {
+            continue;
+        }
+        let load_end = header
+            .virtual_address
+            .checked_add(header.memory_size)
+            .ok_or_else(|| format!("PT_LOAD segment {index} virtual memory range overflows u64"))?;
+        if address >= header.virtual_address && address_end <= load_end {
+            return Ok(());
+        }
+    }
+    Err(format!(
+        "{name} virtual address {address:#x} is not within a PT_LOAD memory range"
     ))
 }
 
@@ -225,6 +269,13 @@ fn dynamic_array(
         pointers.push(read_u64(file, offset));
     }
     Ok(Some((address, pointers)))
+}
+
+fn render_hook(output: &mut String, name: &str, address: Option<u64>) {
+    match address {
+        None => output.push_str(&format!("  {name}: absent\n")),
+        Some(address) => output.push_str(&format!("  {name}: address={address:#x}\n")),
+    }
 }
 
 fn render_array(output: &mut String, name: &str, array: Option<(u64, Vec<u64>)>) {
