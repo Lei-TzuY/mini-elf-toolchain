@@ -1,0 +1,29 @@
+name: conquest-test-diagnose
+
+on:
+  push:
+    branches:
+      - conquest/pt-interp-inspector
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Capture focused test output
+        run: |
+          set +e
+          cargo test --test dynamic_interp -- --nocapture > conquest-test.log 2>&1
+          status=$?
+          git config user.name "LeiZ"
+          git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+          git add conquest-test.log
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: capture focused test diagnosis"
+            git push origin HEAD:conquest/pt-interp-inspector
+          fi
+          exit $status
