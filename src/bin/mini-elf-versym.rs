@@ -112,9 +112,7 @@ fn format_version_symbols(header: Elf64Header, file: &[u8]) -> Result<String, St
     let table_offset = usize::try_from(table_offset)
         .map_err(|_| "DT_VERSYM table offset does not fit usize".to_owned())?;
 
-    let mut output = format!(
-        "DT_VERSYM at {versym_address:#x} contains {symbol_count} entries:\n"
-    );
+    let mut output = format!("DT_VERSYM at {versym_address:#x} contains {symbol_count} entries:\n");
     for symbol_index in 0..symbol_count {
         let relative = u64::from(symbol_index)
             .checked_mul(ELF64_VERSYM_SIZE)

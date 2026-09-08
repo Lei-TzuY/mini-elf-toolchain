@@ -89,7 +89,11 @@ fn build_versioned_library(dir: &std::path::Path) -> std::path::PathBuf {
         .arg(&assembly)
         .output()
         .unwrap();
-    assert!(assembled.status.success(), "{}", String::from_utf8_lossy(&assembled.stderr));
+    assert!(
+        assembled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&assembled.stderr)
+    );
     let linked = Command::new("ld")
         .arg("-shared")
         .arg("--hash-style=sysv")
@@ -100,7 +104,11 @@ fn build_versioned_library(dir: &std::path::Path) -> std::path::PathBuf {
         .arg(&object)
         .output()
         .unwrap();
-    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
     shared
 }
 
@@ -111,7 +119,11 @@ fn dynamic_versym_matches_gnu_readelf() {
     }
     let dir = temp_dir("versym-gnu");
     let shared = build_versioned_library(&dir);
-    let gnu = Command::new("readelf").arg("-VW").arg(&shared).output().unwrap();
+    let gnu = Command::new("readelf")
+        .arg("-VW")
+        .arg(&shared)
+        .output()
+        .unwrap();
     assert!(gnu.status.success());
     let gnu_text = String::from_utf8_lossy(&gnu.stdout);
     assert!(gnu_text.contains("Version symbols section"), "{gnu_text}");
@@ -121,10 +133,20 @@ fn dynamic_versym_matches_gnu_readelf() {
         .arg(&shared)
         .output()
         .unwrap();
-    assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
     let ours_text = String::from_utf8_lossy(&ours.stdout);
-    assert!(ours_text.contains("DT_VERSYM"), "ours={ours_text}\ngnu={gnu_text}");
-    assert!(ours_text.contains("index=2"), "ours={ours_text}\ngnu={gnu_text}");
+    assert!(
+        ours_text.contains("DT_VERSYM"),
+        "ours={ours_text}\ngnu={gnu_text}"
+    );
+    assert!(
+        ours_text.contains("index=2"),
+        "ours={ours_text}\ngnu={gnu_text}"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
