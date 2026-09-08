@@ -1,0 +1,32 @@
+name: conquest-format-fix
+
+on:
+  push:
+    branches:
+      - conquest/pt-tls-runtime-inspection
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/pt-tls-runtime-inspection
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply rustfmt
+        run: cargo fmt --all
+      - name: Commit canonical formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/bin/mini-elf-tls-segment.rs tests/dynamic_tls_segment.rs
+          git commit -m "style: apply canonical rustfmt"
+          git push origin HEAD:conquest/pt-tls-runtime-inspection
