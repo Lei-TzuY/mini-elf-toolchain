@@ -1,0 +1,34 @@
+[1m[92m   Compiling[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 3.08s
+[1m[92m     Running[0m tests/dynamic_interp.rs (target/debug/deps/dynamic_interp-d77389e142641964)
+
+running 4 tests
+
+thread 'malformed_later_input_keeps_stdout_atomic' (2620) panicked at tests/dynamic_interp.rs:47:10:
+fixture should contain PT_INTERP
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'duplicate_and_unterminated_interp_are_rejected' (2616) panicked at tests/dynamic_interp.rs:47:10:
+fixture should contain PT_INTERP
+
+thread 'interp_file_range_overflow_is_rejected' (2617) panicked at tests/dynamic_interp.rs:47:10:
+fixture should contain PT_INTERP
+
+thread 'interp_matches_gnu_readelf' (2618) panicked at tests/dynamic_interp.rs:47:10:
+fixture should contain PT_INTERP
+test malformed_later_input_keeps_stdout_atomic ... FAILED
+test interp_file_range_overflow_is_rejected ... FAILED
+test interp_matches_gnu_readelf ... FAILED
+test duplicate_and_unterminated_interp_are_rejected ... FAILED
+
+failures:
+
+failures:
+    duplicate_and_unterminated_interp_are_rejected
+    interp_file_range_overflow_is_rejected
+    interp_matches_gnu_readelf
+    malformed_later_input_keeps_stdout_atomic
+
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.14s
+
+[1m[91merror[0m: test failed, to rerun pass `--test dynamic_interp`
