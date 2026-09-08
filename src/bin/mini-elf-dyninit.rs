@@ -198,7 +198,8 @@ fn dynamic_array(
     let file_offset = map_virtual_range(program_headers, file.len(), address, size, address_name)?;
     let count = size / ELF64_ADDR_SIZE;
     let mut pointers = Vec::with_capacity(
-        usize::try_from(count).map_err(|_| format!("{address_name} entry count does not fit usize"))?,
+        usize::try_from(count)
+            .map_err(|_| format!("{address_name} entry count does not fit usize"))?,
     );
     for index in 0..count {
         let relative = index
