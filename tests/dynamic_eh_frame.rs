@@ -188,7 +188,10 @@ fn eh_frame_virtual_range_overflow_is_rejected() {
     let mut bytes = fs::read(&good).unwrap();
     let ph = eh_frame_header_offset(&bytes);
     let memory_size = read_u64(&bytes, ph + 40);
-    assert!(memory_size > 0, "fixture PT_GNU_EH_FRAME should be non-empty");
+    assert!(
+        memory_size > 0,
+        "fixture PT_GNU_EH_FRAME should be non-empty"
+    );
     let overflowing_start = u64::MAX - memory_size + 1;
     bytes[ph + 16..ph + 24].copy_from_slice(&overflowing_start.to_le_bytes());
     fs::write(&malformed, bytes).unwrap();
