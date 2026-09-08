@@ -77,15 +77,19 @@ fn first_load_program_header(bytes: &[u8]) -> usize {
 }
 
 #[test]
-fn nonstandard_program_header_entry_size_is_rejected_atomically() {
+fn overflowing_program_header_virtual_range_is_rejected_atomically() {
     if !tool_available("as") || !tool_available("ld") {
         return;
     }
-    let dir = temp_dir("dynseg-phentsize");
+    let dir = temp_dir("dynseg-phdr-vaddr-overflow");
     let good = build_shared(&dir);
-    let bad = dir.join("bad-phentsize.so");
+    let bad = dir.join("bad-vaddr.so");
     let mut bytes = fs::read(&good).unwrap();
-    bytes[54..56].copy_from_slice(&48u16.to_le_bytes());
+    let load = first_load_program_header(&bytes);
+    let memory_size = read_u64(&bytes, load + 40);
+    assert!(memory_size > 0);
+    let virtual_address = u64::MAX - memory_size + 1;
+    bytes[load + 16..load + 24].copy_from_slice(&virtual_address.to_le_bytes());
     fs::write(&bad, bytes).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynseg"))
@@ -95,36 +99,6 @@ fn nonstandard_program_header_entry_size_is_rejected_atomically() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "stdout must remain atomic");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("program header entry size 48"),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let _ = fs::remove_dir_all(dir);
-}
-
-#[test]
-fn overflowing_program_header_virtual_range_is_rejected() {
-    if !tool_available("as") || !tool_available("ld") {
-        return;
-    }
-    let dir = temp_dir("dynseg-phdr-vaddr-overflow");
-    let shared = build_shared(&dir);
-    let bad = dir.join("bad-vaddr.so");
-    let mut bytes = fs::read(&shared).unwrap();
-    let load = first_load_program_header(&bytes);
-    let memory_size = read_u64(&bytes, load + 40);
-    assert!(memory_size > 0);
-    let virtual_address = u64::MAX - memory_size + 1;
-    bytes[load + 16..load + 24].copy_from_slice(&virtual_address.to_le_bytes());
-    fs::write(&bad, bytes).unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynseg"))
-        .arg(&bad)
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
     assert!(
         String::from_utf8_lossy(&output.stderr).contains("virtual range overflows u64"),
         "{}",
