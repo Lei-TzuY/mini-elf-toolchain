@@ -1,0 +1,22 @@
+[1m[92m   Compiling[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 22.66s
+[1m[92m     Running[0m tests/dynamic_eh_frame.rs (target/debug/deps/dynamic_eh_frame-33b225f522453a7b)
+
+running 4 tests
+
+thread 'eh_frame_virtual_range_overflow_is_rejected' (2757) panicked at tests/dynamic_eh_frame.rs:199:5:
+assertion failed: String::from_utf8_lossy(&result.stderr).contains("virtual memory range overflows u64")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test eh_frame_virtual_range_overflow_is_rejected ... FAILED
+test eh_frame_rejects_duplicate_segment_and_bad_header_version ... ok
+test load_bias_overflow_and_malformed_later_input_keep_stdout_atomic ... ok
+test eh_frame_matches_gnu_readelf_program_header_range ... ok
+
+failures:
+
+failures:
+    eh_frame_virtual_range_overflow_is_rejected
+
+test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.23s
+
+[1m[91merror[0m: test failed, to rerun pass `--test dynamic_eh_frame`
