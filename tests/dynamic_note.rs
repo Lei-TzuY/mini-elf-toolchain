@@ -90,7 +90,10 @@ fn build_shared_object(dir: &std::path::Path) -> std::path::PathBuf {
 
 fn gnu_build_id(text: &str) -> String {
     text.lines()
-        .find_map(|line| line.split_once("Build ID:").map(|(_, value)| value.trim().to_owned()))
+        .find_map(|line| {
+            line.split_once("Build ID:")
+                .map(|(_, value)| value.trim().to_owned())
+        })
         .expect("readelf should report a build ID")
 }
 
