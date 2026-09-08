@@ -10,7 +10,9 @@ const PT_DYNAMIC: u32 = 2;
 const DT_NULL: i64 = 0;
 const DT_HASH: i64 = 4;
 const DT_STRTAB: i64 = 5;
+const DT_SYMTAB: i64 = 6;
 const DT_STRSZ: i64 = 10;
+const DT_SYMENT: i64 = 11;
 const DT_GNU_HASH: i64 = 0x6fff_fef5;
 const DT_VERDEF: i64 = 0x6fff_fffc;
 const DT_VERDEFNUM: i64 = 0x6fff_fffd;
@@ -18,6 +20,7 @@ const DT_VERNEED: i64 = 0x6fff_fffe;
 const DT_VERNEEDNUM: i64 = 0x6fff_ffff;
 const DT_VERSYM: i64 = 0x6fff_fff0;
 const ELF64_DYNAMIC_SIZE: u64 = 16;
+const ELF64_SYM_SIZE: u64 = 24;
 const ELF64_VERSYM_SIZE: u64 = 2;
 const ELF64_VERDEF_SIZE: u64 = 20;
 const ELF64_VERDAUX_SIZE: u64 = 8;
@@ -25,6 +28,7 @@ const ELF64_VERNEED_SIZE: u64 = 16;
 const ELF64_VERNAUX_SIZE: u64 = 16;
 const VER_DEF_CURRENT: u16 = 1;
 const VER_NEED_CURRENT: u16 = 1;
+const VERSYM_HIDDEN: u16 = 0x8000;
 const VERSYM_INDEX_MASK: u16 = 0x7fff;
 
 #[derive(Clone, Copy)]
@@ -106,6 +110,7 @@ fn inspect(header: Elf64Header, file: &[u8]) -> Result<String, String> {
     };
 
     let symbol_count = dynamic_symbol_count(&entries, &headers, file)?;
+    let symbol_names = dynamic_symbol_names(&entries, &headers, file, symbol_count)?;
     let mut namespace = BTreeMap::new();
     for (index, source) in version_definitions(&entries, &headers, file)? {
         insert_version(&mut namespace, index, source)?;
@@ -128,17 +133,26 @@ fn inspect(header: Elf64Header, file: &[u8]) -> Result<String, String> {
         .map_err(|_| "DT_VERSYM table offset does not fit usize".to_owned())?;
 
     let mut referenced = BTreeSet::new();
+    let mut bindings = Vec::new();
     for symbol_index in 0..symbol_count {
         let relative = usize::try_from(u64::from(symbol_index) * ELF64_VERSYM_SIZE)
             .map_err(|_| "DT_VERSYM entry offset does not fit usize".to_owned())?;
-        let index = read_u16(file, table_offset + relative) & VERSYM_INDEX_MASK;
+        let raw = read_u16(file, table_offset + relative);
+        let index = raw & VERSYM_INDEX_MASK;
         if index >= 2 {
-            if !namespace.contains_key(&index) {
-                return Err(format!(
+            let source = namespace.get(&index).ok_or_else(|| {
+                format!(
                     "DT_VERSYM symbol {symbol_index} references unresolved version index {index}"
-                ));
-            }
+                )
+            })?;
             referenced.insert(index);
+            bindings.push((
+                symbol_index,
+                symbol_names[usize::try_from(symbol_index).unwrap()].clone(),
+                index,
+                raw & VERSYM_HIDDEN != 0,
+                source.clone(),
+            ));
         }
     }
 
@@ -159,6 +173,21 @@ fn inspect(header: Elf64Header, file: &[u8]) -> Result<String, String> {
                     "  index={index} source=requirement dependency={dependency} name={name}\n"
                 ));
             }
+        }
+    }
+    output.push_str(&format!(
+        "Versioned dynamic symbols ({}):\n",
+        bindings.len()
+    ));
+    for (symbol_index, symbol_name, index, hidden, source) in bindings {
+        let hidden = if hidden { "yes" } else { "no" };
+        match source {
+            VersionSource::Definition { name } => output.push_str(&format!(
+                "  symbol={symbol_index} name={symbol_name} index={index} hidden={hidden} source=definition version={name}\n"
+            )),
+            VersionSource::Requirement { dependency, name } => output.push_str(&format!(
+                "  symbol={symbol_index} name={symbol_name} index={index} hidden={hidden} source=requirement dependency={dependency} version={name}\n"
+            )),
         }
     }
     Ok(output)
@@ -424,6 +453,53 @@ fn dynamic_string_table(
         .ok_or_else(|| format!("{owner} requires DT_STRSZ"))?;
     let offset = map_virtual_range(headers, file.len(), address, size, "DT_STRTAB table")?;
     Ok((offset, size))
+}
+
+fn dynamic_symbol_names(
+    entries: &[DynamicEntry],
+    headers: &[ProgramHeader],
+    file: &[u8],
+    symbol_count: u32,
+) -> Result<Vec<String>, String> {
+    let address = unique_tag_value(entries, DT_SYMTAB, "DT_SYMTAB")?
+        .ok_or_else(|| "DT_VERSYM requires DT_SYMTAB".to_owned())?;
+    let entry_size = unique_tag_value(entries, DT_SYMENT, "DT_SYMENT")?
+        .ok_or_else(|| "DT_VERSYM requires DT_SYMENT".to_owned())?;
+    if entry_size != ELF64_SYM_SIZE {
+        return Err(format!(
+            "DT_SYMENT is {entry_size}; expected ELF64 symbol size {ELF64_SYM_SIZE}"
+        ));
+    }
+    let table_size = u64::from(symbol_count)
+        .checked_mul(ELF64_SYM_SIZE)
+        .ok_or_else(|| "DT_SYMTAB table size overflows u64".to_owned())?;
+    let table_offset = map_virtual_range(
+        headers,
+        file.len(),
+        address,
+        table_size,
+        "DT_SYMTAB table",
+    )?;
+    let table_offset = usize::try_from(table_offset)
+        .map_err(|_| "DT_SYMTAB table offset does not fit usize".to_owned())?;
+    let (strtab_offset, strsz) = dynamic_string_table(entries, headers, file, "DT_SYMTAB")?;
+    let mut names = Vec::with_capacity(usize::try_from(symbol_count).unwrap());
+    for symbol_index in 0..symbol_count {
+        let relative = u64::from(symbol_index)
+            .checked_mul(ELF64_SYM_SIZE)
+            .ok_or_else(|| "DT_SYMTAB entry offset overflows u64".to_owned())?;
+        let relative = usize::try_from(relative)
+            .map_err(|_| "DT_SYMTAB entry offset does not fit usize".to_owned())?;
+        let name_offset = u64::from(read_u32(file, table_offset + relative));
+        names.push(dynamic_string(
+            file,
+            strtab_offset,
+            strsz,
+            name_offset,
+            "dynamic symbol name",
+        )?);
+    }
+    Ok(names)
 }
 
 fn dynamic_symbol_count(
