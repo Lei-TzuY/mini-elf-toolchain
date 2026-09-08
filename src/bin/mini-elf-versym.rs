@@ -269,9 +269,7 @@ fn version_definition_names(
             }
         } else {
             if next_relative == 0 {
-                return Err(format!(
-                    "DT_VERDEF chain ends before DT_VERDEFNUM {count}"
-                ));
+                return Err(format!("DT_VERDEF chain ends before DT_VERDEFNUM {count}"));
             }
             address = address
                 .checked_add(u64::from(next_relative))

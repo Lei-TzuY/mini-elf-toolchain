@@ -168,9 +168,7 @@ fn zero_verdef_count_is_rejected_atomically() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("DT_VERDEFNUM must be non-zero")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("DT_VERDEFNUM must be non-zero"));
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -193,7 +191,8 @@ fn overflowing_verdef_virtual_range_is_rejected() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("DT_VERDEF entry 0 virtual range overflows u64"));
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("DT_VERDEF entry 0 virtual range overflows u64"));
     let _ = fs::remove_dir_all(dir);
 }
 
