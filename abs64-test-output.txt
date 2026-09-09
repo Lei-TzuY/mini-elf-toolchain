@@ -1,0 +1,24 @@
+[1m[92m   Compiling[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 5.08s
+[1m[92m     Running[0m tests/dynamic_rela_abs64.rs (target/debug/deps/dynamic_rela_abs64-612b95fa5c786ea7)
+
+running 6 tests
+test rejects_out_of_range_dynamic_symbol_index ... ok
+test applies_negative_rela_addend ... ok
+test malformed_later_input_keeps_stdout_atomic ... ok
+test rejects_s_plus_a_overflow ... ok
+
+thread 'rejects_target_outside_writable_load' (2903) panicked at tests/dynamic_rela_abs64.rs:151:10:
+called `Option::unwrap()` on a `None` value
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test rejects_target_outside_writable_load ... FAILED
+test validates_gnu_abs64_relocation ... ok
+
+failures:
+
+failures:
+    rejects_target_outside_writable_load
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+[1m[91merror[0m: test failed, to rerun pass `--test dynamic_rela_abs64`
