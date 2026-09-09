@@ -1,0 +1,40 @@
+[1m[92m    Checking[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[91merror[0m[1m: this `if` statement can be collapsed[0m
+   [1m[94m--> [0msrc/bin/mini-elf-lsda-header.rs:102:9
+    [1m[94m|[0m
+[1m[94m102[0m [1m[94m|[0m [1m[91m/[0m         if name == ".gcc_except_table" {
+[1m[94m103[0m [1m[94m|[0m [1m[91m|[0m             if lsda.replace((index, header)).is_some() {
+[1m[94m104[0m [1m[94m|[0m [1m[91m|[0m                 return Err("multiple .gcc_except_table sections are unsupported".to_owned());
+[1m[94m105[0m [1m[94m|[0m [1m[91m|[0m             }
+[1m[94m106[0m [1m[94m|[0m [1m[91m|[0m         }
+    [1m[94m|[0m [1m[91m|_________^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#collapsible_if
+    [1m[94m= [0m[1mnote[0m: `-D clippy::collapsible-if` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+[1m[96mhelp[0m: collapse nested if block
+    [1m[94m|[0m
+[1m[94m102[0m [92m~ [0m        if name == ".gcc_except_table"
+[1m[94m103[0m [92m~ [0m            [92m&&[0m lsda.replace((index, header)).is_some() {
+[1m[94m104[0m [1m[94m|[0m                 return Err("multiple .gcc_except_table sections are unsupported".to_owned());
+[1m[94m105[0m [92m~ [0m            }
+    [1m[94m|[0m
+
+[1m[91merror[0m[1m: the following explicit lifetimes could be elided: 'a[0m
+   [1m[94m--> [0msrc/bin/mini-elf-lsda-header.rs:212:17
+    [1m[94m|[0m
+[1m[94m212[0m [1m[94m|[0m fn section_name<'a>(table: &'a [u8], name_offset: u32, index: usize) -> Result<&'a str, String> {
+    [1m[94m|[0m                 [1m[91m^^[0m          [1m[91m^^[0m                                                  [1m[91m^^[0m
+    [1m[94m|[0m
+    [1m[94m= [0m[1mhelp[0m: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.98.0/index.html#needless_lifetimes
+    [1m[94m= [0m[1mnote[0m: `-D clippy::needless-lifetimes` implied by `-D warnings`
+    [1m[94m= [0m[1mhelp[0m: to override `-D warnings` add `#[allow(clippy::needless_lifetimes)]`
+[1m[96mhelp[0m: elide the lifetimes
+    [1m[94m|[0m
+[1m[94m212[0m [91m- [0mfn section_name[91m<'a>[0m(table: &[91m'a [0m[u8], name_offset: u32, index: usize) -> Result<&[91m'a [0mstr, String> {
+[1m[94m212[0m [92m+ [0mfn section_name(table: &[u8], name_offset: u32, index: usize) -> Result<&str, String> {
+    [1m[94m|[0m
+
+[1m[91merror[0m: could not compile `mini-elf-toolchain` (bin "mini-elf-lsda-header" test) due to 2 previous errors
+[1m[33mwarning[0m: build failed, waiting for other jobs to finish...
+exit=101
