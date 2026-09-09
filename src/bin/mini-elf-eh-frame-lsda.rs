@@ -231,9 +231,7 @@ fn validate_fde_lsda(
         .checked_add(1)
         .ok_or_else(|| format!("FDE {index} LSDA target overflows u64"))?;
     let load_index = file_backed_range(headers, lsda, lsda_end).ok_or_else(|| {
-        format!(
-            "FDE {index} LSDA target {lsda:#x} is not file-backed PT_LOAD data"
-        )
+        format!("FDE {index} LSDA target {lsda:#x} is not file-backed PT_LOAD data")
     })?;
 
     Ok(LsdaMetadata {
@@ -277,7 +275,9 @@ fn validate_zplr_cie(
         .ok_or_else(|| format!("FDE {index} CIE augmentation string is unterminated"))?;
     let aug_end = aug_start + nul;
     if &file[aug_start..aug_end] != b"zPLR" {
-        return Err(format!("FDE {index} CIE augmentation is not supported zPLR"));
+        return Err(format!(
+            "FDE {index} CIE augmentation is not supported zPLR"
+        ));
     }
 
     let mut cursor = aug_end + 1;
@@ -326,9 +326,7 @@ fn validate_zplr_cie(
     })?;
 
     if file[cursor + 5] != DW_EH_PE_PCREL_SDATA4 {
-        return Err(format!(
-            "FDE {index} CIE LSDA encoding is not pcrel/sdata4"
-        ));
+        return Err(format!("FDE {index} CIE LSDA encoding is not pcrel/sdata4"));
     }
     if file[cursor + 6] != DW_EH_PE_PCREL_SDATA4 {
         return Err(format!(

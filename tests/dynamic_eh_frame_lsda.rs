@@ -100,9 +100,7 @@ fn map_vaddr(file: &[u8], address: u64) -> usize {
 
 fn map_offset_to_vaddr(file: &[u8], offset: usize) -> u64 {
     for (_, kind, file_offset, vaddr, filesz) in program_headers(file) {
-        if kind == PT_LOAD
-            && offset as u64 >= file_offset
-            && (offset as u64) < file_offset + filesz
+        if kind == PT_LOAD && offset as u64 >= file_offset && (offset as u64) < file_offset + filesz
         {
             return vaddr + offset as u64 - file_offset;
         }
@@ -223,8 +221,7 @@ fn rejects_unsupported_lsda_encoding() {
 
     let output = run_tool(&[&malformed]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("LSDA encoding is not pcrel/sdata4"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("LSDA encoding is not pcrel/sdata4"));
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -240,8 +237,9 @@ fn rejects_lsda_pointer_arithmetic_underflow() {
 
     let output = run_tool(&[&malformed]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("LSDA pointer arithmetic overflows u64"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("LSDA pointer arithmetic overflows u64")
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
