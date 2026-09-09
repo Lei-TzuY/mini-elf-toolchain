@@ -98,16 +98,6 @@ fn map_vaddr(file: &[u8], address: u64) -> usize {
     panic!("address {address:#x} is not file-backed");
 }
 
-fn map_offset_to_vaddr(file: &[u8], offset: usize) -> u64 {
-    for (_, kind, file_offset, vaddr, filesz) in program_headers(file) {
-        if kind == PT_LOAD && offset as u64 >= file_offset && (offset as u64) < file_offset + filesz
-        {
-            return vaddr + offset as u64 - file_offset;
-        }
-    }
-    panic!("offset {offset:#x} is not file-backed");
-}
-
 fn first_fde_address(file: &[u8]) -> u64 {
     let (_, _, eh_offset, eh_vaddr, _) = program_headers(file)
         .into_iter()
