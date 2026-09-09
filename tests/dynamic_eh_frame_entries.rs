@@ -107,7 +107,9 @@ fn gnu_initial_locations(path: &std::path::Path) -> Vec<u64> {
     String::from_utf8_lossy(&frames.stdout)
         .lines()
         .filter_map(|line| {
-            let pc = line.split_whitespace().find(|field| field.starts_with("pc="))?;
+            let pc = line
+                .split_whitespace()
+                .find(|field| field.starts_with("pc="))?;
             let start = pc.strip_prefix("pc=")?.split("..").next()?;
             u64::from_str_radix(start.trim_start_matches("0x"), 16).ok()
         })
@@ -127,7 +129,9 @@ fn ours_initial_locations(path: &std::path::Path) -> Vec<u64> {
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
-            let initial = line.split_whitespace().find(|field| field.starts_with("initial="))?;
+            let initial = line
+                .split_whitespace()
+                .find(|field| field.starts_with("initial="))?;
             u64::from_str_radix(initial.trim_start_matches("initial=0x"), 16).ok()
         })
         .collect()
@@ -193,7 +197,9 @@ fn eh_frame_rejects_entry_target_underflow_and_non_load_fde() {
         .output()
         .unwrap();
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("initial-location arithmetic overflows"));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("initial-location arithmetic overflows")
+    );
     assert!(result.stdout.is_empty());
 
     let mut bad_fde = bytes;

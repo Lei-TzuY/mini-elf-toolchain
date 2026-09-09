@@ -245,7 +245,11 @@ fn format_eh_frame(
                 segment.virtual_address
             )
         })?;
-        require_executable_file_backed_load_address(&program_headers, initial_location, entry_index)?;
+        require_executable_file_backed_load_address(
+            &program_headers,
+            initial_location,
+            entry_index,
+        )?;
         require_file_backed_load_address(&program_headers, fde_address, entry_index)?;
         if let Some(previous) = previous_initial {
             if initial_location <= previous {
