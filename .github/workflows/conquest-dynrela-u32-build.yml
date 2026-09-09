@@ -1,0 +1,164 @@
+name: Conquest dynrela u32 candidate
+on:
+  push:
+    branches: [conquest/dynrela-u32]
+permissions:
+  contents: write
+jobs:
+  build-candidate:
+    if: github.event.head_commit.message == 'chore: prepare bounded dynrela u32 candidate'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate bounded R_X86_64_32 slice
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('src/bin/mini-elf-dynrela-abs64.rs').read_text()
+          source = source.replace('mini-elf-dynrela-abs64', 'mini-elf-dynrela-u32')
+          source = source.replace('R_X86_64_64', 'R_X86_64_32')
+          source = source.replace('const R_X86_64_32: u32 = 1;', 'const R_X86_64_32: u32 = 10;')
+          old_target = '''        map_memory_range(
+              &headers,
+              offset,
+              8,
+              PF_W,
+              &format!("R_X86_64_32 relocation {index} target"),
+          )?;'''
+          new_target = old_target.replace('\n              8,', '\n              4,')
+          if old_target not in source:
+              raise SystemExit('target-width anchor not found')
+          source = source.replace(old_target, new_target, 1)
+          old_result = '''        let relocated = add_signed(runtime_symbol, addend)
+              .ok_or_else(|| format!("R_X86_64_32 relocation {index} S + A overflows u64"))?;
+          output.push_str(&format!(
+              "  index={index} symbol={symbol_index}:{name} target=B+{offset:#018x}=>{runtime_target:#018x} symbol-value=B+{value:#018x}=>{runtime_symbol:#018x} addend={addend} result={relocated:#018x}\\n"
+          ));'''
+          new_result = '''        let relocated = add_signed(runtime_symbol, addend)
+              .ok_or_else(|| format!("R_X86_64_32 relocation {index} S + A overflows u64"))?;
+          let narrowed = u32::try_from(relocated).map_err(|_| {
+              format!(
+                  "R_X86_64_32 relocation {index} result {relocated:#x} does not fit unsigned 32 bits"
+              )
+          })?;
+          output.push_str(&format!(
+              "  index={index} symbol={symbol_index}:{name} target=B+{offset:#018x}=>{runtime_target:#018x} symbol-value=B+{value:#018x}=>{runtime_symbol:#018x} addend={addend} result={narrowed:#010x}\\n"
+          ));'''
+          if old_result not in source:
+              raise SystemExit('result anchor not found')
+          source = source.replace(old_result, new_result, 1)
+          Path('src/bin/mini-elf-dynrela-u32.rs').write_text(source)
+
+          tests = Path('tests/dynamic_rela_abs64.rs').read_text()
+          tests = tests.replace('dynrela-abs64', 'dynrela-u32')
+          tests = tests.replace('abs64', 'u32')
+          tests = tests.replace('R_X86_64_64', 'R_X86_64_32')
+          tests = tests.replace('const R_X86_64_32: u32 = 1;', 'const R_X86_64_32: u32 = 10;')
+          marker = '''    assert!(Command::new("ld")
+          .args([
+              "-shared",
+              "--hash-style=sysv",
+              "-o",
+              image.to_str().unwrap(),
+              obj.to_str().unwrap(),
+          ])
+          .status()
+          .unwrap()
+          .success());
+      image
+  }'''
+          replacement = '''    assert!(Command::new("ld")
+          .args([
+              "-shared",
+              "--hash-style=sysv",
+              "-o",
+              image.to_str().unwrap(),
+              obj.to_str().unwrap(),
+          ])
+          .status()
+          .unwrap()
+          .success());
+
+      // GNU ld naturally emits a same-image R_X86_64_64 for this data reference.
+      // Preserve the GNU-produced ET_DYN/DT_RELA/dynsym layout and patch only the
+      // relocation type to exercise the bounded R_X86_64_32 loader contract.
+      let mut bytes = fs::read(&image).unwrap();
+      let rela = dynamic_tag(&bytes, DT_RELA);
+      let mut cursor = map_vaddr(&bytes, rela);
+      loop {
+          let info = read_u64(&bytes, cursor + 8);
+          if info as u32 == 1 {
+              let symbol = info >> 32;
+              bytes[cursor + 8..cursor + 16]
+                  .copy_from_slice(&((symbol << 32) | u64::from(R_X86_64_32)).to_le_bytes());
+              break;
+          }
+          cursor += 24;
+      }
+      fs::write(&image, bytes).unwrap();
+      image
+  }'''
+          if marker not in tests:
+              raise SystemExit('fixture anchor not found')
+          tests = tests.replace(marker, replacement, 1)
+          overflow_old = '''#[test]
+  fn rejects_s_plus_a_overflow() {
+      let dir = temp_dir("u32-overflow");
+      let image = build_fixture(&dir);
+      let mut bytes = fs::read(&image).unwrap();
+      let rela = u32_rela_offset(&bytes);
+      bytes[rela + 16..rela + 24].copy_from_slice(&i64::MAX.to_le_bytes());
+      let bad = dir.join("bad-overflow.so");
+      fs::write(&bad, bytes).unwrap();
+      let output = run_tool(&[&bad], "0xffffffffffff0000");
+      assert!(!output.status.success());
+      let stderr = String::from_utf8_lossy(&output.stderr);
+      assert!(stderr.contains("overflows u64"), "{stderr}");
+      fs::remove_dir_all(dir).unwrap();
+  }'''
+          overflow_new = '''#[test]
+  fn rejects_result_outside_unsigned_32_bits() {
+      let dir = temp_dir("u32-overflow");
+      let image = build_fixture(&dir);
+      let output = run_tool(&[&image], "0x100000000");
+      assert!(!output.status.success());
+      let stderr = String::from_utf8_lossy(&output.stderr);
+      assert!(stderr.contains("does not fit unsigned 32 bits"), "{stderr}");
+      fs::remove_dir_all(dir).unwrap();
+  }'''
+          if overflow_old not in tests:
+              raise SystemExit('overflow-test anchor not found')
+          tests = tests.replace(overflow_old, overflow_new, 1)
+          Path('tests/dynamic_rela_u32.rs').write_text(tests)
+
+          Path('docs/mini-elf-dynrela-u32.md').write_text('''# `mini-elf-dynrela-u32`
+
+`mini-elf-dynrela-u32` validates one bounded ELF64 x86-64 dynamic-loader contract: same-image `R_X86_64_32` relocations in an `ET_DYN` image.
+
+## Usage
+
+```text
+mini-elf-dynrela-u32 --load-bias <address> <input>...
+```
+
+The validator reads a checked `PT_DYNAMIC`, requires the ELF64 `DT_RELA` tuple plus SysV `DT_HASH`, `DT_SYMTAB`, `DT_SYMENT`, `DT_STRTAB`, and `DT_STRSZ`, and uses `DT_HASH.nchain` as the bounded dynamic-symbol count. For each `R_X86_64_32` entry it requires a nonzero in-range dynamic symbol index, a four-byte relocation destination fully contained in writable `PT_LOAD` memory, and a same-image defined non-absolute, non-TLS symbol whose value lies in loadable memory. Symbol names must terminate inside the declared dynamic string table.
+
+With explicit load bias `B`, the slice checks `B + r_offset`, `B + S`, then evaluates the ABI value `S + A` using checked signed-addend arithmetic. The final value must fit **unsigned 32 bits** exactly before it could be written to the four-byte relocation field. Multi-input operation validates every file before emitting stdout, preserving atomic output on malformed later inputs.
+
+Focused integration coverage builds the ELF image with GNU `as` and `ld --hash-style=sysv`, preserves the GNU-produced ET_DYN/DT_RELA/dynsym layout, changes only the relocation type of the selected same-image data relocation to `R_X86_64_32`, and confirms GNU `readelf -rW` recognizes the resulting relocation. Regressions cover invalid dynamic-symbol indices, non-writable targets, unsigned-32 overflow, signed addends, and multi-input stdout atomicity.
+
+This is intentionally not a complete dynamic loader. External dependency lookup, symbol interposition/versioning, TLS, IFUNC execution, relocation ordering, and memory writes remain outside this bounded slice.
+''')
+          PY
+          cargo fmt --all
+          cargo test --test dynamic_rela_u32
+          git rm .github/workflows/conquest-dynrela-u32-build.yml
+          git config user.name 'LeiZ'
+          git config user.email '52287354+Lei-TzuY@users.noreply.github.com'
+          git add src/bin/mini-elf-dynrela-u32.rs tests/dynamic_rela_u32.rs docs/mini-elf-dynrela-u32.md
+          git commit -m 'feat: validate bounded dynamic R_X86_64_32 relocations'
+          git push origin HEAD:conquest/dynrela-u32
