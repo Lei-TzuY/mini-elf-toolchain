@@ -6,7 +6,11 @@ use std::process::ExitCode;
 
 const PT_LOAD: u32 = 1;
 const PT_GNU_EH_FRAME: u32 = 0x6474_e550;
-const EH_FRAME_HDR_PREFIX_SIZE: u64 = 4;
+const EH_FRAME_HDR_FIXED_SIZE: u64 = 12;
+const EH_FRAME_TABLE_ENTRY_SIZE: u64 = 8;
+const DW_EH_PE_PCREL_SDATA4: u8 = 0x1b;
+const DW_EH_PE_UDATA4: u8 = 0x03;
+const DW_EH_PE_DATAREL_SDATA4: u8 = 0x3b;
 
 #[derive(Clone, Copy)]
 struct ProgramHeader {
@@ -139,9 +143,9 @@ fn format_eh_frame(
     }
 
     let (segment_index, segment) = segments[0];
-    if segment.file_size < EH_FRAME_HDR_PREFIX_SIZE {
+    if segment.file_size < EH_FRAME_HDR_FIXED_SIZE {
         return Err(format!(
-            "PT_GNU_EH_FRAME segment {segment_index} file-backed .eh_frame_hdr prefix is only {} bytes; need at least {EH_FRAME_HDR_PREFIX_SIZE}",
+            "PT_GNU_EH_FRAME segment {segment_index} file-backed .eh_frame_hdr is only {} bytes; need at least {EH_FRAME_HDR_FIXED_SIZE}",
             segment.file_size
         ));
     }
@@ -172,6 +176,38 @@ fn format_eh_frame(
         ));
     }
 
+    let eh_frame_ptr_encoding = file[file_start + 1];
+    let fde_count_encoding = file[file_start + 2];
+    let table_encoding = file[file_start + 3];
+    if eh_frame_ptr_encoding != DW_EH_PE_PCREL_SDATA4
+        || fde_count_encoding != DW_EH_PE_UDATA4
+        || table_encoding != DW_EH_PE_DATAREL_SDATA4
+    {
+        return Err(format!(
+            "PT_GNU_EH_FRAME segment {segment_index} has unsupported .eh_frame_hdr encodings: eh_frame_ptr={eh_frame_ptr_encoding:#04x}, fde_count={fde_count_encoding:#04x}, table={table_encoding:#04x}; expected 0x1b/0x03/0x3b"
+        ));
+    }
+
+    let fde_count = u64::from(read_u32(file, file_start + 8));
+    let table_size = fde_count
+        .checked_mul(EH_FRAME_TABLE_ENTRY_SIZE)
+        .ok_or_else(|| {
+            format!(
+                "PT_GNU_EH_FRAME segment {segment_index} binary-search table size overflows u64"
+            )
+        })?;
+    let required_size = EH_FRAME_HDR_FIXED_SIZE
+        .checked_add(table_size)
+        .ok_or_else(|| {
+            format!("PT_GNU_EH_FRAME segment {segment_index} .eh_frame_hdr size overflows u64")
+        })?;
+    if required_size > segment.file_size {
+        return Err(format!(
+            "PT_GNU_EH_FRAME segment {segment_index} declares {fde_count} FDE table entries requiring {required_size} bytes, but segment has only {} file-backed bytes",
+            segment.file_size
+        ));
+    }
+
     let runtime = if let Some(load_bias) = load_bias {
         let runtime_start = load_bias
             .checked_add(segment.virtual_address)
@@ -197,6 +233,10 @@ fn format_eh_frame(
     let mut output = String::new();
     output.push_str("Found 1 PT_GNU_EH_FRAME segment:\n");
     output.push_str(&format!("Header version: {}\n", file[file_start]));
+    output.push_str(&format!(
+        "Encodings: eh_frame_ptr={eh_frame_ptr_encoding:#04x} fde_count={fde_count_encoding:#04x} table={table_encoding:#04x}\n"
+    ));
+    output.push_str(&format!("FDE count: {fde_count}\n"));
     output.push_str(&format!(
         "File range: {:#018x}..{file_end:#018x}\n",
         segment.offset

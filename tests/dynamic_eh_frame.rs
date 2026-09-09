@@ -98,8 +98,14 @@ fn parse_gnu_eh_frame_range(text: &str) -> (u64, u64) {
     (start, start.checked_add(size).unwrap())
 }
 
+fn parse_gnu_fde_count(text: &str) -> usize {
+    text.lines()
+        .filter(|line| line.contains(" FDE cie="))
+        .count()
+}
+
 #[test]
-fn eh_frame_matches_gnu_readelf_program_header_range() {
+fn eh_frame_matches_gnu_readelf_program_header_range_and_fde_count() {
     if !tool_available("as") || !tool_available("ld") || !tool_available("readelf") {
         return;
     }
@@ -116,6 +122,18 @@ fn eh_frame_matches_gnu_readelf_program_header_range() {
         String::from_utf8_lossy(&gnu.stderr)
     );
     let (start, end) = parse_gnu_eh_frame_range(&String::from_utf8_lossy(&gnu.stdout));
+    let frames = Command::new("readelf")
+        .arg("-wf")
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(
+        frames.status.success(),
+        "{}",
+        String::from_utf8_lossy(&frames.stderr)
+    );
+    let fde_count = parse_gnu_fde_count(&String::from_utf8_lossy(&frames.stdout));
+    assert!(fde_count > 0, "GNU fixture should contain at least one FDE");
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-eh-frame"))
         .arg(&shared)
@@ -129,6 +147,11 @@ fn eh_frame_matches_gnu_readelf_program_header_range() {
     let text = String::from_utf8_lossy(&ours.stdout);
     assert!(text.contains("Found 1 PT_GNU_EH_FRAME segment"), "{text}");
     assert!(text.contains("Header version: 1"), "{text}");
+    assert!(
+        text.contains("Encodings: eh_frame_ptr=0x1b fde_count=0x03 table=0x3b"),
+        "{text}"
+    );
+    assert!(text.contains(&format!("FDE count: {fde_count}")), "{text}");
     assert!(
         text.contains(&format!("{start:#018x}..{end:#018x}")),
         "{text}"
@@ -173,6 +196,43 @@ fn eh_frame_rejects_duplicate_segment_and_bad_header_version() {
         .unwrap();
     assert!(!result.status.success());
     assert!(String::from_utf8_lossy(&result.stderr).contains("unsupported .eh_frame_hdr version 2"));
+    assert!(result.stdout.is_empty());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn eh_frame_rejects_unsupported_encoding_and_truncated_declared_table() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("eh-frame-table-malformed");
+    let good = build_eh_frame_shared(&dir);
+    let bytes = fs::read(&good).unwrap();
+    let ph = eh_frame_header_offset(&bytes);
+    let data_offset = read_u64(&bytes, ph + 8) as usize;
+
+    let mut bad_encoding = bytes.clone();
+    bad_encoding[data_offset + 1] = 0xff;
+    let bad_encoding_path = dir.join("bad-encoding.so");
+    fs::write(&bad_encoding_path, bad_encoding).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-eh-frame"))
+        .arg(&bad_encoding_path)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("unsupported .eh_frame_hdr encodings"));
+    assert!(result.stdout.is_empty());
+
+    let mut truncated_table = bytes;
+    truncated_table[data_offset + 8..data_offset + 12].copy_from_slice(&u32::MAX.to_le_bytes());
+    let truncated_table_path = dir.join("truncated-table.so");
+    fs::write(&truncated_table_path, truncated_table).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-eh-frame"))
+        .arg(&truncated_table_path)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("FDE table entries requiring"));
     assert!(result.stdout.is_empty());
     let _ = fs::remove_dir_all(dir);
 }
