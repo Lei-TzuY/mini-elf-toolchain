@@ -90,7 +90,10 @@ fn parse_eh_frame_address(text: &str) -> u64 {
         .find(|line| line.split_whitespace().any(|field| field == ".eh_frame"))
         .expect("readelf should report .eh_frame");
     let fields = line.split_whitespace().collect::<Vec<_>>();
-    let name_index = fields.iter().position(|field| *field == ".eh_frame").unwrap();
+    let name_index = fields
+        .iter()
+        .position(|field| *field == ".eh_frame")
+        .unwrap();
     u64::from_str_radix(fields[name_index + 2].trim_start_matches("0x"), 16).unwrap()
 }
 
@@ -146,9 +149,7 @@ fn pointer_underflow_is_rejected_and_later_failure_is_atomic() {
         .output()
         .unwrap();
     assert!(!one.status.success());
-    assert!(
-        String::from_utf8_lossy(&one.stderr).contains(".eh_frame pointer arithmetic overflows")
-    );
+    assert!(String::from_utf8_lossy(&one.stderr).contains(".eh_frame pointer arithmetic overflows"));
     assert!(one.stdout.is_empty());
 
     let atomic = Command::new(env!("CARGO_BIN_EXE_mini-elf-eh-frame-pointer"))
@@ -192,7 +193,8 @@ fn pointer_outside_file_backed_load_and_runtime_overflow_are_rejected() {
         .output()
         .unwrap();
     assert!(!overflow.status.success());
-    assert!(String::from_utf8_lossy(&overflow.stderr).contains("runtime .eh_frame address overflows u64"));
+    assert!(String::from_utf8_lossy(&overflow.stderr)
+        .contains("runtime .eh_frame address overflows u64"));
     assert!(overflow.stdout.is_empty());
     let _ = fs::remove_dir_all(dir);
 }
