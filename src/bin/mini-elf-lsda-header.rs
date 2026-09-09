@@ -18,6 +18,14 @@ struct SectionHeader {
     size: u64,
 }
 
+#[derive(Clone, Copy)]
+struct CallSiteEntry {
+    start: u64,
+    length: u64,
+    landing_pad: u64,
+    action: u64,
+}
+
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
         Ok(output) => {
@@ -132,24 +140,92 @@ fn inspect(file: &[u8]) -> Result<String, String> {
             "unsupported LSDA call-site encoding {call_site_encoding:#04x}; expected uleb128"
         ));
     }
-    let (call_site_bytes, cursor) =
+    let (call_site_bytes, table_start) =
         read_uleb(bytes, 3, bytes.len(), "LSDA call-site table length")?;
     let table_len = usize::try_from(call_site_bytes)
         .map_err(|_| "LSDA call-site table length does not fit usize".to_owned())?;
-    let table_end = cursor
+    let table_end = table_start
         .checked_add(table_len)
         .ok_or_else(|| "LSDA call-site table range overflows usize".to_owned())?;
     if table_end > bytes.len() {
         return Err(format!(
             "LSDA call-site table declares {call_site_bytes} bytes but only {} remain",
-            bytes.len().saturating_sub(cursor)
+            bytes.len().saturating_sub(table_start)
         ));
     }
 
-    Ok(format!(
-        "Validated GNU LSDA header: section={} address={:#018x} offset={:#x} size={:#x} call-site-encoding=0x01 call-site-table-bytes={}\n",
-        index, section.addr, section.offset, section.size, call_site_bytes
-    ))
+    let entries = parse_call_site_entries(bytes, table_start, table_end)?;
+    let mut output = format!(
+        "Validated GNU LSDA header: section={} address={:#018x} offset={:#x} size={:#x} call-site-encoding=0x01 call-site-table-bytes={} call-site-entries={}\n",
+        index,
+        section.addr,
+        section.offset,
+        section.size,
+        call_site_bytes,
+        entries.len()
+    );
+    for (entry_index, entry) in entries.into_iter().enumerate() {
+        let end = entry.start.checked_add(entry.length).ok_or_else(|| {
+            format!("LSDA call-site entry {entry_index} start+length overflows u64")
+        })?;
+        output.push_str(&format!(
+            "  call-site[{entry_index}]: start={:#x} length={:#x} end={:#x} landing-pad={:#x} action={}\n",
+            entry.start, entry.length, end, entry.landing_pad, entry.action
+        ));
+    }
+    Ok(output)
+}
+
+fn parse_call_site_entries(
+    bytes: &[u8],
+    mut cursor: usize,
+    table_end: usize,
+) -> Result<Vec<CallSiteEntry>, String> {
+    let mut entries = Vec::new();
+    while cursor < table_end {
+        let entry_index = entries.len();
+        let (start, next) = read_uleb(
+            bytes,
+            cursor,
+            table_end,
+            &format!("LSDA call-site entry {entry_index} start"),
+        )?;
+        cursor = next;
+        let (length, next) = read_uleb(
+            bytes,
+            cursor,
+            table_end,
+            &format!("LSDA call-site entry {entry_index} length"),
+        )?;
+        cursor = next;
+        start.checked_add(length).ok_or_else(|| {
+            format!("LSDA call-site entry {entry_index} start+length overflows u64")
+        })?;
+        let (landing_pad, next) = read_uleb(
+            bytes,
+            cursor,
+            table_end,
+            &format!("LSDA call-site entry {entry_index} landing-pad"),
+        )?;
+        cursor = next;
+        let (action, next) = read_uleb(
+            bytes,
+            cursor,
+            table_end,
+            &format!("LSDA call-site entry {entry_index} action"),
+        )?;
+        cursor = next;
+        entries.push(CallSiteEntry {
+            start,
+            length,
+            landing_pad,
+            action,
+        });
+    }
+    if cursor != table_end {
+        return Err("LSDA call-site table was not consumed exactly".to_owned());
+    }
+    Ok(entries)
 }
 
 fn section_headers(
