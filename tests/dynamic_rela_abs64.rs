@@ -146,7 +146,7 @@ fn symbol_count(bytes: &[u8]) -> u64 {
 fn executable_address(bytes: &[u8]) -> u64 {
     program_headers(bytes)
         .into_iter()
-        .find(|header| header.0 == PT_LOAD && header.1 & PF_X != 0 && header.4 >= 8)
+        .find(|header| header.0 == PT_LOAD && header.1 & PF_X != 0 && header.4 >= 1)
         .map(|header| header.3)
         .unwrap()
 }
