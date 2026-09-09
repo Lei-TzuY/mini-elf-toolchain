@@ -513,10 +513,9 @@ fn program_headers(file: &[u8]) -> Result<Vec<ProgramHeader>, String> {
         if file_end > file.len() {
             return Err(format!("program header {index} file range exceeds input"));
         }
-        header
-            .vaddr
-            .checked_add(header.filesz)
-            .ok_or_else(|| format!("program header {index} file-backed virtual range overflows u64"))?;
+        header.vaddr.checked_add(header.filesz).ok_or_else(|| {
+            format!("program header {index} file-backed virtual range overflows u64")
+        })?;
         headers.push(header);
     }
     Ok(headers)
@@ -550,7 +549,8 @@ fn map_file_backed_range(
             .ok_or_else(|| format!("{label} file offset overflows u64"))?;
         let file_offset = usize::try_from(file_offset)
             .map_err(|_| format!("{label} file offset does not fit usize"))?;
-        let width = usize::try_from(size).map_err(|_| format!("{label} size does not fit usize"))?;
+        let width =
+            usize::try_from(size).map_err(|_| format!("{label} size does not fit usize"))?;
         let file_end = file_offset
             .checked_add(width)
             .ok_or_else(|| format!("{label} file range overflows usize"))?;
