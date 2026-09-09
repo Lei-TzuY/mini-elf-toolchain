@@ -72,7 +72,8 @@ fn checked_add_i32(base: u64, displacement: i32) -> u64 {
     if displacement >= 0 {
         base.checked_add(displacement as u64).unwrap()
     } else {
-        base.checked_sub(u64::from(displacement.unsigned_abs())).unwrap()
+        base.checked_sub(u64::from(displacement.unsigned_abs()))
+            .unwrap()
     }
 }
 
@@ -103,7 +104,11 @@ fn build_shared(dir: &std::path::Path) -> std::path::PathBuf {
         .arg(&assembly)
         .output()
         .unwrap();
-    assert!(assembled.status.success(), "{}", String::from_utf8_lossy(&assembled.stderr));
+    assert!(
+        assembled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&assembled.stderr)
+    );
     let linked = Command::new("ld")
         .arg("-shared")
         .arg("--eh-frame-hdr")
@@ -112,13 +117,25 @@ fn build_shared(dir: &std::path::Path) -> std::path::PathBuf {
         .arg(&object)
         .output()
         .unwrap();
-    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
     shared
 }
 
 fn gnu_fde_addresses(path: &std::path::Path, bytes: &[u8]) -> Vec<u64> {
-    let frames = Command::new("readelf").arg("-wf").arg(path).output().unwrap();
-    assert!(frames.status.success(), "{}", String::from_utf8_lossy(&frames.stderr));
+    let frames = Command::new("readelf")
+        .arg("-wf")
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        frames.status.success(),
+        "{}",
+        String::from_utf8_lossy(&frames.stderr)
+    );
     let base = eh_frame_base(bytes);
     String::from_utf8_lossy(&frames.stdout)
         .lines()
@@ -135,7 +152,11 @@ fn ours_fde_addresses(path: &std::path::Path) -> Vec<u64> {
         .arg(path)
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
