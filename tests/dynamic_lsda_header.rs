@@ -22,7 +22,7 @@ fn build_fixture(dir: &Path) -> PathBuf {
     let image = dir.join("fixture.so");
     fs::write(
         &asm,
-        ".section .text\n.globl fixture_fn\n.type fixture_fn,@function\nfixture_fn:\n.cfi_startproc\n.cfi_lsda 0x1b, lsda\nnop\nret\n.cfi_endproc\n.size fixture_fn, .-fixture_fn\n.section .gcc_except_table,\"a\",@progbits\n.globl lsda\n.hidden lsda\n.type lsda,@object\nlsda:\n.byte 0xff, 0xff, 0x01, 0x00\n.size lsda, .-lsda\n",
+        ".section .text\n.globl fixture_fn\n.type fixture_fn,@function\nfixture_fn:\n.cfi_startproc\n.cfi_lsda 0x1b, lsda\nnop\nret\n.cfi_endproc\n.size fixture_fn, .-fixture_fn\n.section .gcc_except_table,\"a\",@progbits\n.globl lsda\n.hidden lsda\n.type lsda,@object\nlsda:\n.byte 0xff, 0xff, 0x01, 0x04\n.byte 0x02, 0x03, 0x05, 0x01\n.zero 9\n.size lsda, .-lsda\n",
     )
     .unwrap();
     assert!(Command::new("as")
@@ -108,8 +108,17 @@ fn readelf_lsda_address(image: &Path) -> u64 {
     panic!("readelf did not report .gcc_except_table");
 }
 
+fn readelf_lsda_hex(image: &Path) -> String {
+    let output = Command::new("readelf")
+        .args(["-x", ".gcc_except_table", image.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8(output.stdout).unwrap()
+}
+
 #[test]
-fn validates_gnu_lsda_header_against_readelf() {
+fn validates_gnu_lsda_call_site_entries_against_readelf() {
     let dir = temp_dir("lsda-header-good");
     let image = build_fixture(&dir);
     let output = run_tool(&[&image]);
@@ -121,7 +130,13 @@ fn validates_gnu_lsda_header_against_readelf() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let address = readelf_lsda_address(&image);
     assert!(stdout.contains(&format!("address={address:#018x}")));
-    assert!(stdout.contains("call-site-encoding=0x01 call-site-table-bytes=0"));
+    assert!(stdout.contains("call-site-encoding=0x01 call-site-table-bytes=4 call-site-entries=1"));
+    assert!(stdout.contains("call-site[0]: start=0x2 length=0x3 end=0x5 landing-pad=0x5 action=1"));
+    let readelf_hex = readelf_lsda_hex(&image);
+    assert!(
+        readelf_hex.contains("ffff0104 02030501"),
+        "unexpected readelf dump:\n{readelf_hex}"
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -161,13 +176,49 @@ fn rejects_call_site_table_length_past_section() {
     let image = build_fixture(&dir);
     let mut file = fs::read(&image).unwrap();
     let (offset, size, _) = lsda_section(&file);
-    assert!(size >= 4);
+    assert!(size >= 17);
     file[offset + 3] = 0x7f;
     let malformed = dir.join("length.so");
     fs::write(&malformed, file).unwrap();
     let output = run_tool(&[&malformed]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("call-site table declares"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_truncated_call_site_entry_inside_declared_table() {
+    let dir = temp_dir("lsda-header-entry-truncated");
+    let image = build_fixture(&dir);
+    let mut file = fs::read(&image).unwrap();
+    let (offset, _, _) = lsda_section(&file);
+    file[offset + 3] = 3;
+    let malformed = dir.join("entry-truncated.so");
+    fs::write(&malformed, file).unwrap();
+    let output = run_tool(&[&malformed]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("entry 0 action"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_call_site_interval_overflow() {
+    let dir = temp_dir("lsda-header-entry-overflow");
+    let image = build_fixture(&dir);
+    let mut file = fs::read(&image).unwrap();
+    let (offset, size, _) = lsda_section(&file);
+    assert!(size >= 17);
+    file[offset + 3] = 13;
+    file[offset + 4..offset + 14]
+        .copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]);
+    file[offset + 14] = 1;
+    file[offset + 15] = 0;
+    file[offset + 16] = 0;
+    let malformed = dir.join("entry-overflow.so");
+    fs::write(&malformed, file).unwrap();
+    let output = run_tool(&[&malformed]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("start+length overflows u64"));
     fs::remove_dir_all(dir).unwrap();
 }
 
