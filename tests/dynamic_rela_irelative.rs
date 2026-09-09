@@ -29,7 +29,7 @@ fn build_fixture(dir: &Path) -> PathBuf {
     let image = dir.join("fixture.so");
     fs::write(
         &asm,
-        ".text\n.globl resolver\n.hidden resolver\n.type resolver,@function\nresolver:\nlea payload(%rip), %rax\nret\n.size resolver, .-resolver\n.section .rodata,\"a\",@progbits\npayload:\n.byte 0x2a\n.data\n.globl irelative_slot\n.hidden irelative_slot\n.type irelative_slot,@object\nirelative_slot:\n.quad 0\n.size irelative_slot, .-irelative_slot\n.reloc irelative_slot, R_X86_64_IRELATIVE, resolver\n",
+        ".text\n.globl resolver\n.hidden resolver\n.type resolver,@gnu_indirect_function\nresolver:\nlea payload(%rip), %rax\nret\n.size resolver, .-resolver\n.section .rodata,\"a\",@progbits\npayload:\n.byte 0x2a\n.data\n.globl irelative_slot\n.hidden irelative_slot\n.type irelative_slot,@object\nirelative_slot:\n.quad resolver\n.size irelative_slot, .-irelative_slot\n",
     )
     .unwrap();
     assert!(Command::new("as")
