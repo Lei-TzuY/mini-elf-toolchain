@@ -306,6 +306,11 @@ fn parse_action_chain(
                 "LSDA call-site entry {entry_index} action record {one_based_offset} type filter"
             ),
         )?;
+        if type_filter != 0 {
+            return Err(format!(
+                "LSDA call-site entry {entry_index} action record {one_based_offset} type filter {type_filter} requires a type table, but the LSDA type table is omitted"
+            ));
+        }
         let (next_displacement, _) = read_sleb(
             bytes,
             after_filter,
