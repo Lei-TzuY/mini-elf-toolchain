@@ -131,7 +131,10 @@ fn validates_gnu_lsda_call_site_entries_against_readelf() {
     let address = readelf_lsda_address(&image);
     assert!(stdout.contains(&format!("address={address:#018x}")));
     assert!(stdout.contains("call-site-encoding=0x01 call-site-table-bytes=4 call-site-entries=1"));
-    assert!(stdout.contains("call-site[0]: start=0x2 length=0x3 end=0x5 landing-pad=0x5 action=1"));
+    assert!(stdout.contains(
+        "call-site[0]: start=0x2 length=0x3 end=0x5 landing-pad=0x5 action=1 action-records=1"
+    ));
+    assert!(stdout.contains("action[0]: offset=1 type-filter=0 next=0"));
     let readelf_hex = readelf_lsda_hex(&image);
     assert!(
         readelf_hex.contains("ffff0104 02030501"),
@@ -223,17 +226,106 @@ fn rejects_call_site_interval_overflow() {
 }
 
 #[test]
+fn rejects_action_offset_outside_action_table() {
+    let dir = temp_dir("lsda-action-outside");
+    let image = build_fixture(&dir);
+    let mut file = fs::read(&image).unwrap();
+    let (offset, _, _) = lsda_section(&file);
+    file[offset + 7] = 0x20;
+    let malformed = dir.join("action-outside.so");
+    fs::write(&malformed, file).unwrap();
+    let output = run_tool(&[&malformed]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("outside the action table"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_action_offset_arithmetic_overflow() {
+    let dir = temp_dir("lsda-action-overflow");
+    let image = build_fixture(&dir);
+    let mut file = fs::read(&image).unwrap();
+    let (offset, size, _) = lsda_section(&file);
+    assert!(size >= 17);
+    file[offset + 3] = 13;
+    file[offset + 4] = 0;
+    file[offset + 5] = 0;
+    file[offset + 6] = 0;
+    file[offset + 7..offset + 17]
+        .copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01]);
+    let malformed = dir.join("action-overflow.so");
+    fs::write(&malformed, file).unwrap();
+    let output = run_tool(&[&malformed]);
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("action offset overflows usize")
+            || stderr.contains("action offset does not fit usize")
+    );
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_truncated_action_record_sleb() {
+    let dir = temp_dir("lsda-action-truncated");
+    let image = build_fixture(&dir);
+    let mut file = fs::read(&image).unwrap();
+    let (offset, size, _) = lsda_section(&file);
+    assert_eq!(size, 17);
+    file[offset + 7] = 9;
+    file[offset + 16] = 0x80;
+    let malformed = dir.join("action-truncated.so");
+    fs::write(&malformed, file).unwrap();
+    let output = run_tool(&[&malformed]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("type filter SLEB128"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_action_next_displacement_outside_action_table() {
+    let dir = temp_dir("lsda-action-next-outside");
+    let image = build_fixture(&dir);
+    let mut file = fs::read(&image).unwrap();
+    let (offset, _, _) = lsda_section(&file);
+    file[offset + 8] = 0;
+    file[offset + 9] = 0x20;
+    let malformed = dir.join("action-next-outside.so");
+    fs::write(&malformed, file).unwrap();
+    let output = run_tool(&[&malformed]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("leaves the action table"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_action_chain_cycle() {
+    let dir = temp_dir("lsda-action-cycle");
+    let image = build_fixture(&dir);
+    let mut file = fs::read(&image).unwrap();
+    let (offset, _, _) = lsda_section(&file);
+    file[offset + 8] = 0;
+    file[offset + 9] = 0x7f;
+    let malformed = dir.join("action-cycle.so");
+    fs::write(&malformed, file).unwrap();
+    let output = run_tool(&[&malformed]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("action chain contains a cycle"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn malformed_later_input_keeps_stdout_atomic() {
     let dir = temp_dir("lsda-header-atomic");
     let good = build_fixture(&dir);
     let mut file = fs::read(&good).unwrap();
     let (offset, _, _) = lsda_section(&file);
-    file[offset + 2] = 0;
+    file[offset + 9] = 0x20;
     let bad = dir.join("bad.so");
     fs::write(&bad, file).unwrap();
     let output = run_tool(&[&good, &bad]);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("call-site encoding"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("leaves the action table"));
     fs::remove_dir_all(dir).unwrap();
 }

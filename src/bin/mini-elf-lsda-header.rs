@@ -26,6 +26,13 @@ struct CallSiteEntry {
     action: u64,
 }
 
+#[derive(Clone, Copy)]
+struct ActionRecord {
+    offset: usize,
+    type_filter: i64,
+    next_displacement: i64,
+}
+
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
         Ok(output) => {
@@ -155,6 +162,16 @@ fn inspect(file: &[u8]) -> Result<String, String> {
     }
 
     let entries = parse_call_site_entries(bytes, table_start, table_end)?;
+    let mut action_chains = Vec::with_capacity(entries.len());
+    for (entry_index, entry) in entries.iter().enumerate() {
+        action_chains.push(parse_action_chain(
+            bytes,
+            table_end,
+            entry.action,
+            entry_index,
+        )?);
+    }
+
     let mut output = format!(
         "Validated GNU LSDA header: section={} address={:#018x} offset={:#x} size={:#x} call-site-encoding=0x01 call-site-table-bytes={} call-site-entries={}\n",
         index,
@@ -168,10 +185,22 @@ fn inspect(file: &[u8]) -> Result<String, String> {
         let end = entry.start.checked_add(entry.length).ok_or_else(|| {
             format!("LSDA call-site entry {entry_index} start+length overflows u64")
         })?;
+        let actions = &action_chains[entry_index];
         output.push_str(&format!(
-            "  call-site[{entry_index}]: start={:#x} length={:#x} end={:#x} landing-pad={:#x} action={}\n",
-            entry.start, entry.length, end, entry.landing_pad, entry.action
+            "  call-site[{entry_index}]: start={:#x} length={:#x} end={:#x} landing-pad={:#x} action={} action-records={}\n",
+            entry.start,
+            entry.length,
+            end,
+            entry.landing_pad,
+            entry.action,
+            actions.len()
         ));
+        for (action_index, action) in actions.iter().enumerate() {
+            output.push_str(&format!(
+                "    action[{action_index}]: offset={} type-filter={} next={}\n",
+                action.offset, action.type_filter, action.next_displacement
+            ));
+        }
     }
     Ok(output)
 }
@@ -226,6 +255,92 @@ fn parse_call_site_entries(
         return Err("LSDA call-site table was not consumed exactly".to_owned());
     }
     Ok(entries)
+}
+
+fn parse_action_chain(
+    bytes: &[u8],
+    action_table_start: usize,
+    action: u64,
+    entry_index: usize,
+) -> Result<Vec<ActionRecord>, String> {
+    if action == 0 {
+        return Ok(Vec::new());
+    }
+
+    let relative = action
+        .checked_sub(1)
+        .ok_or_else(|| format!("LSDA call-site entry {entry_index} action offset underflows"))?;
+    let relative = usize::try_from(relative).map_err(|_| {
+        format!("LSDA call-site entry {entry_index} action offset does not fit usize")
+    })?;
+    let mut cursor = action_table_start.checked_add(relative).ok_or_else(|| {
+        format!("LSDA call-site entry {entry_index} action offset overflows usize")
+    })?;
+    if cursor >= bytes.len() {
+        return Err(format!(
+            "LSDA call-site entry {entry_index} action offset {action} is outside the action table"
+        ));
+    }
+
+    let mut seen = Vec::new();
+    let mut records = Vec::new();
+    loop {
+        if seen.contains(&cursor) {
+            return Err(format!(
+                "LSDA call-site entry {entry_index} action chain contains a cycle at section offset {cursor:#x}"
+            ));
+        }
+        seen.push(cursor);
+
+        let one_based_offset = cursor
+            .checked_sub(action_table_start)
+            .and_then(|offset| offset.checked_add(1))
+            .ok_or_else(|| {
+                format!("LSDA call-site entry {entry_index} action record offset overflows usize")
+            })?;
+        let (type_filter, after_filter) = read_sleb(
+            bytes,
+            cursor,
+            bytes.len(),
+            &format!(
+                "LSDA call-site entry {entry_index} action record {one_based_offset} type filter"
+            ),
+        )?;
+        let (next_displacement, _) = read_sleb(
+            bytes,
+            after_filter,
+            bytes.len(),
+            &format!(
+                "LSDA call-site entry {entry_index} action record {one_based_offset} next displacement"
+            ),
+        )?;
+        records.push(ActionRecord {
+            offset: one_based_offset,
+            type_filter,
+            next_displacement,
+        });
+
+        if next_displacement == 0 {
+            break;
+        }
+        cursor = checked_add_signed(after_filter, next_displacement).ok_or_else(|| {
+            format!(
+                "LSDA call-site entry {entry_index} action record {one_based_offset} next displacement overflows section offset"
+            )
+        })?;
+        if cursor < action_table_start || cursor >= bytes.len() {
+            return Err(format!(
+                "LSDA call-site entry {entry_index} action record {one_based_offset} next displacement leaves the action table"
+            ));
+        }
+    }
+    Ok(records)
+}
+
+fn checked_add_signed(base: usize, displacement: i64) -> Option<usize> {
+    let base = i128::try_from(base).ok()?;
+    let next = base.checked_add(i128::from(displacement))?;
+    usize::try_from(next).ok()
 }
 
 fn section_headers(
@@ -329,6 +444,44 @@ fn read_uleb(
             .ok_or_else(|| format!("{label} ULEB128 shift overflows"))?;
         if shift > 70 {
             return Err(format!("{label} ULEB128 is too long"));
+        }
+    }
+}
+
+fn read_sleb(
+    bytes: &[u8],
+    mut cursor: usize,
+    end: usize,
+    label: &str,
+) -> Result<(i64, usize), String> {
+    let mut value = 0_i128;
+    let mut shift = 0_u32;
+    loop {
+        if cursor >= end {
+            return Err(format!("truncated {label} SLEB128"));
+        }
+        let byte = bytes[cursor];
+        cursor += 1;
+        let payload = i128::from(byte & 0x7f);
+        let shifted = payload
+            .checked_shl(shift)
+            .ok_or_else(|| format!("{label} SLEB128 overflows i64"))?;
+        value |= shifted;
+        shift = shift
+            .checked_add(7)
+            .ok_or_else(|| format!("{label} SLEB128 shift overflows"))?;
+        if byte & 0x80 == 0 {
+            if byte & 0x40 != 0 {
+                value |= (!0_i128)
+                    .checked_shl(shift)
+                    .ok_or_else(|| format!("{label} SLEB128 overflows i64"))?;
+            }
+            let value =
+                i64::try_from(value).map_err(|_| format!("{label} SLEB128 overflows i64"))?;
+            return Ok((value, cursor));
+        }
+        if shift > 70 {
+            return Err(format!("{label} SLEB128 is too long"));
         }
     }
 }
