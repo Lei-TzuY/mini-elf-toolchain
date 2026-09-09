@@ -262,15 +262,14 @@ fn inspect(file: &[u8], load_bias: u64) -> Result<String, String> {
         )?;
         let name = dynamic_string(strtab, name_offset, symbol_index)?;
         let addend = read_i64(entry, 16);
-        let runtime_target = load_bias
-            .checked_add(offset)
-            .ok_or_else(|| format!("R_X86_64_64 relocation {index} runtime target overflows u64"))?;
+        let runtime_target = load_bias.checked_add(offset).ok_or_else(|| {
+            format!("R_X86_64_64 relocation {index} runtime target overflows u64")
+        })?;
         let runtime_symbol = load_bias.checked_add(value).ok_or_else(|| {
             format!("R_X86_64_64 relocation {index} runtime symbol value overflows u64")
         })?;
-        let relocated = add_signed(runtime_symbol, addend).ok_or_else(|| {
-            format!("R_X86_64_64 relocation {index} S + A overflows u64")
-        })?;
+        let relocated = add_signed(runtime_symbol, addend)
+            .ok_or_else(|| format!("R_X86_64_64 relocation {index} S + A overflows u64"))?;
         output.push_str(&format!(
             "  index={index} symbol={symbol_index}:{name} target=B+{offset:#018x}=>{runtime_target:#018x} symbol-value=B+{value:#018x}=>{runtime_symbol:#018x} addend={addend} result={relocated:#018x}\n"
         ));
@@ -325,7 +324,9 @@ fn dynamic_metadata(bytes: &[u8]) -> Result<DynamicMetadata, String> {
         let value = read_u64(entry, 8);
         if terminated {
             if tag != DT_NULL || value != 0 {
-                return Err(format!("PT_DYNAMIC entry {index} contains data after DT_NULL"));
+                return Err(format!(
+                    "PT_DYNAMIC entry {index} contains data after DT_NULL"
+                ));
             }
             continue;
         }
@@ -417,7 +418,9 @@ fn program_headers(file: &[u8]) -> Result<Vec<ProgramHeader>, String> {
             memsz: read_u64(file, offset + 40),
         };
         if header.filesz > header.memsz {
-            return Err(format!("program header {index} file size exceeds memory size"));
+            return Err(format!(
+                "program header {index} file size exceeds memory size"
+            ));
         }
         let file_start = usize::try_from(header.offset)
             .map_err(|_| format!("program header {index} file offset does not fit usize"))?;
@@ -441,11 +444,15 @@ fn program_headers(file: &[u8]) -> Result<Vec<ProgramHeader>, String> {
     Ok(headers)
 }
 
-fn program_bytes<'a>(file: &'a [u8], header: ProgramHeader, label: &str) -> Result<&'a [u8], String> {
-    let start = usize::try_from(header.offset)
-        .map_err(|_| format!("{label} offset does not fit usize"))?;
-    let size = usize::try_from(header.filesz)
-        .map_err(|_| format!("{label} size does not fit usize"))?;
+fn program_bytes<'a>(
+    file: &'a [u8],
+    header: ProgramHeader,
+    label: &str,
+) -> Result<&'a [u8], String> {
+    let start =
+        usize::try_from(header.offset).map_err(|_| format!("{label} offset does not fit usize"))?;
+    let size =
+        usize::try_from(header.filesz).map_err(|_| format!("{label} size does not fit usize"))?;
     let end = start
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows usize"))?;
@@ -466,7 +473,10 @@ fn map_file_backed_range<'a>(
     let end = address
         .checked_add(size)
         .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
-    for header in headers.iter().filter(|header| header.segment_type == PT_LOAD) {
+    for header in headers
+        .iter()
+        .filter(|header| header.segment_type == PT_LOAD)
+    {
         if header.flags & required_flags != required_flags {
             continue;
         }
@@ -481,8 +491,8 @@ fn map_file_backed_range<'a>(
             .ok_or_else(|| format!("{label} file offset overflows u64"))?;
         let start = usize::try_from(file_offset)
             .map_err(|_| format!("{label} file offset does not fit usize"))?;
-        let width = usize::try_from(size)
-            .map_err(|_| format!("{label} size does not fit usize"))?;
+        let width =
+            usize::try_from(size).map_err(|_| format!("{label} size does not fit usize"))?;
         let file_end = start
             .checked_add(width)
             .ok_or_else(|| format!("{label} file range overflows usize"))?;
@@ -506,7 +516,10 @@ fn map_memory_range(
     let end = address
         .checked_add(size)
         .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
-    for header in headers.iter().filter(|header| header.segment_type == PT_LOAD) {
+    for header in headers
+        .iter()
+        .filter(|header| header.segment_type == PT_LOAD)
+    {
         if header.flags & required_flags != required_flags {
             continue;
         }
