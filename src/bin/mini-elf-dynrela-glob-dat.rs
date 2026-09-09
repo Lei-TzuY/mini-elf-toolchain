@@ -270,9 +270,9 @@ fn inspect(file: &[u8], load_bias: u64) -> Result<String, String> {
         let runtime_target = load_bias
             .checked_add(offset)
             .ok_or_else(|| format!("GLOB_DAT relocation {index} runtime target overflows u64"))?;
-        let runtime_value = load_bias
-            .checked_add(value)
-            .ok_or_else(|| format!("GLOB_DAT relocation {index} runtime symbol value overflows u64"))?;
+        let runtime_value = load_bias.checked_add(value).ok_or_else(|| {
+            format!("GLOB_DAT relocation {index} runtime symbol value overflows u64")
+        })?;
         output.push_str(&format!(
             "  index={index} symbol={symbol_index}:{name} target=B+{offset:#018x}=>{runtime_target:#018x} value=B+{value:#018x}=>{runtime_value:#018x}\n"
         ));
@@ -319,7 +319,9 @@ fn dynamic_metadata(bytes: &[u8]) -> Result<DynamicMetadata, String> {
         let value = read_u64(entry, 8);
         if terminated {
             if tag != DT_NULL || value != 0 {
-                return Err(format!("PT_DYNAMIC entry {index} contains data after DT_NULL"));
+                return Err(format!(
+                    "PT_DYNAMIC entry {index} contains data after DT_NULL"
+                ));
             }
             continue;
         }
@@ -442,10 +444,10 @@ fn program_bytes<'a>(
     header: ProgramHeader,
     label: &str,
 ) -> Result<&'a [u8], String> {
-    let start = usize::try_from(header.offset)
-        .map_err(|_| format!("{label} offset does not fit usize"))?;
-    let size = usize::try_from(header.filesz)
-        .map_err(|_| format!("{label} size does not fit usize"))?;
+    let start =
+        usize::try_from(header.offset).map_err(|_| format!("{label} offset does not fit usize"))?;
+    let size =
+        usize::try_from(header.filesz).map_err(|_| format!("{label} size does not fit usize"))?;
     let end = start
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows usize"))?;
@@ -484,8 +486,8 @@ fn map_file_backed_range<'a>(
             .ok_or_else(|| format!("{label} file offset overflows u64"))?;
         let start = usize::try_from(file_offset)
             .map_err(|_| format!("{label} file offset does not fit usize"))?;
-        let width = usize::try_from(size)
-            .map_err(|_| format!("{label} size does not fit usize"))?;
+        let width =
+            usize::try_from(size).map_err(|_| format!("{label} size does not fit usize"))?;
         let file_end = start
             .checked_add(width)
             .ok_or_else(|| format!("{label} file range overflows usize"))?;
