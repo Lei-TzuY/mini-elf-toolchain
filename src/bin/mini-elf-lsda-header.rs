@@ -105,7 +105,9 @@ fn inspect(file: &[u8]) -> Result<String, String> {
     }
     let (index, section) = lsda.ok_or_else(|| "missing .gcc_except_table section".to_owned())?;
     if section.flags & SHF_ALLOC == 0 {
-        return Err(format!(".gcc_except_table section {index} is not SHF_ALLOC"));
+        return Err(format!(
+            ".gcc_except_table section {index} is not SHF_ALLOC"
+        ));
     }
     let bytes = section_bytes(file, section, ".gcc_except_table")?;
     if bytes.len() < 4 {
@@ -130,7 +132,8 @@ fn inspect(file: &[u8]) -> Result<String, String> {
             "unsupported LSDA call-site encoding {call_site_encoding:#04x}; expected uleb128"
         ));
     }
-    let (call_site_bytes, cursor) = read_uleb(bytes, 3, bytes.len(), "LSDA call-site table length")?;
+    let (call_site_bytes, cursor) =
+        read_uleb(bytes, 3, bytes.len(), "LSDA call-site table length")?;
     let table_len = usize::try_from(call_site_bytes)
         .map_err(|_| "LSDA call-site table length does not fit usize".to_owned())?;
     let table_end = cursor
@@ -155,7 +158,8 @@ fn section_headers(
     shentsize: usize,
     shnum: usize,
 ) -> Result<Vec<SectionHeader>, String> {
-    let shoff = usize::try_from(shoff).map_err(|_| "section-header offset does not fit usize".to_owned())?;
+    let shoff = usize::try_from(shoff)
+        .map_err(|_| "section-header offset does not fit usize".to_owned())?;
     let table_bytes = shnum
         .checked_mul(shentsize)
         .ok_or_else(|| "section-header table size overflows usize".to_owned())?;
@@ -191,7 +195,8 @@ fn section_bytes<'a>(
 ) -> Result<&'a [u8], String> {
     let start = usize::try_from(section.offset)
         .map_err(|_| format!("{label} offset does not fit usize"))?;
-    let size = usize::try_from(section.size).map_err(|_| format!("{label} size does not fit usize"))?;
+    let size = usize::try_from(section.size)
+        .map_err(|_| format!("{label} size does not fit usize"))?;
     let end = start
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows usize"))?;
