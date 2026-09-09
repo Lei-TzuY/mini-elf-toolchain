@@ -31,7 +31,12 @@ fn build_fixture(dir: &Path) -> PathBuf {
         .unwrap()
         .success());
     assert!(Command::new("ld")
-        .args(["-shared", "-o", image.to_str().unwrap(), obj.to_str().unwrap()])
+        .args([
+            "-shared",
+            "-o",
+            image.to_str().unwrap(),
+            obj.to_str().unwrap()
+        ])
         .status()
         .unwrap()
         .success());

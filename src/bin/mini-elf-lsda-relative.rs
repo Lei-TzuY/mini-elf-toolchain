@@ -233,11 +233,12 @@ fn inspect(file: &[u8]) -> Result<String, String> {
                     .map_err(|_| "LSDA type-table entry offset does not fit u64".to_owned())?,
             )
             .ok_or_else(|| "LSDA type-table entry address overflows u64".to_owned())?;
-        let slot_address = checked_add_signed_u64(entry_address, i64::from(raw)).ok_or_else(|| {
-            format!(
+        let slot_address =
+            checked_add_signed_u64(entry_address, i64::from(raw)).ok_or_else(|| {
+                format!(
                 "LSDA type-table index {type_index} PC-relative pointer-slot address overflows u64"
             )
-        })?;
+            })?;
         map_file_backed_range(
             file,
             &program_headers,
@@ -248,9 +249,7 @@ fn inspect(file: &[u8]) -> Result<String, String> {
 
         let relocation = find_relative_relocation(rela_bytes, slot_address, type_index)?;
         let target = u64::try_from(relocation.1).map_err(|_| {
-            format!(
-                "LSDA type-table index {type_index} R_X86_64_RELATIVE addend is negative"
-            )
+            format!("LSDA type-table index {type_index} R_X86_64_RELATIVE addend is negative")
         })?;
         map_file_backed_range(
             file,
@@ -611,7 +610,8 @@ fn map_file_backed_range(
             .ok_or_else(|| format!("{label} file offset overflows u64"))?;
         let file_offset = usize::try_from(file_offset)
             .map_err(|_| format!("{label} file offset does not fit usize"))?;
-        let width = usize::try_from(size).map_err(|_| format!("{label} size does not fit usize"))?;
+        let width =
+            usize::try_from(size).map_err(|_| format!("{label} size does not fit usize"))?;
         let file_end = file_offset
             .checked_add(width)
             .ok_or_else(|| format!("{label} file range overflows usize"))?;
@@ -665,7 +665,8 @@ fn section_bytes<'a>(
 ) -> Result<&'a [u8], String> {
     let start = usize::try_from(section.offset)
         .map_err(|_| format!("{label} offset does not fit usize"))?;
-    let size = usize::try_from(section.size).map_err(|_| format!("{label} size does not fit usize"))?;
+    let size =
+        usize::try_from(section.size).map_err(|_| format!("{label} size does not fit usize"))?;
     let end = start
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows usize"))?;
