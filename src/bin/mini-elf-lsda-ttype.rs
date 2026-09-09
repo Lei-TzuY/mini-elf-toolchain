@@ -207,9 +207,7 @@ fn inspect(file: &[u8]) -> Result<String, String> {
             .checked_mul(TYPE_ENTRY_SIZE)
             .ok_or_else(|| "LSDA type-table index byte count overflows usize".to_owned())?;
         ttype_base.checked_sub(bytes_needed).ok_or_else(|| {
-            format!(
-                "LSDA type-table index {max_filter} underflows the .gcc_except_table section"
-            )
+            format!("LSDA type-table index {max_filter} underflows the .gcc_except_table section")
         })?
     };
     if type_table_start < table_end {
@@ -237,9 +235,11 @@ fn inspect(file: &[u8]) -> Result<String, String> {
             let type_index = usize::try_from(record.type_filter)
                 .map_err(|_| "positive LSDA type filter does not fit usize".to_owned())?;
             let entry_end = ttype_base
-                .checked_sub((type_index - 1).checked_mul(TYPE_ENTRY_SIZE).ok_or_else(|| {
-                    "LSDA type-table entry offset overflows usize".to_owned()
-                })?)
+                .checked_sub(
+                    (type_index - 1)
+                        .checked_mul(TYPE_ENTRY_SIZE)
+                        .ok_or_else(|| "LSDA type-table entry offset overflows usize".to_owned())?,
+                )
                 .ok_or_else(|| "LSDA type-table entry end underflows usize".to_owned())?;
             let entry_start = entry_end
                 .checked_sub(TYPE_ENTRY_SIZE)
@@ -350,7 +350,9 @@ fn parse_action_chain(
             break;
         }
         cursor = checked_add_signed(after_filter, next_displacement).ok_or_else(|| {
-            format!("LSDA action record {one_based_offset} next displacement overflows section offset")
+            format!(
+                "LSDA action record {one_based_offset} next displacement overflows section offset"
+            )
         })?;
         if cursor < action_table_start || cursor >= ttype_base {
             return Err(format!(
@@ -460,8 +462,8 @@ fn section_bytes<'a>(
 ) -> Result<&'a [u8], String> {
     let start = usize::try_from(section.offset)
         .map_err(|_| format!("{label} offset does not fit usize"))?;
-    let size = usize::try_from(section.size)
-        .map_err(|_| format!("{label} size does not fit usize"))?;
+    let size =
+        usize::try_from(section.size).map_err(|_| format!("{label} size does not fit usize"))?;
     let end = start
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows usize"))?;
