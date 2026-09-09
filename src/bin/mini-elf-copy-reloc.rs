@@ -93,7 +93,11 @@ fn inspect(file: &[u8]) -> Result<String, String> {
     let programs = program_headers(file)?;
     let sections = section_headers(file)?;
     let shstrndx = usize::from(read_u16(file, 62));
-    let shstr = section_bytes(file, section_at(&sections, shstrndx, "section-name string table")?, "section-name string table")?;
+    let shstr = section_bytes(
+        file,
+        section_at(&sections, shstrndx, "section-name string table")?,
+        "section-name string table",
+    )?;
 
     let mut rela_index = None;
     for (index, section) in sections.iter().copied().enumerate() {
@@ -201,14 +205,21 @@ fn inspect(file: &[u8]) -> Result<String, String> {
             ));
         }
         if size == 0 {
-            return Err(format!("COPY relocation {index} has zero-sized destination symbol"));
+            return Err(format!(
+                "COPY relocation {index} has zero-sized destination symbol"
+            ));
         }
         if value != target {
             return Err(format!(
                 "COPY relocation {index} target {target:#x} does not equal destination symbol value {value:#x}"
             ));
         }
-        map_writable_memory(&programs, target, size, &format!("COPY relocation {index} destination"))?;
+        map_writable_memory(
+            &programs,
+            target,
+            size,
+            &format!("COPY relocation {index} destination"),
+        )?;
         let name = dynamic_string(dynstr, name_offset, symbol_index)?;
         output.push_str(&format!(
             "  index={index} symbol={symbol_index}:{name} destination={target:#018x} size={size} source=external\n"
@@ -249,7 +260,9 @@ fn program_headers(file: &[u8]) -> Result<Vec<ProgramHeader>, String> {
         let filesz = read_u64(file, offset + 32);
         let memsz = read_u64(file, offset + 40);
         if filesz > memsz {
-            return Err(format!("program header {index} file size exceeds memory size"));
+            return Err(format!(
+                "program header {index} file size exceeds memory size"
+            ));
         }
         vaddr
             .checked_add(memsz)
@@ -309,17 +322,25 @@ fn section_headers(file: &[u8]) -> Result<Vec<SectionHeader>, String> {
     Ok(sections)
 }
 
-fn section_at<'a>(sections: &'a [SectionHeader], index: usize, label: &str) -> Result<&'a SectionHeader, String> {
+fn section_at<'a>(
+    sections: &'a [SectionHeader],
+    index: usize,
+    label: &str,
+) -> Result<&'a SectionHeader, String> {
     sections
         .get(index)
         .ok_or_else(|| format!("{label} index {index} is outside section-header table"))
 }
 
-fn section_bytes<'a>(file: &'a [u8], section: &SectionHeader, label: &str) -> Result<&'a [u8], String> {
+fn section_bytes<'a>(
+    file: &'a [u8],
+    section: &SectionHeader,
+    label: &str,
+) -> Result<&'a [u8], String> {
     let start = usize::try_from(section.offset)
         .map_err(|_| format!("{label} offset does not fit usize"))?;
-    let size = usize::try_from(section.size)
-        .map_err(|_| format!("{label} size does not fit usize"))?;
+    let size =
+        usize::try_from(section.size).map_err(|_| format!("{label} size does not fit usize"))?;
     let end = start
         .checked_add(size)
         .ok_or_else(|| format!("{label} range overflows usize"))?;
@@ -333,7 +354,9 @@ fn section_name<'a>(shstr: &'a [u8], offset: u32, index: usize) -> Result<&'a st
     let start = usize::try_from(offset)
         .map_err(|_| format!("section {index} name offset does not fit usize"))?;
     if start >= shstr.len() {
-        return Err(format!("section {index} name offset is outside section-name string table"));
+        return Err(format!(
+            "section {index} name offset is outside section-name string table"
+        ));
     }
     let tail = &shstr[start..];
     let end = tail
@@ -348,7 +371,9 @@ fn dynamic_string(strtab: &[u8], offset: u32, symbol_index: usize) -> Result<Str
     let start = usize::try_from(offset)
         .map_err(|_| format!("dynamic symbol {symbol_index} name offset does not fit usize"))?;
     if start >= strtab.len() {
-        return Err(format!("dynamic symbol {symbol_index} name offset is outside dynamic string table"));
+        return Err(format!(
+            "dynamic symbol {symbol_index} name offset is outside dynamic string table"
+        ));
     }
     let tail = &strtab[start..];
     let end = tail
@@ -360,7 +385,12 @@ fn dynamic_string(strtab: &[u8], offset: u32, symbol_index: usize) -> Result<Str
         .map_err(|_| format!("dynamic symbol {symbol_index} name is not valid UTF-8"))
 }
 
-fn map_writable_memory(headers: &[ProgramHeader], address: u64, size: u64, label: &str) -> Result<(), String> {
+fn map_writable_memory(
+    headers: &[ProgramHeader],
+    address: u64,
+    size: u64,
+    label: &str,
+) -> Result<(), String> {
     let end = address
         .checked_add(size)
         .ok_or_else(|| format!("{label} range overflows u64"))?;
