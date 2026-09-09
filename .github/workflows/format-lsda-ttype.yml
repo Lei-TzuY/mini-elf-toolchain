@@ -1,0 +1,33 @@
+name: Format LSDA candidate
+
+on:
+  push:
+    branches:
+      - conquest/lsda-ttype-pointer-targets
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/lsda-ttype-pointer-targets
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Apply rustfmt
+        run: cargo fmt --all
+      - name: Commit formatting
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "LeiZ"
+          git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+          git add src/bin/mini-elf-lsda-ttype.rs tests/dynamic_lsda_ttype.rs
+          git commit -m "style: apply rustfmt to LSDA type targets"
+          git push origin HEAD:conquest/lsda-ttype-pointer-targets
