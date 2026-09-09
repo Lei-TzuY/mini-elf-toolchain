@@ -156,8 +156,22 @@ fn fde_encoding_matches_gnu_readelf() {
         .unwrap();
     assert!(gnu.status.success());
     let gnu_stdout = String::from_utf8_lossy(&gnu.stdout);
-    assert!(gnu_stdout.contains("Augmentation:     \"zR\""));
-    assert!(gnu_stdout.contains("Augmentation data:    1b"));
+    let gnu_augmentation = gnu_stdout
+        .lines()
+        .find_map(|line| {
+            let (label, value) = line.trim().split_once(':')?;
+            (label == "Augmentation").then(|| value.trim().trim_matches('"'))
+        })
+        .expect("GNU readelf should print a CIE augmentation");
+    assert_eq!(gnu_augmentation, "zR");
+    let gnu_augmentation_data = gnu_stdout
+        .lines()
+        .find_map(|line| {
+            let (label, value) = line.trim().split_once(':')?;
+            (label == "Augmentation data").then(|| value.trim())
+        })
+        .expect("GNU readelf should print CIE augmentation data");
+    assert_eq!(gnu_augmentation_data, "1b");
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-eh-frame-encoding"))
         .arg(&shared)
