@@ -30,7 +30,7 @@ fn build_fixture(dir: &Path) -> PathBuf {
     let image = dir.join("fixture.so");
     fs::write(
         &asm,
-        ".data\n.globl ptr\n.type ptr,@object\n.size ptr,8\nptr:\n.quad target\n.globl target\n.type target,@object\n.size target,8\ntarget:\n.quad 0x1122334455667788\n",
+        ".text\n.globl dummy\n.type dummy,@function\ndummy:\nret\n.size dummy, .-dummy\n.data\n.globl ptr\n.type ptr,@object\n.size ptr,8\nptr:\n.quad target\n.globl target\n.type target,@object\n.size target,8\ntarget:\n.quad 0x1122334455667788\n",
     )
     .unwrap();
     assert!(Command::new("as")
