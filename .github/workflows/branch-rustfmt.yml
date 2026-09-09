@@ -1,0 +1,30 @@
+name: Branch rustfmt
+
+on:
+  push:
+    branches:
+      - conquest/dynamic-rela-metadata
+
+permissions:
+  contents: write
+
+jobs:
+  rustfmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/dynamic-rela-metadata
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit formatting
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "LeiZ"
+            git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+            git add src/bin/mini-elf-dynrela-irelative.rs tests/dynamic_rela_irelative.rs
+            git commit -m "style: apply rustfmt"
+            git push origin HEAD:conquest/dynamic-rela-metadata
+          fi
