@@ -99,7 +99,9 @@ fn parse_gnu_eh_frame_range(text: &str) -> (u64, u64) {
 }
 
 fn parse_gnu_fde_count(text: &str) -> usize {
-    text.lines().filter(|line| line.contains(" FDE cie=")).count()
+    text.lines()
+        .filter(|line| line.contains(" FDE cie="))
+        .count()
 }
 
 #[test]
