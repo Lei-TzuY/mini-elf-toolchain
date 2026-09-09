@@ -138,7 +138,11 @@ fn validates_gnu_fde_ranges_against_executable_loads() {
     let dir = temp_dir("eh-exec-good");
     let image = build_fixture(&dir);
     let output = run_tool(&[&image]);
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let ranges = readelf_ranges(&image);
     assert!(!ranges.is_empty(), "GNU readelf produced no FDE ranges");
@@ -163,12 +167,13 @@ fn rejects_fde_range_that_escapes_executable_load() {
 
     let output = run_tool(&[&malformed]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("not fully contained in one executable file-backed PT_LOAD"));
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("not fully contained in one executable file-backed PT_LOAD"));
     fs::remove_dir_all(dir).unwrap();
 }
 
 #[test]
-fn rejects_file_backed_load_virtual_range_overflow() {
+fn rejects_load_virtual_range_overflow() {
     let dir = temp_dir("eh-exec-overflow");
     let image = build_fixture(&dir);
     let mut file = fs::read(&image).unwrap();
@@ -182,7 +187,7 @@ fn rejects_file_backed_load_virtual_range_overflow() {
 
     let output = run_tool(&[&malformed]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("file-backed virtual range overflows u64"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("virtual memory range overflows u64"));
     fs::remove_dir_all(dir).unwrap();
 }
 
