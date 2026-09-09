@@ -126,7 +126,7 @@ fn sym_count(b: &[u8]) -> u64 {
 fn exec_va(b: &[u8]) -> u64 {
     ph(b)
         .into_iter()
-        .find(|h| h.0 == PT_LOAD && h.1 & PF_X != 0 && h.4 >= 4)
+        .find(|h| h.0 == PT_LOAD && h.1 & PF_X != 0 && h.4 >= 1)
         .unwrap()
         .3
 }
