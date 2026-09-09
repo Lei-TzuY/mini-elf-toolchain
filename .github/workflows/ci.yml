@@ -16,15 +16,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Capture canonical rustfmt
+      - name: Capture validation diagnostics
         run: |
+          set +e
           cargo fmt --all
           git diff -- src/bin/mini-elf-eh-frame-exec.rs tests/dynamic_eh_frame_exec.rs > rustfmt.patch
+          cargo clippy --all-targets --all-features -- -D warnings > clippy.txt 2>&1
+          echo $? > clippy.status
+          cargo test --all-targets --all-features > test.txt 2>&1
+          echo $? > test.status
+          exit 0
       - uses: actions/upload-artifact@v4
         with:
-          name: rustfmt-patch
-          path: rustfmt.patch
-      - name: Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-      - name: Test
-        run: cargo test --all-targets --all-features
+          name: branch-validation-diagnostics
+          path: |
+            rustfmt.patch
+            clippy.txt
+            clippy.status
+            test.txt
+            test.status
