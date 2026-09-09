@@ -476,8 +476,8 @@ fn read_sleb(
                     .checked_shl(shift)
                     .ok_or_else(|| format!("{label} SLEB128 overflows i64"))?;
             }
-            let value = i64::try_from(value)
-                .map_err(|_| format!("{label} SLEB128 overflows i64"))?;
+            let value =
+                i64::try_from(value).map_err(|_| format!("{label} SLEB128 overflows i64"))?;
             return Ok((value, cursor));
         }
         if shift > 70 {
