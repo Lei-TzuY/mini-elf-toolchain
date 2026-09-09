@@ -1,0 +1,25 @@
+[1m[92m   Compiling[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 5.89s
+[1m[92m     Running[0m tests/dynamic_eh_frame_lsda.rs (target/debug/deps/dynamic_eh_frame_lsda-dd64993034ac0ddd)
+
+running 6 tests
+test rejects_malformed_fde_lsda_payload_length ... ok
+test multi_input_failure_keeps_stdout_atomic ... ok
+test rejects_lsda_pointer_arithmetic_underflow ... ok
+
+thread 'rejects_lsda_target_outside_file_backed_loads' (3691) panicked at tests/dynamic_eh_frame_lsda.rs:262:5:
+assertion failed: !output.status.success()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test rejects_lsda_target_outside_file_backed_loads ... FAILED
+test rejects_unsupported_lsda_encoding ... ok
+test validates_gnu_zplr_lsda_against_readelf_symbol ... ok
+
+failures:
+
+failures:
+    rejects_lsda_target_outside_file_backed_loads
+
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+[1m[91merror[0m: test failed, to rerun pass `--test dynamic_eh_frame_lsda`
+EXIT_STATUS=101
