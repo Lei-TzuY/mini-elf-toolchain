@@ -1,0 +1,29 @@
+name: COPY Clippy Fix
+on:
+  push:
+    branches:
+      - conquest/copy-reloc-validation
+permissions:
+  contents: write
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/copy-reloc-validation
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - run: cargo clippy --fix --all-targets --all-features --allow-dirty --allow-staged -- -D warnings
+        continue-on-error: true
+      - run: cargo fmt --all
+      - name: Commit fixes
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add src/bin/mini-elf-copy-reloc.rs tests/dynamic_copy_reloc.rs
+            git commit -m "fix: satisfy clippy for COPY validator"
+            git push origin HEAD:conquest/copy-reloc-validation
+          fi
