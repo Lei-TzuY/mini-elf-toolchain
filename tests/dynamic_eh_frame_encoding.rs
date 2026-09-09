@@ -69,7 +69,7 @@ fn checked_add_i32(base: u64, displacement: i32) -> u64 {
     }
 }
 
-fn first_cie(bytes: &[u8]) -> usize {
+fn first_fde(bytes: &[u8]) -> (u64, usize) {
     let eh = phdrs(bytes)
         .into_iter()
         .find(|offset| read_u32(bytes, *offset) == PT_GNU_EH_FRAME)
@@ -77,7 +77,11 @@ fn first_cie(bytes: &[u8]) -> usize {
     let header_offset = read_u64(bytes, eh + 8) as usize;
     let header_vaddr = read_u64(bytes, eh + 16);
     let fde = checked_add_i32(header_vaddr, read_i32(bytes, header_offset + 16));
-    let fde_offset = map_vaddr(bytes, fde);
+    (fde, map_vaddr(bytes, fde))
+}
+
+fn first_cie(bytes: &[u8]) -> usize {
+    let (fde, fde_offset) = first_fde(bytes);
     let cie = (fde + 4)
         .checked_sub(u64::from(read_u32(bytes, fde_offset + 4)))
         .unwrap();
@@ -142,8 +146,43 @@ fn build_shared(dir: &std::path::Path) -> std::path::PathBuf {
     shared
 }
 
+fn gnu_fde_ranges(stdout: &str) -> Vec<(u64, u64)> {
+    let mut ranges = stdout
+        .lines()
+        .filter(|line| line.contains(" FDE "))
+        .filter_map(|line| {
+            let pc = line.split("pc=").nth(1)?;
+            let token = pc.split_whitespace().next()?;
+            let (start, end) = token.split_once("..")?;
+            Some((
+                u64::from_str_radix(start, 16).ok()?,
+                u64::from_str_radix(end, 16).ok()?,
+            ))
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable();
+    ranges
+}
+
+fn tool_fde_ranges(stdout: &str) -> Vec<(u64, u64)> {
+    let mut ranges = stdout
+        .lines()
+        .filter(|line| line.starts_with("FDE "))
+        .filter_map(|line| {
+            let initial = line.split_whitespace().find(|part| part.starts_with("initial="))?;
+            let end = line.split_whitespace().find(|part| part.starts_with("end="))?;
+            Some((
+                u64::from_str_radix(initial.trim_start_matches("initial=0x"), 16).ok()?,
+                u64::from_str_radix(end.trim_start_matches("end=0x"), 16).ok()?,
+            ))
+        })
+        .collect::<Vec<_>>();
+    ranges.sort_unstable();
+    ranges
+}
+
 #[test]
-fn fde_encoding_matches_gnu_readelf() {
+fn fde_encoding_and_ranges_match_gnu_readelf() {
     if !tool_available("as") || !tool_available("ld") || !tool_available("readelf") {
         return;
     }
@@ -185,6 +224,9 @@ fn fde_encoding_matches_gnu_readelf() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("augmentation=zR"));
     assert!(stdout.contains("fde_encoding=0x1b"));
+    let expected_ranges = gnu_fde_ranges(&gnu_stdout);
+    assert!(!expected_ranges.is_empty());
+    assert_eq!(tool_fde_ranges(&stdout), expected_ranges);
     let _ = fs::remove_dir_all(dir);
 }
 
@@ -228,6 +270,44 @@ fn rejects_unsupported_encoding_and_oversized_payload() {
 }
 
 #[test]
+fn rejects_fde_initial_location_underflow_and_truncated_fields() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("eh-frame-fde-fields-malformed");
+    let good = build_shared(&dir);
+    let bytes = fs::read(&good).unwrap();
+    let (_, fde_offset) = first_fde(&bytes);
+
+    let mut underflow = bytes.clone();
+    underflow[fde_offset + 8..fde_offset + 12].copy_from_slice(&i32::MIN.to_le_bytes());
+    let underflow_path = dir.join("underflow.so");
+    fs::write(&underflow_path, underflow).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-eh-frame-encoding"))
+        .arg(&underflow_path)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr)
+        .contains("initial-location arithmetic overflows u64"));
+    assert!(result.stdout.is_empty());
+
+    let mut truncated = bytes;
+    truncated[fde_offset..fde_offset + 4].copy_from_slice(&8_u32.to_le_bytes());
+    let truncated_path = dir.join("truncated.so");
+    fs::write(&truncated_path, truncated).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-eh-frame-encoding"))
+        .arg(&truncated_path)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr)
+        .contains("truncated before initial-location/address-range fields"));
+    assert!(result.stdout.is_empty());
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn malformed_later_input_keeps_stdout_atomic() {
     if !tool_available("as") || !tool_available("ld") {
         return;
@@ -235,8 +315,8 @@ fn malformed_later_input_keeps_stdout_atomic() {
     let dir = temp_dir("eh-frame-encoding-atomic");
     let good = build_shared(&dir);
     let mut bytes = fs::read(&good).unwrap();
-    let (_, payload_offset) = augmentation_payload(&bytes);
-    bytes[payload_offset] = 0xff;
+    let (_, fde_offset) = first_fde(&bytes);
+    bytes[fde_offset + 8..fde_offset + 12].copy_from_slice(&i32::MIN.to_le_bytes());
     let bad = dir.join("bad.so");
     fs::write(&bad, bytes).unwrap();
 
@@ -247,8 +327,7 @@ fn malformed_later_input_keeps_stdout_atomic() {
         .unwrap();
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&result.stderr).contains("unsupported CIE-declared FDE encoding")
-    );
+    assert!(String::from_utf8_lossy(&result.stderr)
+        .contains("initial-location arithmetic overflows u64"));
     let _ = fs::remove_dir_all(dir);
 }
