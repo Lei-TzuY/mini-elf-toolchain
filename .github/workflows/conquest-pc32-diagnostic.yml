@@ -1,0 +1,27 @@
+name: conquest-pc32-diagnostic
+on:
+  push:
+    branches: [conquest/dynrela-pc32]
+permissions:
+  contents: write
+jobs:
+  diagnose:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/dynrela-pc32
+      - uses: dtolnay/rust-toolchain@stable
+      - shell: bash
+        run: |
+          set +e
+          cargo test --test dynamic_rela_pc32 -- --nocapture > /tmp/pc32.log 2>&1
+          status=$?
+          cp /tmp/pc32.log pc32-diagnostic.txt
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add pc32-diagnostic.txt
+          git commit -m 'chore: capture PC32 diagnostic' || true
+          git push origin HEAD:conquest/dynrela-pc32
+          exit $status
