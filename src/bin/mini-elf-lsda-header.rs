@@ -82,7 +82,9 @@ fn inspect(file: &[u8]) -> Result<String, String> {
         ));
     }
     if shnum == 0 {
-        return Err("extended ELF section numbering is unsupported in this bounded slice".to_owned());
+        return Err(
+            "extended ELF section numbering is unsupported in this bounded slice".to_owned(),
+        );
     }
     if shstrndx >= shnum {
         return Err(format!(
@@ -172,11 +174,12 @@ fn section_headers(
 
     let mut headers = Vec::with_capacity(shnum);
     for index in 0..shnum {
-        let offset = shoff
-            .checked_add(index.checked_mul(shentsize).ok_or_else(|| {
-                format!("section header {index} relative offset overflows usize")
-            })?)
-            .ok_or_else(|| format!("section header {index} offset overflows usize"))?;
+        let offset =
+            shoff
+                .checked_add(index.checked_mul(shentsize).ok_or_else(|| {
+                    format!("section header {index} relative offset overflows usize")
+                })?)
+                .ok_or_else(|| format!("section header {index} offset overflows usize"))?;
         headers.push(SectionHeader {
             name: read_u32(file, offset),
             flags: read_u64(file, offset + 8),
@@ -195,8 +198,8 @@ fn section_bytes<'a>(
 ) -> Result<&'a [u8], String> {
     let start = usize::try_from(section.offset)
         .map_err(|_| format!("{label} offset does not fit usize"))?;
-    let size = usize::try_from(section.size)
-        .map_err(|_| format!("{label} size does not fit usize"))?;
+    let size =
+        usize::try_from(section.size).map_err(|_| format!("{label} size does not fit usize"))?;
     let end = start
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows usize"))?;
@@ -206,11 +209,7 @@ fn section_bytes<'a>(
     Ok(&file[start..end])
 }
 
-fn section_name<'a>(
-    table: &'a [u8],
-    name_offset: u32,
-    index: usize,
-) -> Result<&'a str, String> {
+fn section_name<'a>(table: &'a [u8], name_offset: u32, index: usize) -> Result<&'a str, String> {
     let start = usize::try_from(name_offset)
         .map_err(|_| format!("section {index} name offset does not fit usize"))?;
     if start >= table.len() {

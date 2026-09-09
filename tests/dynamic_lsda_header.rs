@@ -76,11 +76,7 @@ fn lsda_section(file: &[u8]) -> (usize, usize, u64) {
     for index in 0..shnum {
         let header = shoff + index * shentsize;
         let name = read_u32(file, header) as usize;
-        let end = strings[name..]
-            .iter()
-            .position(|byte| *byte == 0)
-            .unwrap()
-            + name;
+        let end = strings[name..].iter().position(|byte| *byte == 0).unwrap() + name;
         if &strings[name..end] == b".gcc_except_table" {
             return (
                 read_u64(file, header + 24) as usize,
