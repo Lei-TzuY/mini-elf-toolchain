@@ -4,12 +4,23 @@ use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
+const ELF64_PROGRAM_HEADER_SIZE: usize = 56;
 const ELF64_SECTION_HEADER_SIZE: usize = 64;
+const PT_LOAD: u32 = 1;
 const SHF_ALLOC: u64 = 0x2;
 const DW_EH_PE_OMIT: u8 = 0xff;
 const DW_EH_PE_ULEB128: u8 = 0x01;
 const DW_EH_PE_INDIRECT_PCREL_SDATA4: u8 = 0x9b;
 const TYPE_ENTRY_SIZE: usize = 4;
+const INDIRECT_POINTER_SIZE: u64 = 8;
+
+#[derive(Clone, Copy)]
+struct ProgramHeader {
+    segment_type: u32,
+    offset: u64,
+    vaddr: u64,
+    filesz: u64,
+}
 
 #[derive(Clone, Copy)]
 struct SectionHeader {
@@ -87,6 +98,7 @@ fn inspect(file: &[u8]) -> Result<String, String> {
         return Err("ELF64 header is truncated".to_owned());
     }
 
+    let program_headers = program_headers(file)?;
     let shoff = read_u64(file, 40);
     let shentsize = usize::from(read_u16(file, 58));
     let shnum = usize::from(read_u16(file, 60));
@@ -245,13 +257,42 @@ fn inspect(file: &[u8]) -> Result<String, String> {
                 .checked_sub(TYPE_ENTRY_SIZE)
                 .ok_or_else(|| "LSDA type-table entry start underflows usize".to_owned())?;
             let raw = read_i32(bytes, entry_start);
+            let entry_address = section
+                .addr
+                .checked_add(
+                    u64::try_from(entry_start)
+                        .map_err(|_| "LSDA type-table entry offset does not fit u64".to_owned())?,
+                )
+                .ok_or_else(|| "LSDA type-table entry address overflows u64".to_owned())?;
+            let slot_address = checked_add_signed_u64(entry_address, i64::from(raw)).ok_or_else(|| {
+                format!(
+                    "LSDA type-table index {type_index} PC-relative pointer-slot address overflows u64"
+                )
+            })?;
+            let slot_offset = map_file_backed_range(
+                file,
+                &program_headers,
+                slot_address,
+                INDIRECT_POINTER_SIZE,
+                &format!("LSDA type-table index {type_index} indirect pointer slot"),
+            )?;
+            let target = read_u64(file, slot_offset);
+            map_file_backed_range(
+                file,
+                &program_headers,
+                target,
+                1,
+                &format!("LSDA type-table index {type_index} indirect target"),
+            )?;
             output.push_str(&format!(
-                "  action[{index}]: offset={} type-index={} type-entry=[{:#x},{:#x}) raw-sdata4={} next={}\n",
+                "  action[{index}]: offset={} type-index={} type-entry=[{:#x},{:#x}) raw-sdata4={} slot={:#018x} target={:#018x} next={}\n",
                 record.offset,
                 record.type_filter,
                 entry_start,
                 entry_end,
                 raw,
+                slot_address,
+                target,
                 record.next_displacement
             ));
         }
@@ -369,6 +410,12 @@ fn checked_add_signed(base: usize, displacement: i64) -> Option<usize> {
     usize::try_from(next).ok()
 }
 
+fn checked_add_signed_u64(base: u64, displacement: i64) -> Option<u64> {
+    let base = i128::from(base);
+    let next = base.checked_add(i128::from(displacement))?;
+    u64::try_from(next).ok()
+}
+
 fn read_uleb(
     bytes: &[u8],
     mut cursor: usize,
@@ -422,6 +469,99 @@ fn read_sleb(
             return Err(format!("{label} overflows i64"));
         }
     }
+}
+
+fn program_headers(file: &[u8]) -> Result<Vec<ProgramHeader>, String> {
+    let phoff = usize::try_from(read_u64(file, 32))
+        .map_err(|_| "program-header offset does not fit usize".to_owned())?;
+    let phentsize = usize::from(read_u16(file, 54));
+    let phnum = usize::from(read_u16(file, 56));
+    if phentsize != ELF64_PROGRAM_HEADER_SIZE {
+        return Err(format!(
+            "unsupported ELF64 program-header size {phentsize}, expected {ELF64_PROGRAM_HEADER_SIZE}"
+        ));
+    }
+    if phnum == 0 {
+        return Err("missing program headers for LSDA pointer mapping".to_owned());
+    }
+    let table_size = phnum
+        .checked_mul(phentsize)
+        .ok_or_else(|| "program-header table size overflows usize".to_owned())?;
+    let table_end = phoff
+        .checked_add(table_size)
+        .ok_or_else(|| "program-header table range overflows usize".to_owned())?;
+    if table_end > file.len() {
+        return Err("program-header table exceeds input".to_owned());
+    }
+
+    let mut headers = Vec::with_capacity(phnum);
+    for index in 0..phnum {
+        let offset = phoff + index * phentsize;
+        let header = ProgramHeader {
+            segment_type: read_u32(file, offset),
+            offset: read_u64(file, offset + 8),
+            vaddr: read_u64(file, offset + 16),
+            filesz: read_u64(file, offset + 32),
+        };
+        let file_start = usize::try_from(header.offset)
+            .map_err(|_| format!("program header {index} file offset does not fit usize"))?;
+        let file_size = usize::try_from(header.filesz)
+            .map_err(|_| format!("program header {index} file size does not fit usize"))?;
+        let file_end = file_start
+            .checked_add(file_size)
+            .ok_or_else(|| format!("program header {index} file range overflows usize"))?;
+        if file_end > file.len() {
+            return Err(format!("program header {index} file range exceeds input"));
+        }
+        header
+            .vaddr
+            .checked_add(header.filesz)
+            .ok_or_else(|| format!("program header {index} file-backed virtual range overflows u64"))?;
+        headers.push(header);
+    }
+    Ok(headers)
+}
+
+fn map_file_backed_range(
+    file: &[u8],
+    headers: &[ProgramHeader],
+    address: u64,
+    size: u64,
+    label: &str,
+) -> Result<usize, String> {
+    let end = address
+        .checked_add(size)
+        .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
+    for header in headers {
+        if header.segment_type != PT_LOAD {
+            continue;
+        }
+        let load_end = header
+            .vaddr
+            .checked_add(header.filesz)
+            .ok_or_else(|| "PT_LOAD file-backed virtual range overflows u64".to_owned())?;
+        if address < header.vaddr || end > load_end {
+            continue;
+        }
+        let relative = address - header.vaddr;
+        let file_offset = header
+            .offset
+            .checked_add(relative)
+            .ok_or_else(|| format!("{label} file offset overflows u64"))?;
+        let file_offset = usize::try_from(file_offset)
+            .map_err(|_| format!("{label} file offset does not fit usize"))?;
+        let width = usize::try_from(size).map_err(|_| format!("{label} size does not fit usize"))?;
+        let file_end = file_offset
+            .checked_add(width)
+            .ok_or_else(|| format!("{label} file range overflows usize"))?;
+        if file_end > file.len() {
+            return Err(format!("{label} file range exceeds input"));
+        }
+        return Ok(file_offset);
+    }
+    Err(format!(
+        "{label} [{address:#x},{end:#x}) is not contained in a file-backed PT_LOAD range"
+    ))
 }
 
 fn section_headers(
