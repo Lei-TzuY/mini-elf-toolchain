@@ -71,7 +71,9 @@ where
         index += 1;
     }
     if inputs.is_empty() {
-        return Err("usage: mini-elf-eh-frame-pointer [--load-bias <address>] <input>...".to_owned());
+        return Err(
+            "usage: mini-elf-eh-frame-pointer [--load-bias <address>] <input>...".to_owned(),
+        );
     }
 
     let multiple_inputs = inputs.len() > 1;
@@ -174,12 +176,11 @@ fn format_pointer(
         ));
     }
 
-    let pointer_field_address = segment
-        .virtual_address
-        .checked_add(4)
-        .ok_or_else(|| {
-            format!("PT_GNU_EH_FRAME segment {segment_index} .eh_frame pointer field address overflows u64")
-        })?;
+    let pointer_field_address = segment.virtual_address.checked_add(4).ok_or_else(|| {
+        format!(
+            "PT_GNU_EH_FRAME segment {segment_index} .eh_frame pointer field address overflows u64"
+        )
+    })?;
     let displacement = read_i32(file, file_start + 4);
     let eh_frame_address = checked_add_i32(pointer_field_address, displacement).ok_or_else(|| {
         format!(
@@ -203,7 +204,9 @@ fn format_pointer(
     output.push_str(&format!("PT_GNU_EH_FRAME segment: {segment_index}\n"));
     output.push_str(&format!("Pointer encoding: {pointer_encoding:#04x}\n"));
     output.push_str(&format!("Pointer displacement: {displacement}\n"));
-    output.push_str(&format!("Link-time .eh_frame address: {eh_frame_address:#018x}\n"));
+    output.push_str(&format!(
+        "Link-time .eh_frame address: {eh_frame_address:#018x}\n"
+    ));
     output.push_str(&format!("File-backed PT_LOAD segment: {load_index}\n"));
     if let Some(runtime) = runtime {
         output.push_str(&format!("Runtime .eh_frame address: {runtime:#018x}\n"));
@@ -253,7 +256,9 @@ fn require_file_backed_load_address(
         let file_backed_end = header
             .virtual_address
             .checked_add(header.file_size)
-            .ok_or_else(|| format!("PT_LOAD segment {index} file-backed virtual range overflows u64"))?;
+            .ok_or_else(|| {
+                format!("PT_LOAD segment {index} file-backed virtual range overflows u64")
+            })?;
         if address >= header.virtual_address && address < file_backed_end {
             return Ok(index);
         }
