@@ -252,8 +252,9 @@ fn rejects_malformed_zpr_payload_length() {
 
     let output = run_tool(&[&malformed]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("zPR payload has unsupported length 5"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("zPR payload has unsupported length 5")
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 

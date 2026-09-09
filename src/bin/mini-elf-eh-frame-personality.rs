@@ -261,8 +261,9 @@ fn validate_zpr_cie(
         .ok_or_else(|| format!("FDE {index} CIE personality field offset underflows"))?;
     let personality_field = cie
         .checked_add(
-            u64::try_from(field_delta)
-                .map_err(|_| format!("FDE {index} CIE personality field offset does not fit u64"))?,
+            u64::try_from(field_delta).map_err(|_| {
+                format!("FDE {index} CIE personality field offset does not fit u64")
+            })?,
         )
         .ok_or_else(|| format!("FDE {index} CIE personality field address overflows u64"))?;
     let personality = checked_add_i32(personality_field, read_i32(file, personality_field_offset))
