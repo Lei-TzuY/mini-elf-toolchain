@@ -99,10 +99,8 @@ fn inspect(file: &[u8]) -> Result<String, String> {
     let mut lsda = None;
     for (index, header) in headers.iter().copied().enumerate() {
         let name = section_name(shstr_bytes, header.name, index)?;
-        if name == ".gcc_except_table" {
-            if lsda.replace((index, header)).is_some() {
-                return Err("multiple .gcc_except_table sections are unsupported".to_owned());
-            }
+        if name == ".gcc_except_table" && lsda.replace((index, header)).is_some() {
+            return Err("multiple .gcc_except_table sections are unsupported".to_owned());
         }
     }
     let (index, section) = lsda.ok_or_else(|| "missing .gcc_except_table section".to_owned())?;
@@ -209,7 +207,7 @@ fn section_bytes<'a>(
     Ok(&file[start..end])
 }
 
-fn section_name<'a>(table: &'a [u8], name_offset: u32, index: usize) -> Result<&'a str, String> {
+fn section_name(table: &[u8], name_offset: u32, index: usize) -> Result<&str, String> {
     let start = usize::try_from(name_offset)
         .map_err(|_| format!("section {index} name offset does not fit usize"))?;
     if start >= table.len() {
