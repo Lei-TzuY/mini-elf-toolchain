@@ -19,7 +19,6 @@ struct ProgramHeader {
     offset: u64,
     vaddr: u64,
     filesz: u64,
-    memsz: u64,
 }
 
 struct CodeRange {
@@ -228,7 +227,10 @@ fn require_pcrel_sdata4_cie(
         ));
     }
     let cie_end = record_end(file, headers, cie, cie_length, "CIE", index)?;
-    if cie_offset + 9 > cie_end || read_u32(file, cie_offset + 4) != 0 || file[cie_offset + 8] != 1 {
+    if cie_offset + 9 > cie_end
+        || read_u32(file, cie_offset + 4) != 0
+        || file[cie_offset + 8] != 1
+    {
         return Err(format!("FDE {index} CIE record is malformed or unsupported"));
     }
     let aug_start = cie_offset + 9;
@@ -271,7 +273,7 @@ fn executable_file_backed_range(
             return None;
         }
         let load_end = header.vaddr.checked_add(header.filesz)?;
-        if start >= header.vaddr && end >= start && end <= load_end {
+        if start >= header.vaddr && start < load_end && end >= start && end <= load_end {
             Some(index)
         } else {
             None
@@ -364,7 +366,6 @@ fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader
             offset: file_offset,
             vaddr,
             filesz,
-            memsz,
         });
     }
     Ok(headers)
