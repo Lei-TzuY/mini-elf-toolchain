@@ -22,6 +22,9 @@ struct CieEncoding {
     cie: u64,
     augmentation: String,
     fde_encoding: u8,
+    initial_location: u64,
+    address_range: u64,
+    end: u64,
 }
 
 fn main() -> ExitCode {
@@ -138,8 +141,13 @@ fn inspect(file: &[u8]) -> Result<String, String> {
     let mut output = format!("Validated CIE FDE encodings: {}\n", rows.len());
     for (index, row) in rows.iter().enumerate() {
         output.push_str(&format!(
-            "FDE {index}: cie={:#018x} augmentation={} fde_encoding={:#04x}\n",
-            row.cie, row.augmentation, row.fde_encoding
+            "FDE {index}: cie={:#018x} augmentation={} fde_encoding={:#04x} initial={:#018x} range={:#x} end={:#018x}\n",
+            row.cie,
+            row.augmentation,
+            row.fde_encoding,
+            row.initial_location,
+            row.address_range,
+            row.end
         ));
     }
     Ok(output)
@@ -237,10 +245,36 @@ fn validate_cie(
         ));
     }
 
+    if fde_offset
+        .checked_add(16)
+        .ok_or_else(|| format!("FDE {index} fixed fields overflow usize"))?
+        > fde_end
+    {
+        return Err(format!(
+            "FDE {index} is truncated before initial-location/address-range fields"
+        ));
+    }
+    let initial_field = fde
+        .checked_add(8)
+        .ok_or_else(|| format!("FDE {index} initial-location field address overflows u64"))?;
+    let initial_location = checked_add_i32(initial_field, read_i32(file, fde_offset + 8))
+        .ok_or_else(|| format!("FDE {index} initial-location arithmetic overflows u64"))?;
+    let encoded_range = read_i32(file, fde_offset + 12);
+    if encoded_range < 0 {
+        return Err(format!("FDE {index} has negative encoded address range"));
+    }
+    let address_range = encoded_range as u64;
+    let end = initial_location
+        .checked_add(address_range)
+        .ok_or_else(|| format!("FDE {index} code range overflows u64"))?;
+
     Ok(CieEncoding {
         cie,
         augmentation,
         fde_encoding,
+        initial_location,
+        address_range,
+        end,
     })
 }
 
