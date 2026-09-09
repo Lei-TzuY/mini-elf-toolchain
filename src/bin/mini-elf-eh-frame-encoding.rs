@@ -42,7 +42,11 @@ where
     I: Iterator<Item = OsString>,
 {
     let inputs = args.collect::<Vec<_>>();
-    if inputs.is_empty() || inputs.iter().any(|arg| arg.to_string_lossy().starts_with('-')) {
+    if inputs.is_empty()
+        || inputs
+            .iter()
+            .any(|arg| arg.to_string_lossy().starts_with('-'))
+    {
         return Err("usage: mini-elf-eh-frame-encoding <input>...".to_owned());
     }
 
@@ -50,8 +54,7 @@ where
     let mut inspected = Vec::with_capacity(inputs.len());
     for input in inputs {
         let display = input.to_string_lossy().into_owned();
-        let file = fs::read(&input)
-            .map_err(|error| format!("cannot read '{display}': {error}"))?;
+        let file = fs::read(&input).map_err(|error| format!("cannot read '{display}': {error}"))?;
         let rendered = inspect(&file).map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
@@ -127,9 +130,8 @@ fn inspect(file: &[u8]) -> Result<String, String> {
             .checked_add(12)
             .and_then(|value| value.checked_add(usize::try_from(index.checked_mul(8)?).ok()?))
             .ok_or_else(|| "search-table offset overflows usize".to_owned())?;
-        let fde = checked_add_i32(eh.vaddr, read_i32(file, table_offset + 4)).ok_or_else(|| {
-            format!("FDE {index} address arithmetic overflows u64")
-        })?;
+        let fde = checked_add_i32(eh.vaddr, read_i32(file, table_offset + 4))
+            .ok_or_else(|| format!("FDE {index} address arithmetic overflows u64"))?;
         rows.push(validate_cie(file, &headers, fde, index)?);
     }
 
@@ -153,7 +155,9 @@ fn validate_cie(
         .ok_or_else(|| format!("FDE {index} is not in a file-backed PT_LOAD"))?;
     let fde_length = read_u32_checked(file, fde_offset, "FDE length")?;
     if fde_length < 4 || fde_length == u32::MAX {
-        return Err(format!("FDE {index} has unsupported record length {fde_length:#x}"));
+        return Err(format!(
+            "FDE {index} has unsupported record length {fde_length:#x}"
+        ));
     }
     let fde_end = checked_record_end(file, headers, fde, fde_length, "FDE", index)?;
     if fde_offset + 8 > fde_end {
@@ -174,7 +178,9 @@ fn validate_cie(
         .ok_or_else(|| format!("FDE {index} CIE is not in a file-backed PT_LOAD"))?;
     let cie_length = read_u32_checked(file, cie_offset, "CIE length")?;
     if cie_length < 6 || cie_length == u32::MAX {
-        return Err(format!("FDE {index} has unsupported CIE record length {cie_length:#x}"));
+        return Err(format!(
+            "FDE {index} has unsupported CIE record length {cie_length:#x}"
+        ));
     }
     let cie_end = checked_record_end(file, headers, cie, cie_length, "CIE", index)?;
     if cie_offset + 9 > cie_end || read_u32(file, cie_offset + 4) != 0 {
@@ -258,10 +264,12 @@ fn checked_record_end(
         .checked_sub(1)
         .ok_or_else(|| format!("{kind} {index} range underflows"))?;
     if map_file_backed(headers, last).is_none() {
-        return Err(format!("{kind} {index} crosses a file-backed PT_LOAD boundary"));
+        return Err(format!(
+            "{kind} {index} crosses a file-backed PT_LOAD boundary"
+        ));
     }
-    let total = usize::try_from(total)
-        .map_err(|_| format!("{kind} {index} size does not fit usize"))?;
+    let total =
+        usize::try_from(total).map_err(|_| format!("{kind} {index} size does not fit usize"))?;
     let end = start
         .checked_add(total)
         .ok_or_else(|| format!("{kind} {index} file range overflows usize"))?;

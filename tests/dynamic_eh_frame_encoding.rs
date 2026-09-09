@@ -99,7 +99,10 @@ fn augmentation_payload(bytes: &[u8]) -> (usize, usize) {
     let cie = first_cie(bytes);
     let end = cie + 4 + read_u32(bytes, cie) as usize;
     let aug_start = cie + 9;
-    let nul = bytes[aug_start..end].iter().position(|byte| *byte == 0).unwrap();
+    let nul = bytes[aug_start..end]
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap();
     assert_eq!(&bytes[aug_start..aug_start + nul], b"zR");
     let mut cursor = aug_start + nul + 1;
     cursor = skip_leb(bytes, cursor, end);
@@ -146,7 +149,11 @@ fn fde_encoding_matches_gnu_readelf() {
     }
     let dir = temp_dir("eh-frame-encoding-gnu");
     let shared = build_shared(&dir);
-    let gnu = Command::new("readelf").arg("-wf").arg(&shared).output().unwrap();
+    let gnu = Command::new("readelf")
+        .arg("-wf")
+        .arg(&shared)
+        .output()
+        .unwrap();
     assert!(gnu.status.success());
     let gnu_stdout = String::from_utf8_lossy(&gnu.stdout);
     assert!(gnu_stdout.contains("Augmentation:     \"zR\""));
@@ -156,7 +163,11 @@ fn fde_encoding_matches_gnu_readelf() {
         .arg(&shared)
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("augmentation=zR"));
     assert!(stdout.contains("fde_encoding=0x1b"));
@@ -182,7 +193,9 @@ fn rejects_unsupported_encoding_and_oversized_payload() {
         .output()
         .unwrap();
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("unsupported CIE-declared FDE encoding"));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("unsupported CIE-declared FDE encoding")
+    );
     assert!(result.stdout.is_empty());
 
     let mut oversized = bytes;
@@ -194,7 +207,8 @@ fn rejects_unsupported_encoding_and_oversized_payload() {
         .output()
         .unwrap();
     assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("augmentation payload exceeds record boundary"));
+    assert!(String::from_utf8_lossy(&result.stderr)
+        .contains("augmentation payload exceeds record boundary"));
     assert!(result.stdout.is_empty());
     let _ = fs::remove_dir_all(dir);
 }
@@ -219,6 +233,8 @@ fn malformed_later_input_keeps_stdout_atomic() {
         .unwrap();
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("unsupported CIE-declared FDE encoding"));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("unsupported CIE-declared FDE encoding")
+    );
     let _ = fs::remove_dir_all(dir);
 }
