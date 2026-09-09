@@ -192,7 +192,9 @@ fn format_eh_frame(
     let table_size = fde_count
         .checked_mul(EH_FRAME_TABLE_ENTRY_SIZE)
         .ok_or_else(|| {
-            format!("PT_GNU_EH_FRAME segment {segment_index} binary-search table size overflows u64")
+            format!(
+                "PT_GNU_EH_FRAME segment {segment_index} binary-search table size overflows u64"
+            )
         })?;
     let required_size = EH_FRAME_HDR_FIXED_SIZE
         .checked_add(table_size)
