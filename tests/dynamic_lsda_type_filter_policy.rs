@@ -98,7 +98,11 @@ fn accepts_cleanup_filter_with_omitted_type_table_against_gnu_readelf() {
     let dir = temp_dir("lsda-filter-cleanup");
     let image = build_fixture(&dir);
     let output = run_tool(&[&image]);
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("action[0]: offset=1 type-filter=0 next=0"));
 
@@ -108,7 +112,10 @@ fn accepts_cleanup_filter_with_omitted_type_table_against_gnu_readelf() {
         .unwrap();
     assert!(readelf.status.success());
     let dump = String::from_utf8(readelf.stdout).unwrap();
-    assert!(dump.contains("ffff0104 02030501 0000"), "unexpected readelf dump:\n{dump}");
+    assert!(
+        dump.contains("ffff0104 02030501 0000"),
+        "unexpected readelf dump:\n{dump}"
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
