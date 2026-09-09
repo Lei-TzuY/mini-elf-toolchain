@@ -1,0 +1,25 @@
+name: Conquest dynrela u32 candidate
+on:
+  push:
+    branches:
+      - conquest/dynrela-u32
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: python3 .github/conquest_dynrela_u32.py
+      - run: cargo fmt --all
+      - run: cargo test --test dynamic_rela_u32
+      - name: Commit candidate
+        run: |
+          git rm .github/workflows/conquest-dynrela-u32-build.yml .github/conquest_dynrela_u32.py
+          git config user.name LeiZ
+          git config user.email 52287354+Lei-TzuY@users.noreply.github.com
+          git add src/bin/mini-elf-dynrela-u32.rs tests/dynamic_rela_u32.rs docs/mini-elf-dynrela-u32.md
+          git commit -m 'feat: validate bounded dynamic R_X86_64_32 relocations'
+          git push origin HEAD:conquest/dynrela-u32
