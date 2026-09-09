@@ -101,10 +101,10 @@ fn inspect(file: &[u8]) -> Result<String, String> {
 
     let mut rela_index = None;
     for (index, section) in sections.iter().copied().enumerate() {
-        if section_name(shstr, section.name, index)? == ".rela.dyn" {
-            if rela_index.replace(index).is_some() {
-                return Err("multiple .rela.dyn sections are unsupported".to_owned());
-            }
+        if section_name(shstr, section.name, index)? == ".rela.dyn"
+            && rela_index.replace(index).is_some()
+        {
+            return Err("multiple .rela.dyn sections are unsupported".to_owned());
         }
     }
     let rela_index = rela_index.ok_or_else(|| "missing .rela.dyn section".to_owned())?;
@@ -350,7 +350,7 @@ fn section_bytes<'a>(
     Ok(&file[start..end])
 }
 
-fn section_name<'a>(shstr: &'a [u8], offset: u32, index: usize) -> Result<&'a str, String> {
+fn section_name(shstr: &[u8], offset: u32, index: usize) -> Result<&str, String> {
     let start = usize::try_from(offset)
         .map_err(|_| format!("section {index} name offset does not fit usize"))?;
     if start >= shstr.len() {

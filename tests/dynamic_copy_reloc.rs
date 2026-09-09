@@ -124,7 +124,7 @@ fn section_name_table(bytes: &[u8]) -> &[u8] {
     &bytes[section.2 as usize..(section.2 + section.3) as usize]
 }
 
-fn section_name<'a>(strings: &'a [u8], offset: u32) -> &'a str {
+fn section_name(strings: &[u8], offset: u32) -> &str {
     let tail = &strings[offset as usize..];
     let end = tail.iter().position(|byte| *byte == 0).unwrap();
     std::str::from_utf8(&tail[..end]).unwrap()
