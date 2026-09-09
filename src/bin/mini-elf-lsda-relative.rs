@@ -138,10 +138,8 @@ fn inspect(file: &[u8]) -> Result<String, String> {
                     return Err("multiple .gcc_except_table sections are unsupported".to_owned());
                 }
             }
-            ".rela.dyn" => {
-                if rela_dyn.replace((index, header)).is_some() {
-                    return Err("multiple .rela.dyn sections are unsupported".to_owned());
-                }
+            ".rela.dyn" if rela_dyn.replace((index, header)).is_some() => {
+                return Err("multiple .rela.dyn sections are unsupported".to_owned());
             }
             _ => {}
         }
