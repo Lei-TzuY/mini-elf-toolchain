@@ -38,7 +38,12 @@ fn build_fixture(dir: &Path) -> PathBuf {
         .unwrap()
         .success());
     assert!(Command::new("ld")
-        .args(["-shared", "-o", image.to_str().unwrap(), obj.to_str().unwrap()])
+        .args([
+            "-shared",
+            "-o",
+            image.to_str().unwrap(),
+            obj.to_str().unwrap()
+        ])
         .status()
         .unwrap()
         .success());
@@ -167,7 +172,11 @@ fn simulates_gnu_irelative_relocation() {
     let relocations = String::from_utf8(readelf.stdout).unwrap();
     assert!(relocations.contains("R_X86_64_IRELATIVE"), "{relocations}");
     let output = run_tool(&[&image], "0x70000000");
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let resolver = symbol_address(&image, "resolver");
     assert!(stdout.contains("R_X86_64_IRELATIVE"));

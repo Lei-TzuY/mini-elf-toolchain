@@ -142,14 +142,8 @@ fn inspect(file: &[u8], load_bias: u64) -> Result<String, String> {
     if rela_size % rela_entry_size != 0 {
         return Err("DT_RELASZ is not a whole number of DT_RELAENT entries".to_owned());
     }
-    let rela_bytes = map_file_backed_range(
-        file,
-        &headers,
-        rela_address,
-        rela_size,
-        0,
-        "DT_RELA table",
-    )?;
+    let rela_bytes =
+        map_file_backed_range(file, &headers, rela_address, rela_size, 0, "DT_RELA table")?;
 
     let mut output = format!(
         "Validated R_X86_64_IRELATIVE relocations: load-bias={load_bias:#018x} rela={rela_address:#018x} entries={}\n",
@@ -169,7 +163,13 @@ fn inspect(file: &[u8], load_bias: u64) -> Result<String, String> {
                 "R_X86_64_IRELATIVE relocation {index} has nonzero symbol index {symbol}"
             ));
         }
-        map_memory_range(&headers, offset, 8, PF_W, &format!("IRELATIVE relocation {index} target"))?;
+        map_memory_range(
+            &headers,
+            offset,
+            8,
+            PF_W,
+            &format!("IRELATIVE relocation {index} target"),
+        )?;
         let addend = read_i64(entry, 16);
         let resolver_offset = u64::try_from(addend).map_err(|_| {
             format!("R_X86_64_IRELATIVE relocation {index} has negative resolver addend {addend}")
@@ -185,9 +185,9 @@ fn inspect(file: &[u8], load_bias: u64) -> Result<String, String> {
         let runtime_target = load_bias
             .checked_add(offset)
             .ok_or_else(|| format!("IRELATIVE relocation {index} runtime target overflows u64"))?;
-        let runtime_resolver = load_bias
-            .checked_add(resolver_offset)
-            .ok_or_else(|| format!("IRELATIVE relocation {index} runtime resolver overflows u64"))?;
+        let runtime_resolver = load_bias.checked_add(resolver_offset).ok_or_else(|| {
+            format!("IRELATIVE relocation {index} runtime resolver overflows u64")
+        })?;
         output.push_str(&format!(
             "  index={index} target=B+{offset:#018x}=>{runtime_target:#018x} resolver=B+{resolver_offset:#018x}=>{runtime_resolver:#018x}\n"
         ));
@@ -212,7 +212,9 @@ fn dynamic_rela(bytes: &[u8]) -> Result<(u64, u64, u64), String> {
         let value = read_u64(entry, 8);
         if terminated {
             if tag != DT_NULL || value != 0 {
-                return Err(format!("PT_DYNAMIC entry {index} contains data after DT_NULL"));
+                return Err(format!(
+                    "PT_DYNAMIC entry {index} contains data after DT_NULL"
+                ));
             }
             continue;
         }
@@ -246,7 +248,11 @@ fn set_once(slot: &mut Option<u64>, value: u64, label: &str) -> Result<(), Strin
 
 fn unique_dynamic(headers: &[ProgramHeader]) -> Result<ProgramHeader, String> {
     let mut dynamic = None;
-    for header in headers.iter().copied().filter(|header| header.segment_type == PT_DYNAMIC) {
+    for header in headers
+        .iter()
+        .copied()
+        .filter(|header| header.segment_type == PT_DYNAMIC)
+    {
         if dynamic.replace(header).is_some() {
             return Err("multiple PT_DYNAMIC program headers are unsupported".to_owned());
         }
@@ -298,17 +304,24 @@ fn program_headers(file: &[u8]) -> Result<Vec<ProgramHeader>, String> {
         header.vaddr.checked_add(header.filesz).ok_or_else(|| {
             format!("program header {index} file-backed virtual range overflows u64")
         })?;
-        header.vaddr.checked_add(header.memsz).ok_or_else(|| {
-            format!("program header {index} memory virtual range overflows u64")
-        })?;
+        header
+            .vaddr
+            .checked_add(header.memsz)
+            .ok_or_else(|| format!("program header {index} memory virtual range overflows u64"))?;
         headers.push(header);
     }
     Ok(headers)
 }
 
-fn program_bytes<'a>(file: &'a [u8], header: ProgramHeader, label: &str) -> Result<&'a [u8], String> {
-    let start = usize::try_from(header.offset).map_err(|_| format!("{label} offset does not fit usize"))?;
-    let size = usize::try_from(header.filesz).map_err(|_| format!("{label} size does not fit usize"))?;
+fn program_bytes<'a>(
+    file: &'a [u8],
+    header: ProgramHeader,
+    label: &str,
+) -> Result<&'a [u8], String> {
+    let start =
+        usize::try_from(header.offset).map_err(|_| format!("{label} offset does not fit usize"))?;
+    let size =
+        usize::try_from(header.filesz).map_err(|_| format!("{label} size does not fit usize"))?;
     let end = start
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows usize"))?;
@@ -329,7 +342,10 @@ fn map_file_backed_range<'a>(
     let end = address
         .checked_add(size)
         .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
-    for header in headers.iter().filter(|header| header.segment_type == PT_LOAD) {
+    for header in headers
+        .iter()
+        .filter(|header| header.segment_type == PT_LOAD)
+    {
         if header.flags & required_flags != required_flags {
             continue;
         }
@@ -344,7 +360,8 @@ fn map_file_backed_range<'a>(
             .ok_or_else(|| format!("{label} file offset overflows u64"))?;
         let start = usize::try_from(file_offset)
             .map_err(|_| format!("{label} file offset does not fit usize"))?;
-        let width = usize::try_from(size).map_err(|_| format!("{label} size does not fit usize"))?;
+        let width =
+            usize::try_from(size).map_err(|_| format!("{label} size does not fit usize"))?;
         let file_end = start
             .checked_add(width)
             .ok_or_else(|| format!("{label} file range overflows usize"))?;
@@ -368,7 +385,10 @@ fn map_memory_range(
     let end = address
         .checked_add(size)
         .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
-    for header in headers.iter().filter(|header| header.segment_type == PT_LOAD) {
+    for header in headers
+        .iter()
+        .filter(|header| header.segment_type == PT_LOAD)
+    {
         if header.flags & required_flags != required_flags {
             continue;
         }
