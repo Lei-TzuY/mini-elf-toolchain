@@ -11,26 +11,31 @@ permissions:
   contents: write
 
 jobs:
-  diagnose:
+  fix:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: conquest/eh-frame-lsda
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - name: Capture clippy output
+      - name: Remove obsolete helper
         run: |
-          set +e
-          cargo clippy --all-targets --all-features -- -D warnings > .conquest-lsda-clippy.log 2>&1
-          status=$?
-          echo "EXIT_STATUS=$status" >> .conquest-lsda-clippy.log
-          exit 0
-      - name: Commit diagnostic log
-        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path('tests/dynamic_eh_frame_lsda.rs')
+          text = path.read_text()
+          updated, count = re.subn(
+              r'fn map_offset_to_vaddr\(.*?\n\}\n\n(?=fn first_fde_address)',
+              '',
+              text,
+              flags=re.S,
+          )
+          if count != 1:
+              raise SystemExit(f'expected one obsolete helper, removed {count}')
+          path.write_text(updated)
+          PY
           git config user.name "LeiZ"
           git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
-          git add .conquest-lsda-clippy.log
-          git commit -m "ci: capture LSDA clippy diagnostics"
+          git add tests/dynamic_eh_frame_lsda.rs
+          git commit -m "test: remove obsolete LSDA mapping helper"
           git push origin HEAD:conquest/eh-frame-lsda
