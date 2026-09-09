@@ -122,7 +122,8 @@ fn parse_u64(text: &str) -> Result<u64, String> {
     if let Some(hex) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
         u64::from_str_radix(hex, 16).map_err(|_| format!("invalid load bias '{text}'"))
     } else {
-        text.parse().map_err(|_| format!("invalid load bias '{text}'"))
+        text.parse()
+            .map_err(|_| format!("invalid load bias '{text}'"))
     }
 }
 
@@ -159,7 +160,9 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
     if symbol_count == 0 {
         return Err("DT_HASH reports zero dynamic symbols".into());
     }
-    let symtab_size = symbol_count.checked_mul(syment).ok_or("dynamic symbol table size overflows u64")?;
+    let symtab_size = symbol_count
+        .checked_mul(syment)
+        .ok_or("dynamic symbol table size overflows u64")?;
     let symtab_bytes = map_file(file, &phdrs, symtab, symtab_size, "DT_SYMTAB table")?;
     let strtab_bytes = map_file(file, &phdrs, strtab, strsz, "DT_STRTAB table")?;
     let rela_bytes = map_file(file, &phdrs, rela, relasz, "DT_RELA table")?;
@@ -179,9 +182,20 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
         if sym_index == 0 || sym_index >= symbol_count {
             return Err(format!("R_X86_64_32S relocation {index} references invalid dynamic symbol index {sym_index} (count {symbol_count})"));
         }
-        map_memory(&phdrs, offset, 4, PF_W, &format!("R_X86_64_32S relocation {index} target"))?;
-        let sym_off = usize::try_from(sym_index).ok().and_then(|v| v.checked_mul(SYM_SIZE)).ok_or_else(|| format!("dynamic symbol index {sym_index} offset overflows usize"))?;
-        let sym = symtab_bytes.get(sym_off..sym_off + SYM_SIZE).ok_or_else(|| format!("dynamic symbol {sym_index} exceeds DT_SYMTAB"))?;
+        map_memory(
+            &phdrs,
+            offset,
+            4,
+            PF_W,
+            &format!("R_X86_64_32S relocation {index} target"),
+        )?;
+        let sym_off = usize::try_from(sym_index)
+            .ok()
+            .and_then(|v| v.checked_mul(SYM_SIZE))
+            .ok_or_else(|| format!("dynamic symbol index {sym_index} offset overflows usize"))?;
+        let sym = symtab_bytes
+            .get(sym_off..sym_off + SYM_SIZE)
+            .ok_or_else(|| format!("dynamic symbol {sym_index} exceeds DT_SYMTAB"))?;
         let name_off = read_u32(sym, 0);
         let info_byte = sym[4];
         let shndx = read_u16(sym, 6);
@@ -195,13 +209,28 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
         if info_byte & 0x0f == STT_TLS {
             return Err(format!("R_X86_64_32S relocation {index} references TLS; TLS semantics are outside this bounded slice"));
         }
-        map_memory(&phdrs, value, 1, 0, &format!("R_X86_64_32S relocation {index} symbol value"))?;
+        map_memory(
+            &phdrs,
+            value,
+            1,
+            0,
+            &format!("R_X86_64_32S relocation {index} symbol value"),
+        )?;
         let name = dyn_string(strtab_bytes, name_off, sym_index)?;
-        let runtime_target = bias.checked_add(offset).ok_or_else(|| format!("R_X86_64_32S relocation {index} runtime target overflows u64"))?;
-        let runtime_symbol = bias.checked_add(value).ok_or_else(|| format!("R_X86_64_32S relocation {index} runtime symbol overflows u64"))?;
+        let runtime_target = bias.checked_add(offset).ok_or_else(|| {
+            format!("R_X86_64_32S relocation {index} runtime target overflows u64")
+        })?;
+        let runtime_symbol = bias.checked_add(value).ok_or_else(|| {
+            format!("R_X86_64_32S relocation {index} runtime symbol overflows u64")
+        })?;
         let addend = read_i64(entry, 16);
-        let relocated = add_signed(runtime_symbol, addend).ok_or_else(|| format!("R_X86_64_32S relocation {index} S + A overflows u64"))?;
-        let signed = i32::try_from(relocated).map_err(|_| format!("R_X86_64_32S relocation {index} result {relocated:#x} does not fit signed 32 bits"))?;
+        let relocated = add_signed(runtime_symbol, addend)
+            .ok_or_else(|| format!("R_X86_64_32S relocation {index} S + A overflows u64"))?;
+        let signed = i32::try_from(relocated).map_err(|_| {
+            format!(
+                "R_X86_64_32S relocation {index} result {relocated:#x} does not fit signed 32 bits"
+            )
+        })?;
         out.push_str(&format!("  index={index} symbol={sym_index}:{name} target=B+{offset:#018x}=>{runtime_target:#018x} symbol-value=B+{value:#018x}=>{runtime_symbol:#018x} addend={addend} result={signed}\n"));
         found += 1;
     }
@@ -260,22 +289,37 @@ fn set_once(slot: &mut Option<u64>, value: u64, name: &str) -> Result<(), String
 }
 
 fn phdrs(file: &[u8]) -> Result<Vec<Phdr>, String> {
-    let off = usize::try_from(read_u64(file, 32)).map_err(|_| "program-header offset does not fit usize")?;
+    let off = usize::try_from(read_u64(file, 32))
+        .map_err(|_| "program-header offset does not fit usize")?;
     let entsize = usize::from(read_u16(file, 54));
     let count = usize::from(read_u16(file, 56));
     if entsize != PHDR_SIZE {
         return Err(format!("unsupported program-header size {entsize}"));
     }
-    let size = count.checked_mul(entsize).ok_or("program-header table size overflows usize")?;
-    let end = off.checked_add(size).ok_or("program-header table range overflows usize")?;
+    let size = count
+        .checked_mul(entsize)
+        .ok_or("program-header table size overflows usize")?;
+    let end = off
+        .checked_add(size)
+        .ok_or("program-header table range overflows usize")?;
     if end > file.len() {
         return Err("program-header table exceeds input".into());
     }
     let mut out = Vec::with_capacity(count);
     for i in 0..count {
         let p = off + i * entsize;
-        let h = Phdr { kind: read_u32(file, p), flags: read_u32(file, p + 4), off: read_u64(file, p + 8), vaddr: read_u64(file, p + 16), filesz: read_u64(file, p + 32), memsz: read_u64(file, p + 40) };
-        if h.filesz > h.memsz || h.vaddr.checked_add(h.filesz).is_none() || h.vaddr.checked_add(h.memsz).is_none() {
+        let h = Phdr {
+            kind: read_u32(file, p),
+            flags: read_u32(file, p + 4),
+            off: read_u64(file, p + 8),
+            vaddr: read_u64(file, p + 16),
+            filesz: read_u64(file, p + 32),
+            memsz: read_u64(file, p + 40),
+        };
+        if h.filesz > h.memsz
+            || h.vaddr.checked_add(h.filesz).is_none()
+            || h.vaddr.checked_add(h.memsz).is_none()
+        {
             return Err(format!("program header {i} has invalid ranges"));
         }
         file_range(file, h.off, h.filesz, &format!("program header {i}"))?;
@@ -287,44 +331,87 @@ fn phdrs(file: &[u8]) -> Result<Vec<Phdr>, String> {
 fn file_range<'a>(file: &'a [u8], off: u64, size: u64, label: &str) -> Result<&'a [u8], String> {
     let start = usize::try_from(off).map_err(|_| format!("{label} offset does not fit usize"))?;
     let width = usize::try_from(size).map_err(|_| format!("{label} size does not fit usize"))?;
-    let end = start.checked_add(width).ok_or_else(|| format!("{label} range overflows usize"))?;
-    file.get(start..end).ok_or_else(|| format!("{label} range exceeds input"))
+    let end = start
+        .checked_add(width)
+        .ok_or_else(|| format!("{label} range overflows usize"))?;
+    file.get(start..end)
+        .ok_or_else(|| format!("{label} range exceeds input"))
 }
 
-fn map_file<'a>(file: &'a [u8], phdrs: &[Phdr], addr: u64, size: u64, label: &str) -> Result<&'a [u8], String> {
-    let end = addr.checked_add(size).ok_or_else(|| format!("{label} virtual range overflows u64"))?;
+fn map_file<'a>(
+    file: &'a [u8],
+    phdrs: &[Phdr],
+    addr: u64,
+    size: u64,
+    label: &str,
+) -> Result<&'a [u8], String> {
+    let end = addr
+        .checked_add(size)
+        .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
     for h in phdrs.iter().filter(|h| h.kind == PT_LOAD) {
         let load_end = h.vaddr + h.filesz;
         if addr >= h.vaddr && end <= load_end {
-            let off = h.off.checked_add(addr - h.vaddr).ok_or_else(|| format!("{label} file offset overflows u64"))?;
+            let off = h
+                .off
+                .checked_add(addr - h.vaddr)
+                .ok_or_else(|| format!("{label} file offset overflows u64"))?;
             return file_range(file, off, size, label);
         }
     }
-    Err(format!("{label} [{addr:#x},{end:#x}) is not contained in a file-backed PT_LOAD"))
+    Err(format!(
+        "{label} [{addr:#x},{end:#x}) is not contained in a file-backed PT_LOAD"
+    ))
 }
 
 fn map_memory(phdrs: &[Phdr], addr: u64, size: u64, flags: u32, label: &str) -> Result<(), String> {
-    let end = addr.checked_add(size).ok_or_else(|| format!("{label} virtual range overflows u64"))?;
-    for h in phdrs.iter().filter(|h| h.kind == PT_LOAD && h.flags & flags == flags) {
+    let end = addr
+        .checked_add(size)
+        .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
+    for h in phdrs
+        .iter()
+        .filter(|h| h.kind == PT_LOAD && h.flags & flags == flags)
+    {
         if addr >= h.vaddr && end <= h.vaddr + h.memsz {
             return Ok(());
         }
     }
-    Err(format!("{label} [{addr:#x},{end:#x}) is not contained in a matching PT_LOAD memory range"))
+    Err(format!(
+        "{label} [{addr:#x},{end:#x}) is not contained in a matching PT_LOAD memory range"
+    ))
 }
 
 fn dyn_string(table: &[u8], offset: u32, index: u64) -> Result<String, String> {
-    let start = usize::try_from(offset).map_err(|_| format!("dynamic symbol {index} name offset does not fit usize"))?;
-    let tail = table.get(start..).ok_or_else(|| format!("dynamic symbol {index} name offset is outside DT_STRTAB"))?;
-    let end = tail.iter().position(|b| *b == 0).ok_or_else(|| format!("dynamic symbol {index} name is not NUL-terminated"))?;
-    std::str::from_utf8(&tail[..end]).map(str::to_owned).map_err(|_| format!("dynamic symbol {index} name is not UTF-8"))
+    let start = usize::try_from(offset)
+        .map_err(|_| format!("dynamic symbol {index} name offset does not fit usize"))?;
+    let tail = table
+        .get(start..)
+        .ok_or_else(|| format!("dynamic symbol {index} name offset is outside DT_STRTAB"))?;
+    let end = tail
+        .iter()
+        .position(|b| *b == 0)
+        .ok_or_else(|| format!("dynamic symbol {index} name is not NUL-terminated"))?;
+    std::str::from_utf8(&tail[..end])
+        .map(str::to_owned)
+        .map_err(|_| format!("dynamic symbol {index} name is not UTF-8"))
 }
 
 fn add_signed(base: u64, addend: i64) -> Option<u64> {
-    if addend >= 0 { base.checked_add(addend as u64) } else { base.checked_sub(addend.unsigned_abs()) }
+    if addend >= 0 {
+        base.checked_add(addend as u64)
+    } else {
+        base.checked_sub(addend.unsigned_abs())
+    }
 }
 
-fn read_u16(bytes: &[u8], off: usize) -> u16 { u16::from_le_bytes(bytes[off..off + 2].try_into().unwrap()) }
-fn read_u32(bytes: &[u8], off: usize) -> u32 { u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap()) }
-fn read_u64(bytes: &[u8], off: usize) -> u64 { u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap()) }
-fn read_i64(bytes: &[u8], off: usize) -> i64 { i64::from_le_bytes(bytes[off..off + 8].try_into().unwrap()) }
+fn read_u16(bytes: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes(bytes[off..off + 2].try_into().unwrap())
+}
+fn read_u32(bytes: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes(bytes[off..off + 4].try_into().unwrap())
+}
+fn read_u64(bytes: &[u8], off: usize) -> u64 {
+    u64::from_le_bytes(bytes[off..off + 8].try_into().unwrap())
+}
+fn read_i64(bytes: &[u8], off: usize) -> i64 {
+    i64::from_le_bytes(bytes[off..off + 8].try_into().unwrap())
+}
