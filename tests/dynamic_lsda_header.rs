@@ -117,7 +117,11 @@ fn validates_gnu_lsda_header_against_readelf() {
     let dir = temp_dir("lsda-header-good");
     let image = build_fixture(&dir);
     let output = run_tool(&[&image]);
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let address = readelf_lsda_address(&image);
     assert!(stdout.contains(&format!("address={address:#018x}")));
