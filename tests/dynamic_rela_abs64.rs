@@ -177,6 +177,28 @@ fn validates_gnu_abs64_relocation() {
 }
 
 #[test]
+fn applies_negative_rela_addend() {
+    let dir = temp_dir("abs64-negative-addend");
+    let image = build_fixture(&dir);
+    let mut bytes = fs::read(&image).unwrap();
+    let rela = abs64_rela_offset(&bytes);
+    bytes[rela + 16..rela + 24].copy_from_slice(&(-1_i64).to_le_bytes());
+    let patched = dir.join("negative-addend.so");
+    fs::write(&patched, bytes).unwrap();
+
+    let output = run_tool(&[&patched], "0x70000000");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("addend=-1"), "{stdout}");
+    assert!(stdout.contains("result="), "{stdout}");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn rejects_out_of_range_dynamic_symbol_index() {
     let dir = temp_dir("abs64-symbol-index");
     let image = build_fixture(&dir);
