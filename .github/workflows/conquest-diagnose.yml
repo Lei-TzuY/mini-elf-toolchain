@@ -1,0 +1,34 @@
+name: Conquest Diagnose LSDA
+
+on:
+  push:
+    branches:
+      - conquest/eh-frame-lsda
+    paths:
+      - .github/workflows/conquest-diagnose.yml
+
+permissions:
+  contents: write
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: conquest/eh-frame-lsda
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Capture focused test output
+        run: |
+          set +e
+          cargo test --test dynamic_eh_frame_lsda -- --nocapture > .conquest-lsda-test.log 2>&1
+          status=$?
+          echo "EXIT_STATUS=$status" >> .conquest-lsda-test.log
+          exit 0
+      - name: Commit diagnostic log
+        run: |
+          git config user.name "LeiZ"
+          git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+          git add .conquest-lsda-test.log
+          git commit -m "ci: capture LSDA focused test diagnostics"
+          git push origin HEAD:conquest/eh-frame-lsda
