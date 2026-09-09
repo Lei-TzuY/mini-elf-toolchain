@@ -227,11 +227,11 @@ fn require_pcrel_sdata4_cie(
         ));
     }
     let cie_end = record_end(file, headers, cie, cie_length, "CIE", index)?;
-    if cie_offset + 9 > cie_end
-        || read_u32(file, cie_offset + 4) != 0
-        || file[cie_offset + 8] != 1
+    if cie_offset + 9 > cie_end || read_u32(file, cie_offset + 4) != 0 || file[cie_offset + 8] != 1
     {
-        return Err(format!("FDE {index} CIE record is malformed or unsupported"));
+        return Err(format!(
+            "FDE {index} CIE record is malformed or unsupported"
+        ));
     }
     let aug_start = cie_offset + 9;
     let nul = file[aug_start..cie_end]
@@ -263,11 +263,7 @@ fn require_pcrel_sdata4_cie(
     Ok(())
 }
 
-fn executable_file_backed_range(
-    headers: &[ProgramHeader],
-    start: u64,
-    end: u64,
-) -> Option<usize> {
+fn executable_file_backed_range(headers: &[ProgramHeader], start: u64, end: u64) -> Option<usize> {
     headers.iter().enumerate().find_map(|(index, header)| {
         if header.kind != PT_LOAD || header.flags & PF_X == 0 {
             return None;
@@ -315,10 +311,12 @@ fn record_end(
         .checked_sub(1)
         .ok_or_else(|| format!("{kind} {index} range underflows"))?;
     if map_file_backed(headers, last).is_none() {
-        return Err(format!("{kind} {index} crosses a file-backed PT_LOAD boundary"));
+        return Err(format!(
+            "{kind} {index} crosses a file-backed PT_LOAD boundary"
+        ));
     }
-    let total = usize::try_from(total)
-        .map_err(|_| format!("{kind} {index} size does not fit usize"))?;
+    let total =
+        usize::try_from(total).map_err(|_| format!("{kind} {index} size does not fit usize"))?;
     let end = start
         .checked_add(total)
         .ok_or_else(|| format!("{kind} {index} file range overflows usize"))?;
@@ -357,9 +355,9 @@ fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader
         vaddr
             .checked_add(memsz)
             .ok_or_else(|| format!("program header {index} virtual memory range overflows u64"))?;
-        vaddr
-            .checked_add(filesz)
-            .ok_or_else(|| format!("program header {index} file-backed virtual range overflows u64"))?;
+        vaddr.checked_add(filesz).ok_or_else(|| {
+            format!("program header {index} file-backed virtual range overflows u64")
+        })?;
         headers.push(ProgramHeader {
             kind,
             flags,
@@ -448,7 +446,10 @@ fn checked_add_i32(base: u64, displacement: i32) -> Option<u64> {
 }
 
 fn read_u32_checked(file: &[u8], offset: usize, label: &str) -> Result<u32, String> {
-    if offset.checked_add(4).is_none_or(|end| end > file.len()) {
+    let Some(end) = offset.checked_add(4) else {
+        return Err(format!("{label} is truncated"));
+    };
+    if end > file.len() {
         return Err(format!("{label} is truncated"));
     }
     Ok(read_u32(file, offset))
