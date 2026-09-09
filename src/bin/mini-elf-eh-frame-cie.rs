@@ -74,7 +74,8 @@ where
             .map_err(|error| format!("cannot read '{}': {error}", input.to_string_lossy()))?;
         let display = input.to_string_lossy().into_owned();
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered = inspect_cies(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        let rendered =
+            inspect_cies(header, &file).map_err(|error| format!("{display}: {error}"))?;
         inspected.push((display, rendered));
     }
 
@@ -157,12 +158,12 @@ fn inspect_cies(header: Elf64Header, file: &[u8]) -> Result<String, String> {
         let relative = entry_index
             .checked_mul(EH_FRAME_TABLE_ENTRY_SIZE)
             .ok_or_else(|| "binary-search table entry offset overflows u64".to_owned())?;
-        let offset = table_start
-            .checked_add(
-                usize::try_from(relative)
-                    .map_err(|_| "binary-search table entry offset does not fit usize".to_owned())?,
-            )
-            .ok_or_else(|| "binary-search table file offset overflows usize".to_owned())?;
+        let offset =
+            table_start
+                .checked_add(usize::try_from(relative).map_err(|_| {
+                    "binary-search table entry offset does not fit usize".to_owned()
+                })?)
+                .ok_or_else(|| "binary-search table file offset overflows usize".to_owned())?;
         let fde_delta = read_i32(file, offset + 4);
         let fde_address = checked_add_i32(segment.virtual_address, fde_delta).ok_or_else(|| {
             format!(
