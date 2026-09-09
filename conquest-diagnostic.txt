@@ -1,0 +1,21 @@
+[1m[92m   Compiling[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 3.55s
+[1m[92m     Running[0m tests/dynamic_eh_frame_encoding.rs (target/debug/deps/dynamic_eh_frame_encoding-1c608ce97e765a24)
+
+running 3 tests
+test malformed_later_input_keeps_stdout_atomic ... ok
+test rejects_unsupported_encoding_and_oversized_payload ... ok
+
+thread 'fde_encoding_matches_gnu_readelf' (2736) panicked at tests/dynamic_eh_frame_encoding.rs:159:5:
+assertion failed: gnu_stdout.contains("Augmentation:     \"zR\"")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test fde_encoding_matches_gnu_readelf ... FAILED
+
+failures:
+
+failures:
+    fde_encoding_matches_gnu_readelf
+
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.24s
+
+[1m[91merror[0m: test failed, to rerun pass `--test dynamic_eh_frame_encoding`
