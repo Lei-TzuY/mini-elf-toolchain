@@ -255,8 +255,7 @@ fn rejects_lsda_target_outside_file_backed_loads() {
 
     let output = run_tool(&[&malformed]);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("is not file-backed PT_LOAD data"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("is not file-backed PT_LOAD data"));
     fs::remove_dir_all(dir).unwrap();
 }
 
