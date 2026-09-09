@@ -19,7 +19,7 @@ The tool requires a checked `PT_DYNAMIC` with `DT_RELA`, `DT_RELASZ`, `DT_RELAEN
 - a same-image defined symbol that is neither `SHN_ABS` nor TLS;
 - the symbol value lies in loadable memory;
 - the dynamic symbol name is bounded and NUL-terminated;
-- checked `B + r_offset`, checked `B + S`, and checked signed `S + A` arithmetic.
+- checked `B + r_offset`, checked `B + S`, and checked signed `S + A` arithmetic, including negative RELA addends.
 
 The reported result follows the x86-64 ABI absolute relocation formula after applying the explicit load bias: `B + S + A` for this same-image bounded mode.
 
@@ -29,4 +29,4 @@ This is not a general dynamic linker. It rejects undefined/external symbols inst
 
 ## Differential coverage
 
-Focused integration tests build a real shared object with GNU `as` and GNU `ld --hash-style=sysv`; GNU `readelf -rW` must independently report a real `R_X86_64_64` relocation. Malformed regressions cover invalid dynamic symbol indices, non-writable relocation targets, arithmetic overflow, and multi-input stdout atomicity.
+Focused integration tests build a real shared object with GNU `as` and GNU `ld --hash-style=sysv`; GNU `readelf -rW` must independently report a real `R_X86_64_64` relocation. Malformed regressions cover invalid dynamic symbol indices, non-writable relocation targets, signed-addend arithmetic overflow, and multi-input stdout atomicity.
