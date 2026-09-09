@@ -169,8 +169,12 @@ fn tool_fde_ranges(stdout: &str) -> Vec<(u64, u64)> {
         .lines()
         .filter(|line| line.starts_with("FDE "))
         .filter_map(|line| {
-            let initial = line.split_whitespace().find(|part| part.starts_with("initial="))?;
-            let end = line.split_whitespace().find(|part| part.starts_with("end="))?;
+            let initial = line
+                .split_whitespace()
+                .find(|part| part.starts_with("initial="))?;
+            let end = line
+                .split_whitespace()
+                .find(|part| part.starts_with("end="))?;
             Some((
                 u64::from_str_radix(initial.trim_start_matches("initial=0x"), 16).ok()?,
                 u64::from_str_radix(end.trim_start_matches("end=0x"), 16).ok()?,
