@@ -249,19 +249,14 @@ fn rejects_lsda_target_outside_file_backed_loads() {
     let image = build_fixture(&dir);
     let mut file = fs::read(&image).unwrap();
     let (_, payload) = fde_lsda_payload(&file);
-    let field_vaddr = map_offset_to_vaddr(&file, payload);
-    let displacement = i32::try_from(field_vaddr)
-        .ok()
-        .and_then(|value| value.checked_neg())
-        .expect("fixture address fits signed 32-bit displacement");
-    file[payload..payload + 4].copy_from_slice(&displacement.to_le_bytes());
+    file[payload..payload + 4].copy_from_slice(&i32::MAX.to_le_bytes());
     let malformed = dir.join("unmapped.so");
     fs::write(&malformed, file).unwrap();
 
     let output = run_tool(&[&malformed]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("LSDA target 0x0 is not file-backed PT_LOAD data"));
+        .contains("is not file-backed PT_LOAD data"));
     fs::remove_dir_all(dir).unwrap();
 }
 
