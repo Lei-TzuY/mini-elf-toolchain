@@ -5,6 +5,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const PT_LOAD: u32 = 1;
+const PF_X: u32 = 0x1;
 const PT_GNU_EH_FRAME: u32 = 0x6474_e550;
 const EH_FRAME_HDR_FIXED_SIZE: u64 = 12;
 const EH_FRAME_TABLE_ENTRY_SIZE: u64 = 8;
@@ -15,10 +16,17 @@ const DW_EH_PE_DATAREL_SDATA4: u8 = 0x3b;
 #[derive(Clone, Copy)]
 struct ProgramHeader {
     segment_type: u32,
+    flags: u32,
     offset: u64,
     virtual_address: u64,
     file_size: u64,
     memory_size: u64,
+}
+
+#[derive(Clone, Copy)]
+struct SearchEntry {
+    initial_location: u64,
+    fde_address: u64,
 }
 
 fn main() -> ExitCode {
@@ -208,6 +216,51 @@ fn format_eh_frame(
         ));
     }
 
+    let table_start = file_start + usize::try_from(EH_FRAME_HDR_FIXED_SIZE).unwrap();
+    let mut entries = Vec::with_capacity(
+        usize::try_from(fde_count)
+            .map_err(|_| "FDE count does not fit usize for table traversal".to_owned())?,
+    );
+    let mut previous_initial = None;
+    for entry_index in 0..fde_count {
+        let relative = entry_index
+            .checked_mul(EH_FRAME_TABLE_ENTRY_SIZE)
+            .ok_or_else(|| "binary-search table entry offset overflows u64".to_owned())?;
+        let relative = usize::try_from(relative)
+            .map_err(|_| "binary-search table entry offset does not fit usize".to_owned())?;
+        let offset = table_start
+            .checked_add(relative)
+            .ok_or_else(|| "binary-search table file offset overflows usize".to_owned())?;
+        let initial_delta = read_i32(file, offset);
+        let fde_delta = read_i32(file, offset + 4);
+        let initial_location = checked_add_i32(segment.virtual_address, initial_delta).ok_or_else(|| {
+            format!(
+                "PT_GNU_EH_FRAME segment {segment_index} table entry {entry_index} initial-location arithmetic overflows: datarel base {:#x} + displacement {initial_delta}",
+                segment.virtual_address
+            )
+        })?;
+        let fde_address = checked_add_i32(segment.virtual_address, fde_delta).ok_or_else(|| {
+            format!(
+                "PT_GNU_EH_FRAME segment {segment_index} table entry {entry_index} FDE-address arithmetic overflows: datarel base {:#x} + displacement {fde_delta}",
+                segment.virtual_address
+            )
+        })?;
+        require_executable_file_backed_load_address(&program_headers, initial_location, entry_index)?;
+        require_file_backed_load_address(&program_headers, fde_address, entry_index)?;
+        if let Some(previous) = previous_initial {
+            if initial_location <= previous {
+                return Err(format!(
+                    "PT_GNU_EH_FRAME segment {segment_index} binary-search table is not strictly increasing at entry {entry_index}: {initial_location:#x} <= {previous:#x}"
+                ));
+            }
+        }
+        previous_initial = Some(initial_location);
+        entries.push(SearchEntry {
+            initial_location,
+            fde_address,
+        });
+    }
+
     let runtime = if let Some(load_bias) = load_bias {
         let runtime_start = load_bias
             .checked_add(segment.virtual_address)
@@ -237,6 +290,13 @@ fn format_eh_frame(
         "Encodings: eh_frame_ptr={eh_frame_ptr_encoding:#04x} fde_count={fde_count_encoding:#04x} table={table_encoding:#04x}\n"
     ));
     output.push_str(&format!("FDE count: {fde_count}\n"));
+    output.push_str(&format!("Validated search entries: {}\n", entries.len()));
+    for (index, entry) in entries.iter().enumerate() {
+        output.push_str(&format!(
+            "Entry {index}: initial={:#018x} fde={:#018x}\n",
+            entry.initial_location, entry.fde_address
+        ));
+    }
     output.push_str(&format!(
         "File range: {:#018x}..{file_end:#018x}\n",
         segment.offset
@@ -252,6 +312,14 @@ fn format_eh_frame(
         ));
     }
     Ok(output)
+}
+
+fn checked_add_i32(base: u64, displacement: i32) -> Option<u64> {
+    if displacement >= 0 {
+        base.checked_add(displacement as u64)
+    } else {
+        base.checked_sub(u64::from(displacement.unsigned_abs()))
+    }
 }
 
 fn require_load_containment(
@@ -274,6 +342,54 @@ fn require_load_containment(
     }
     Err(format!(
         "PT_GNU_EH_FRAME segment {segment_index} virtual memory range {start:#x}..{end:#x} is not contained in a PT_LOAD memory range"
+    ))
+}
+
+fn require_executable_file_backed_load_address(
+    program_headers: &[ProgramHeader],
+    address: u64,
+    entry_index: u64,
+) -> Result<usize, String> {
+    for (index, header) in program_headers.iter().enumerate() {
+        if header.segment_type != PT_LOAD || header.flags & PF_X == 0 {
+            continue;
+        }
+        let file_backed_end = header
+            .virtual_address
+            .checked_add(header.file_size)
+            .ok_or_else(|| {
+                format!("PT_LOAD segment {index} file-backed virtual range overflows u64")
+            })?;
+        if address >= header.virtual_address && address < file_backed_end {
+            return Ok(index);
+        }
+    }
+    Err(format!(
+        "binary-search table entry {entry_index} initial location {address:#x} is not contained in an executable file-backed PT_LOAD range"
+    ))
+}
+
+fn require_file_backed_load_address(
+    program_headers: &[ProgramHeader],
+    address: u64,
+    entry_index: u64,
+) -> Result<usize, String> {
+    for (index, header) in program_headers.iter().enumerate() {
+        if header.segment_type != PT_LOAD {
+            continue;
+        }
+        let file_backed_end = header
+            .virtual_address
+            .checked_add(header.file_size)
+            .ok_or_else(|| {
+                format!("PT_LOAD segment {index} file-backed virtual range overflows u64")
+            })?;
+        if address >= header.virtual_address && address < file_backed_end {
+            return Ok(index);
+        }
+    }
+    Err(format!(
+        "binary-search table entry {entry_index} FDE address {address:#x} is not contained in a file-backed PT_LOAD range"
     ))
 }
 
@@ -300,6 +416,7 @@ fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader
             .map_err(|_| "program-header entry offset does not fit usize".to_owned())?;
         let header = ProgramHeader {
             segment_type: read_u32(file, offset),
+            flags: read_u32(file, offset + 4),
             offset: read_u64(file, offset + 8),
             virtual_address: read_u64(file, offset + 16),
             file_size: read_u64(file, offset + 32),
@@ -336,6 +453,10 @@ fn checked_file_end(offset: u64, size: u64, file_len: usize, what: &str) -> Resu
         ));
     }
     Ok(end)
+}
+
+fn read_i32(bytes: &[u8], offset: usize) -> i32 {
+    i32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> u32 {
