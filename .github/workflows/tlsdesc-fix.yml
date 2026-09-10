@@ -18,11 +18,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Diagnose repair
+      - name: Apply verified repair
         shell: bash
         run: |
-          set +e
-          exec > >(tee tlsdesc-fix.log) 2>&1
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/bin/mini-elf-dynrela-tlsdesc.rs')
@@ -51,16 +49,13 @@ jobs:
           s=s.replace(old,new)
           p.write_text(s)
           PY
-          p=$?
-          if [ $p -eq 0 ]; then cargo fmt --all; p=$?; fi
-          if [ $p -eq 0 ]; then cargo clippy --all-targets --all-features -- -D warnings; p=$?; fi
-          if [ $p -eq 0 ]; then cargo test --test dynamic_rela_tlsdesc -- --nocapture; p=$?; fi
-          echo "$p" > tlsdesc-fix.status
-          exit 0
-      - name: Commit diagnostics
+          cargo fmt --all
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --test dynamic_rela_tlsdesc -- --nocapture
+      - name: Commit repair
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add tlsdesc-fix.log tlsdesc-fix.status
-          git commit -m "ci: capture TLSDESC repair diagnostics"
+          git add src/bin/mini-elf-dynrela-tlsdesc.rs tests/dynamic_rela_tlsdesc.rs
+          git commit -m "fix: validate GNU TLSDESC PLT relocations"
           git push origin HEAD:feat/dynrela-tlsdesc
