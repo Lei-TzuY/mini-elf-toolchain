@@ -1,0 +1,28 @@
+name: Temporary DTPMOD64 diagnostic commit
+on:
+  push:
+    branches:
+      - feat/dynrela-dtpmod64
+jobs:
+  diagnose:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Capture focused failure
+        run: |
+          set +e
+          cargo test --test dynamic_rela_dtpmod64 -- --nocapture > dtpmod64-test.log 2>&1
+          status=$?
+          printf 'exit=%s\n' "$status" > dtpmod64-exit.txt
+          exit 0
+      - name: Commit diagnostics
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add dtpmod64-test.log dtpmod64-exit.txt
+          git commit -m "ci: record temporary DTPMOD64 diagnostics"
+          git push
