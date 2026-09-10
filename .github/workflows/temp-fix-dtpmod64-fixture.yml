@@ -1,0 +1,37 @@
+name: Temporary fix DTPMOD64 GNU fixture
+on:
+  push:
+    branches:
+      - feat/dynrela-dtpmod64
+jobs:
+  fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Replace unsupported direct DTPMOD expression with GNU TLSGD sequence
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('tests/dynamic_rela_dtpmod64.rs')
+          s = p.read_text()
+          old = r'\n.data\n.globl slot\n.type slot,@object\n.size slot,8\nslot:\n.quad tlsvar@DTPMOD\n'
+          new = r'\n.text\n.globl probe\n.type probe,@function\nprobe:\nleaq tlsvar@tlsgd(%rip), %rdi\ncall __tls_get_addr@PLT\nret\n'
+          if old not in s:
+              raise SystemExit('expected fixture fragment not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+          cargo fmt --all
+          cargo test --test dynamic_rela_dtpmod64 -- --nocapture
+      - name: Commit verified fixture correction
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/dynamic_rela_dtpmod64.rs
+          git commit -m "fix: build DTPMOD64 fixture through GNU TLSGD"
+          git push
