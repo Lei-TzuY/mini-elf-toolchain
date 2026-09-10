@@ -128,7 +128,8 @@ fn parse_u64(text: &str, label: &str) -> Result<u64, String> {
         }
         u64::from_str_radix(hex, 16).map_err(|_| format!("invalid {label} '{text}'"))
     } else {
-        text.parse().map_err(|_| format!("invalid {label} '{text}'"))
+        text.parse()
+            .map_err(|_| format!("invalid {label} '{text}'"))
     }
 }
 
@@ -159,7 +160,9 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
         let value = u64at(entry, 8);
         if terminated {
             if tag != DT_NULL || value != 0 {
-                return Err(format!("PT_DYNAMIC entry {index} contains data after DT_NULL"));
+                return Err(format!(
+                    "PT_DYNAMIC entry {index} contains data after DT_NULL"
+                ));
             }
             continue;
         }
@@ -323,7 +326,10 @@ fn program_headers(file: &[u8]) -> Result<Vec<Ph>, String> {
         return Err("unsupported program-header size".into());
     }
     let end = off
-        .checked_add(ent.checked_mul(num).ok_or("program-header table size overflow")?)
+        .checked_add(
+            ent.checked_mul(num)
+                .ok_or("program-header table size overflow")?,
+        )
         .ok_or("program-header table overflow")?;
     if end > file.len() {
         return Err("program-header table exceeds input".into());
@@ -373,10 +379,9 @@ fn map_file<'a>(
         .checked_add(size)
         .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
     for p in ph.iter().filter(|p| p.kind == PT_LOAD) {
-        let file_end = p
-            .va
-            .checked_add(p.filesz)
-            .ok_or_else(|| format!("{label} backing range overflows u64"))?;
+        let file_end =
+            p.va.checked_add(p.filesz)
+                .ok_or_else(|| format!("{label} backing range overflows u64"))?;
         if address >= p.va && end <= file_end {
             let start = p
                 .off
@@ -405,10 +410,9 @@ fn memory_range(ph: &[Ph], address: u64, size: u64, flags: u32, label: &str) -> 
         .iter()
         .filter(|p| p.kind == PT_LOAD && p.flags & flags == flags)
     {
-        let segment_end = p
-            .va
-            .checked_add(p.memsz)
-            .ok_or_else(|| format!("{label} segment range overflows u64"))?;
+        let segment_end =
+            p.va.checked_add(p.memsz)
+                .ok_or_else(|| format!("{label} segment range overflows u64"))?;
         if address >= p.va && end <= segment_end {
             return Ok(());
         }
