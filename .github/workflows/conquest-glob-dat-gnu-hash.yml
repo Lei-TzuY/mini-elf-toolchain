@@ -1,0 +1,226 @@
+name: Conquest GLOB_DAT GNU hash
+on:
+  push:
+    branches: [feat/dynrela-glob-dat-gnu-hash]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/dynrela-glob-dat-gnu-hash
+          fetch-depth: 0
+      - name: Apply bounded GNU hash support
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('src/bin/mini-elf-dynrela-glob-dat.rs')
+          text = source.read_text()
+          text = text.replace('const DT_HASH: i64 = 4;\n', 'const DT_HASH: i64 = 4;\nconst DT_GNU_HASH: i64 = 0x6fff_fef5;\n', 1)
+          text = text.replace('    hash: u64,\n    symtab: u64,', '    hash: Option<u64>,\n    gnu_hash: Option<u64>,\n    symtab: u64,', 1)
+          old = '''    let hash = map_file_backed_range(file, &headers, metadata.hash, 8, 0, "DT_HASH header")?;\n    let symbol_count = u64::from(read_u32(hash, 4));\n    if symbol_count == 0 {\n        return Err("DT_HASH reports zero dynamic symbols".to_owned());\n    }\n'''
+          new = '''    let symbol_count = dynamic_symbol_count(file, &headers, metadata.hash, metadata.gnu_hash)?;\n    if symbol_count == 0 {\n        return Err("dynamic hash metadata reports zero dynamic symbols".to_owned());\n    }\n'''
+          if old not in text:
+              raise SystemExit('symbol-count anchor not found')
+          text = text.replace(old, new, 1)
+          text = text.replace('    let mut hash = None;\n    let mut symtab = None;', '    let mut hash = None;\n    let mut gnu_hash = None;\n    let mut symtab = None;', 1)
+          text = text.replace('            DT_HASH => set_once(&mut hash, value, "DT_HASH")?,\n            DT_SYMTAB', '            DT_HASH => set_once(&mut hash, value, "DT_HASH")?,\n            DT_GNU_HASH => set_once(&mut gnu_hash, value, "DT_GNU_HASH")?,\n            DT_SYMTAB', 1)
+          text = text.replace('        hash: required(hash, "DT_HASH")?,\n        symtab:', '        hash,\n        gnu_hash,\n        symtab:', 1)
+          helper = r'''
+fn dynamic_symbol_count(
+    file: &[u8],
+    headers: &[ProgramHeader],
+    hash: Option<u64>,
+    gnu_hash: Option<u64>,
+) -> Result<u64, String> {
+    if let Some(address) = hash {
+        let header = map_file_backed_range(file, headers, address, 8, 0, "DT_HASH header")?;
+        return Ok(u64::from(read_u32(header, 4)));
+    }
+    let address = gnu_hash.ok_or_else(|| {
+        "R_X86_64_GLOB_DAT validation requires DT_HASH or DT_GNU_HASH to bound DT_SYMTAB".to_owned()
+    })?;
+    gnu_hash_symbol_count(file, headers, address)
+}
+
+fn gnu_hash_symbol_count(
+    file: &[u8],
+    headers: &[ProgramHeader],
+    address: u64,
+) -> Result<u64, String> {
+    let header = map_file_backed_range(file, headers, address, 16, 0, "DT_GNU_HASH header")?;
+    let bucket_count = read_u32(header, 0);
+    let symbol_offset = read_u32(header, 4);
+    let bloom_count = read_u32(header, 8);
+    if bucket_count == 0 {
+        return Err("DT_GNU_HASH bucket count must be non-zero".to_owned());
+    }
+    if bloom_count == 0 || !bloom_count.is_power_of_two() {
+        return Err(format!(
+            "DT_GNU_HASH bloom count {bloom_count} must be a non-zero power of two"
+        ));
+    }
+    let bloom_bytes = u64::from(bloom_count)
+        .checked_mul(8)
+        .ok_or_else(|| "DT_GNU_HASH bloom byte size overflows u64".to_owned())?;
+    let bucket_bytes = u64::from(bucket_count)
+        .checked_mul(4)
+        .ok_or_else(|| "DT_GNU_HASH bucket byte size overflows u64".to_owned())?;
+    let prefix_size = 16u64
+        .checked_add(bloom_bytes)
+        .and_then(|value| value.checked_add(bucket_bytes))
+        .ok_or_else(|| "DT_GNU_HASH prefix byte size overflows u64".to_owned())?;
+    let prefix = map_file_backed_range(file, headers, address, prefix_size, 0, "DT_GNU_HASH prefix")?;
+    let bucket_start = usize::try_from(
+        16u64
+            .checked_add(bloom_bytes)
+            .ok_or_else(|| "DT_GNU_HASH bucket offset overflows u64".to_owned())?,
+    )
+    .map_err(|_| "DT_GNU_HASH bucket offset does not fit usize".to_owned())?;
+    let chain_address = address
+        .checked_add(prefix_size)
+        .ok_or_else(|| "DT_GNU_HASH chain address overflows u64".to_owned())?;
+    let mut count = symbol_offset;
+    for bucket_index in 0..bucket_count {
+        let bucket_delta = u64::from(bucket_index)
+            .checked_mul(4)
+            .ok_or_else(|| "DT_GNU_HASH bucket offset overflows u64".to_owned())?;
+        let off = bucket_start
+            .checked_add(
+                usize::try_from(bucket_delta)
+                    .map_err(|_| "DT_GNU_HASH bucket offset does not fit usize".to_owned())?,
+            )
+            .ok_or_else(|| "DT_GNU_HASH bucket offset overflows usize".to_owned())?;
+        let start_symbol = read_u32(prefix, off);
+        if start_symbol == 0 {
+            continue;
+        }
+        if start_symbol < symbol_offset {
+            return Err(format!(
+                "DT_GNU_HASH bucket {bucket_index} starts at symbol {start_symbol}, below symbol offset {symbol_offset}"
+            ));
+        }
+        let mut symbol = start_symbol;
+        loop {
+            let chain_index = symbol
+                .checked_sub(symbol_offset)
+                .ok_or_else(|| "DT_GNU_HASH chain index underflows".to_owned())?;
+            let chain_off = u64::from(chain_index)
+                .checked_mul(4)
+                .ok_or_else(|| "DT_GNU_HASH chain offset overflows u64".to_owned())?;
+            let entry_address = chain_address
+                .checked_add(chain_off)
+                .ok_or_else(|| "DT_GNU_HASH chain address overflows u64".to_owned())?;
+            let entry = map_file_backed_range(
+                file,
+                headers,
+                entry_address,
+                4,
+                0,
+                &format!("DT_GNU_HASH bucket {bucket_index} chain entry for symbol {symbol}"),
+            )?;
+            let next = symbol
+                .checked_add(1)
+                .ok_or_else(|| "DT_GNU_HASH symbol index overflows u32".to_owned())?;
+            if read_u32(entry, 0) & 1 != 0 {
+                count = count.max(next);
+                break;
+            }
+            symbol = next;
+        }
+    }
+    Ok(u64::from(count))
+}
+
+'''
+          anchor = 'fn required(value: Option<u64>, label: &str) -> Result<u64, String> {'
+          if anchor not in text:
+              raise SystemExit('helper insertion anchor not found')
+          text = text.replace(anchor, helper + anchor, 1)
+          source.write_text(text)
+
+          tests = Path('tests/dynamic_rela_glob_dat.rs')
+          text = tests.read_text()
+          text = text.replace('const DT_HASH: i64 = 4;\n', 'const DT_HASH: i64 = 4;\nconst DT_GNU_HASH: i64 = 0x6fff_fef5;\n', 1)
+          text = text.replace('fn build_fixture(dir: &Path) -> PathBuf {', 'fn build_fixture_with_hash_style(dir: &Path, hash_style: &str) -> PathBuf {', 1)
+          text = text.replace('            "--hash-style=sysv",\n', '            hash_style,\n', 1)
+          anchor = '    image\n}\n\nfn run_tool'
+          replacement = '''    image\n}\n\nfn build_fixture(dir: &Path) -> PathBuf {\n    build_fixture_with_hash_style(dir, "--hash-style=sysv")\n}\n\nfn run_tool'''
+          if anchor not in text:
+              raise SystemExit('fixture wrapper anchor not found')
+          text = text.replace(anchor, replacement, 1)
+          test_anchor = '#[test]\nfn rejects_out_of_range_dynamic_symbol_index() {'
+          new_test = r'''#[test]
+fn accepts_gnu_hash_only_image() {
+    let dir = temp_dir("glob-dat-gnu-hash");
+    let image = build_fixture_with_hash_style(&dir, "--hash-style=gnu");
+    let readelf = Command::new("readelf")
+        .args(["-dW", image.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(readelf.status.success());
+    let dynamic = String::from_utf8(readelf.stdout).unwrap();
+    assert!(dynamic.contains("GNU_HASH"), "{dynamic}");
+    assert!(!dynamic.lines().any(|line| line.contains("(HASH)")), "{dynamic}");
+
+    let output = run_tool(&[&image], "0x70000000");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8(output.stdout).unwrap().contains("R_X86_64_GLOB_DAT"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_malformed_gnu_hash_bloom_count() {
+    let dir = temp_dir("glob-dat-gnu-hash-bloom");
+    let image = build_fixture_with_hash_style(&dir, "--hash-style=gnu");
+    let mut bytes = fs::read(&image).unwrap();
+    let gnu_hash = map_vaddr(&bytes, dynamic_tag(&bytes, DT_GNU_HASH));
+    bytes[gnu_hash + 8..gnu_hash + 12].copy_from_slice(&3_u32.to_le_bytes());
+    let bad = dir.join("bad-gnu-hash.so");
+    fs::write(&bad, bytes).unwrap();
+    let output = run_tool(&[&bad], "0x70000000");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("non-zero power of two"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+'''
+          if test_anchor not in text:
+              raise SystemExit('test insertion anchor not found')
+          text = text.replace(test_anchor, new_test + test_anchor, 1)
+          tests.write_text(text)
+
+          doc = Path('docs/mini-elf-dynrela-glob-dat.md')
+          text = doc.read_text()
+          text = text.replace(
+              'It requires `DT_RELA`, `DT_RELASZ`, `DT_RELAENT`, `DT_HASH`, `DT_SYMTAB`, `DT_SYMENT`, `DT_STRTAB`, and `DT_STRSZ`, uses the SysV hash `nchain` value to bound the dynamic symbol table, and accepts the ELF64 entry sizes `24` for both RELA and symbols.',
+              'It requires `DT_RELA`, `DT_RELASZ`, `DT_RELAENT`, `DT_SYMTAB`, `DT_SYMENT`, `DT_STRTAB`, and `DT_STRSZ`, plus either `DT_HASH` or `DT_GNU_HASH` to bound the dynamic symbol table. SysV hash images use `nchain`; GNU-hash-only images derive a checked upper bound from the GNU hash header, bloom and bucket prefix, and bounded chain terminators. ELF64 RELA and symbol entry sizes remain fixed at `24`.'
+          )
+          text = text.replace(
+              '- a non-zero dynamic symbol index strictly below the `DT_HASH` symbol count;',
+              '- a non-zero dynamic symbol index strictly below the symbol count derived from `DT_HASH` or checked `DT_GNU_HASH` metadata;'
+          )
+          text = text.replace(
+              'Focused integration coverage builds a real GNU shared object with `as` and `ld --hash-style=sysv`, forces a GOT reference that GNU `ld` represents as `R_X86_64_GLOB_DAT`, and checks the relocation with `readelf -rW` plus the symbol value with `readelf -sW`. Malformed regressions cover out-of-range symbol indices, undefined symbols, non-writable relocation targets, non-zero RELA addends, and multi-input stdout atomicity.',
+              'Focused integration coverage builds real GNU shared objects with `as` and both `ld --hash-style=sysv` and `ld --hash-style=gnu`, forces a GOT reference that GNU `ld` represents as `R_X86_64_GLOB_DAT`, and checks the relocation with GNU `readelf`. Malformed regressions cover out-of-range symbol indices, undefined symbols, non-writable relocation targets, non-zero RELA addends, malformed GNU-hash bloom metadata, and multi-input stdout atomicity.'
+          )
+          text = text.replace('GNU-hash-only symbol-table bounding, ', '')
+          doc.write_text(text)
+          PY
+      - name: Verify
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+          cargo test --all-targets --all-features
+      - name: Commit verified slice and remove bootstrap
+        run: |
+          git config user.name LeiZ
+          git config user.email 52287354+Lei-TzuY@users.noreply.github.com
+          git add src/bin/mini-elf-dynrela-glob-dat.rs tests/dynamic_rela_glob_dat.rs docs/mini-elf-dynrela-glob-dat.md
+          git commit -m 'feat: accept GNU-hash-only GLOB_DAT images'
+          git rm .github/workflows/conquest-glob-dat-gnu-hash.yml
+          git commit -m 'chore: remove GLOB_DAT bootstrap workflow'
+          git push origin HEAD:feat/dynrela-glob-dat-gnu-hash
