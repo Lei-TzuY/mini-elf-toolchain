@@ -9,6 +9,7 @@ const PF_X: u32 = 1;
 const DT_NULL: i64 = 0;
 const DT_HASH: i64 = 4;
 const DT_RELA: i64 = 7;
+const DT_JMPREL: i64 = 23;
 const R_X86_64_TLSDESC: u32 = 36;
 
 fn temp(label: &str) -> PathBuf {
@@ -27,7 +28,7 @@ fn fixture(dir: &Path) -> PathBuf {
     let s = dir.join("f.s");
     let o = dir.join("f.o");
     let so = dir.join("f.so");
-    fs::write(&s,".section .tdata,\"awT\",@progbits\n.globl tlsvar\n.type tlsvar,@tls_object\n.size tlsvar,8\ntlsvar:\n.quad 0\n.section .data.rel,\"aw\",@progbits\n.globl desc\ndesc:\n.quad 0\n.quad 0\n.reloc desc, R_X86_64_TLSDESC, tlsvar\n").unwrap();
+    fs::write(&s,".section .tdata,\"awT\",@progbits\n.globl tlsvar\n.type tlsvar,@tls_object\n.size tlsvar,8\ntlsvar:\n.quad 0\n.text\n.globl use_tls\n.type use_tls,@function\nuse_tls:\nleaq tlsvar@TLSDESC(%rip), %rax\ncall *tlsvar@TLSCALL(%rax)\nret\n").unwrap();
     assert!(Command::new("as")
         .args(["-o", o.to_str().unwrap(), s.to_str().unwrap()])
         .status()
@@ -110,12 +111,13 @@ fn tag(b: &[u8], want: i64) -> u64 {
     panic!("missing tag")
 }
 fn rela(b: &[u8]) -> usize {
-    let mut c = map(b, tag(b, DT_RELA));
+    let start = std::panic::catch_unwind(|| tag(b, DT_JMPREL)).unwrap_or_else(|_| tag(b, DT_RELA));
+    let mut c = map(b, start);
     loop {
         if u64at(b, c + 8) as u32 == R_X86_64_TLSDESC {
             return c;
         }
-        c += 24
+        c += 24;
     }
 }
 fn count(b: &[u8]) -> u64 {

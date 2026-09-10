@@ -9,6 +9,7 @@ const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const PF_W: u32 = 2;
 const DT_NULL: i64 = 0;
+const DT_PLTRELSZ: i64 = 2;
 const DT_HASH: i64 = 4;
 const DT_STRTAB: i64 = 5;
 const DT_SYMTAB: i64 = 6;
@@ -17,6 +18,8 @@ const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
 const DT_STRSZ: i64 = 10;
 const DT_SYMENT: i64 = 11;
+const DT_PLTREL: i64 = 20;
+const DT_JMPREL: i64 = 23;
 const R_X86_64_TLSDESC: u32 = 36;
 const STT_TLS: u8 = 6;
 const SHN_UNDEF: u16 = 0;
@@ -46,6 +49,9 @@ struct Dyn {
     relaent: Option<u64>,
     strsz: Option<u64>,
     syment: Option<u64>,
+    pltrelsz: Option<u64>,
+    pltrel: Option<u64>,
+    jmprel: Option<u64>,
 }
 
 fn main() -> ExitCode {
@@ -162,6 +168,7 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
         }
         let slot = match tag {
             DT_HASH => Some((&mut d.hash, "DT_HASH")),
+            DT_PLTRELSZ => Some((&mut d.pltrelsz, "DT_PLTRELSZ")),
             DT_STRTAB => Some((&mut d.strtab, "DT_STRTAB")),
             DT_SYMTAB => Some((&mut d.symtab, "DT_SYMTAB")),
             DT_RELA => Some((&mut d.rela, "DT_RELA")),
@@ -169,6 +176,8 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
             DT_RELAENT => Some((&mut d.relaent, "DT_RELAENT")),
             DT_STRSZ => Some((&mut d.strsz, "DT_STRSZ")),
             DT_SYMENT => Some((&mut d.syment, "DT_SYMENT")),
+            DT_PLTREL => Some((&mut d.pltrel, "DT_PLTREL")),
+            DT_JMPREL => Some((&mut d.jmprel, "DT_JMPREL")),
             _ => None,
         };
         if let Some((s, n)) = slot {
@@ -182,9 +191,20 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
     }
     let req =
         |v: Option<u64>, n: &str| v.ok_or_else(|| format!("PT_DYNAMIC is missing required {n}"));
-    let rela = req(d.rela, "DT_RELA")?;
-    let relasz = req(d.relasz, "DT_RELASZ")?;
-    let relaent = req(d.relaent, "DT_RELAENT")?;
+    let (rela, relasz, relaent) = if let Some(jmprel) = d.jmprel {
+        let pltrelsz = req(d.pltrelsz, "DT_PLTRELSZ")?;
+        let pltrel = req(d.pltrel, "DT_PLTREL")?;
+        if pltrel != DT_RELA as u64 {
+            return Err("R_X86_64_TLSDESC requires a RELA-form DT_JMPREL table".into());
+        }
+        (jmprel, pltrelsz, RELAENT as u64)
+    } else {
+        (
+            req(d.rela, "DT_RELA")?,
+            req(d.relasz, "DT_RELASZ")?,
+            req(d.relaent, "DT_RELAENT")?,
+        )
+    };
     let hash = req(d.hash, "DT_HASH")?;
     let symtab = req(d.symtab, "DT_SYMTAB")?;
     let syment = req(d.syment, "DT_SYMENT")?;
