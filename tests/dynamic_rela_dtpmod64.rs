@@ -26,7 +26,7 @@ fn fixture(dir: &Path) -> PathBuf {
     let s = dir.join("f.s");
     let o = dir.join("f.o");
     let so = dir.join("f.so");
-    fs::write(&s,".section .tdata,\"awT\",@progbits\n.globl tlsvar\n.type tlsvar,@tls_object\n.size tlsvar,8\ntlsvar:\n.quad 0\n.data\n.globl slot\n.type slot,@object\n.size slot,8\nslot:\n.quad tlsvar@DTPMOD\n").unwrap();
+    fs::write(&s,".section .tdata,\"awT\",@progbits\n.globl tlsvar\n.type tlsvar,@tls_object\n.size tlsvar,8\ntlsvar:\n.quad 0\n.text\n.globl probe\n.type probe,@function\nprobe:\nleaq tlsvar@tlsgd(%rip), %rdi\ncall __tls_get_addr@PLT\nret\n").unwrap();
     assert!(Command::new("as")
         .args(["-o", o.to_str().unwrap(), s.to_str().unwrap()])
         .status()
