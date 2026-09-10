@@ -37,7 +37,12 @@ fn fixture(dir: &Path) -> PathBuf {
     )
     .unwrap();
     assert!(Command::new("as")
-        .args(["--64", "-o", object.to_str().unwrap(), source.to_str().unwrap()])
+        .args([
+            "--64",
+            "-o",
+            object.to_str().unwrap(),
+            source.to_str().unwrap()
+        ])
         .status()
         .unwrap()
         .success());
@@ -190,8 +195,7 @@ fn rejects_invalid_symbol_index() {
     let mut b = fs::read(&image).unwrap();
     let r = rela_offset(&b);
     let n = symbol_count(&b);
-    b[r + 8..r + 16]
-        .copy_from_slice(&((n << 32) | u64::from(R_X86_64_SIZE64)).to_le_bytes());
+    b[r + 8..r + 16].copy_from_slice(&((n << 32) | u64::from(R_X86_64_SIZE64)).to_le_bytes());
     let p = d.join("bad.so");
     fs::write(&p, b).unwrap();
     let o = run(&[&p]);
@@ -253,8 +257,7 @@ fn malformed_later_input_keeps_stdout_atomic() {
     let mut b = fs::read(&good).unwrap();
     let r = rela_offset(&b);
     let n = symbol_count(&b);
-    b[r + 8..r + 16]
-        .copy_from_slice(&((n << 32) | u64::from(R_X86_64_SIZE64)).to_le_bytes());
+    b[r + 8..r + 16].copy_from_slice(&((n << 32) | u64::from(R_X86_64_SIZE64)).to_le_bytes());
     let bad = d.join("bad.so");
     fs::write(&bad, b).unwrap();
     let o = run(&[&good, &bad]);

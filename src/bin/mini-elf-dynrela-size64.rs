@@ -73,11 +73,20 @@ fn inspect(bytes: &[u8]) -> Result<String, String> {
         return Err("requires x86-64 ET_DYN input".into());
     }
     let phdrs = program_headers(bytes)?;
-    let dynamic_headers: Vec<_> = phdrs.iter().copied().filter(|h| h.kind == PT_DYNAMIC).collect();
+    let dynamic_headers: Vec<_> = phdrs
+        .iter()
+        .copied()
+        .filter(|h| h.kind == PT_DYNAMIC)
+        .collect();
     if dynamic_headers.len() != 1 {
         return Err("requires exactly one PT_DYNAMIC".into());
     }
-    let dynamic = file_range(bytes, dynamic_headers[0].off, dynamic_headers[0].filesz, "PT_DYNAMIC")?;
+    let dynamic = file_range(
+        bytes,
+        dynamic_headers[0].off,
+        dynamic_headers[0].filesz,
+        "PT_DYNAMIC",
+    )?;
     if dynamic.len() % 16 != 0 {
         return Err("PT_DYNAMIC size is not a multiple of 16".into());
     }
@@ -133,7 +142,14 @@ fn inspect(bytes: &[u8]) -> Result<String, String> {
     if symbol_count == 0 {
         return Err("DT_HASH reports zero symbols".into());
     }
-    let symbol_bytes = map_file(bytes, &phdrs, symtab, symbol_count.checked_mul(24).ok_or("dynsym size overflow")?, 0, "DT_SYMTAB")?;
+    let symbol_bytes = map_file(
+        bytes,
+        &phdrs,
+        symtab,
+        symbol_count.checked_mul(24).ok_or("dynsym size overflow")?,
+        0,
+        "DT_SYMTAB",
+    )?;
     let string_bytes = map_file(bytes, &phdrs, strtab, strsz, 0, "DT_STRTAB")?;
     let rela_bytes = map_file(bytes, &phdrs, rela, relasz, 0, "DT_RELA")?;
 
@@ -150,22 +166,36 @@ fn inspect(bytes: &[u8]) -> Result<String, String> {
         }
         let symbol_index = info >> 32;
         if symbol_index == 0 || symbol_index >= symbol_count {
-            return Err(format!("R_X86_64_SIZE64 relocation {index} has invalid symbol index {symbol_index}"));
+            return Err(format!(
+                "R_X86_64_SIZE64 relocation {index} has invalid symbol index {symbol_index}"
+            ));
         }
         map_memory(&phdrs, offset, 8, PF_W, "SIZE64 target")?;
-        let symbol_offset = usize::try_from(symbol_index.checked_mul(24).ok_or("symbol offset overflow")?)
-            .map_err(|_| "symbol offset too large")?;
-        let symbol = symbol_bytes.get(symbol_offset..symbol_offset + 24).ok_or("dynamic symbol exceeds DT_SYMTAB")?;
+        let symbol_offset = usize::try_from(
+            symbol_index
+                .checked_mul(24)
+                .ok_or("symbol offset overflow")?,
+        )
+        .map_err(|_| "symbol offset too large")?;
+        let symbol = symbol_bytes
+            .get(symbol_offset..symbol_offset + 24)
+            .ok_or("dynamic symbol exceeds DT_SYMTAB")?;
         let name_offset = read_u32(symbol, 0) as usize;
         let symbol_info = symbol[4];
         let section_index = read_u16(symbol, 6);
         let symbol_size = read_u64(symbol, 16);
         if name_offset >= string_bytes.len() {
-            return Err(format!("dynamic symbol {symbol_index} name offset is outside DT_STRTAB"));
+            return Err(format!(
+                "dynamic symbol {symbol_index} name offset is outside DT_STRTAB"
+            ));
         }
         let tail = &string_bytes[name_offset..];
-        let nul = tail.iter().position(|b| *b == 0).ok_or("dynamic symbol name is not NUL-terminated")?;
-        let name = std::str::from_utf8(&tail[..nul]).map_err(|_| "dynamic symbol name is not UTF-8")?;
+        let nul = tail
+            .iter()
+            .position(|b| *b == 0)
+            .ok_or("dynamic symbol name is not NUL-terminated")?;
+        let name =
+            std::str::from_utf8(&tail[..nul]).map_err(|_| "dynamic symbol name is not UTF-8")?;
         let addend = read_i64(entry, 16);
         if section_index == 0 {
             out.push_str(&format!("  index={index} symbol={symbol_index}:{name} binding=external target={offset:#x} addend={addend} formula=Z+A\n"));
@@ -177,7 +207,9 @@ fn inspect(bytes: &[u8]) -> Result<String, String> {
                 return Err(format!("R_X86_64_SIZE64 relocation {index} references TLS; TLS semantics are outside this bounded slice"));
             }
             let value = i128::from(symbol_size) + i128::from(addend);
-            let value = u64::try_from(value).map_err(|_| format!("R_X86_64_SIZE64 relocation {index} result does not fit u64"))?;
+            let value = u64::try_from(value).map_err(|_| {
+                format!("R_X86_64_SIZE64 relocation {index} result does not fit u64")
+            })?;
             out.push_str(&format!("  index={index} symbol={symbol_index}:{name} binding=same-image target={offset:#x} size={symbol_size} addend={addend} result={value}\n"));
         }
         found += 1;
@@ -195,7 +227,13 @@ fn program_headers(bytes: &[u8]) -> Result<Vec<Phdr>, String> {
     if entry_size != 56 {
         return Err("unsupported program-header size".into());
     }
-    let end = offset.checked_add(count.checked_mul(entry_size).ok_or("program-header size overflow")?).ok_or("program-header range overflow")?;
+    let end = offset
+        .checked_add(
+            count
+                .checked_mul(entry_size)
+                .ok_or("program-header size overflow")?,
+        )
+        .ok_or("program-header range overflow")?;
     if end > bytes.len() {
         return Err("program-header table exceeds input".into());
     }
@@ -214,7 +252,10 @@ fn program_headers(bytes: &[u8]) -> Result<Vec<Phdr>, String> {
             return Err(format!("program header {index} filesz exceeds memsz"));
         }
         file_range(bytes, header.off, header.filesz, "program header")?;
-        header.va.checked_add(header.memsz).ok_or("segment address overflow")?;
+        header
+            .va
+            .checked_add(header.memsz)
+            .ok_or("segment address overflow")?;
         headers.push(header);
     }
     Ok(headers)
@@ -223,26 +264,60 @@ fn program_headers(bytes: &[u8]) -> Result<Vec<Phdr>, String> {
 fn file_range<'a>(bytes: &'a [u8], off: u64, size: u64, label: &str) -> Result<&'a [u8], String> {
     let start = usize::try_from(off).map_err(|_| format!("{label} offset too large"))?;
     let width = usize::try_from(size).map_err(|_| format!("{label} size too large"))?;
-    let end = start.checked_add(width).ok_or_else(|| format!("{label} range overflow"))?;
-    bytes.get(start..end).ok_or_else(|| format!("{label} exceeds input"))
+    let end = start
+        .checked_add(width)
+        .ok_or_else(|| format!("{label} range overflow"))?;
+    bytes
+        .get(start..end)
+        .ok_or_else(|| format!("{label} exceeds input"))
 }
 
-fn map_file<'a>(bytes: &'a [u8], headers: &[Phdr], address: u64, size: u64, flags: u32, label: &str) -> Result<&'a [u8], String> {
-    let end = address.checked_add(size).ok_or_else(|| format!("{label} address overflow"))?;
-    for h in headers.iter().filter(|h| h.kind == PT_LOAD && h.flags & flags == flags) {
-        let load_end = h.va.checked_add(h.filesz).ok_or_else(|| format!("{label} segment range overflow"))?;
+fn map_file<'a>(
+    bytes: &'a [u8],
+    headers: &[Phdr],
+    address: u64,
+    size: u64,
+    flags: u32,
+    label: &str,
+) -> Result<&'a [u8], String> {
+    let end = address
+        .checked_add(size)
+        .ok_or_else(|| format!("{label} address overflow"))?;
+    for h in headers
+        .iter()
+        .filter(|h| h.kind == PT_LOAD && h.flags & flags == flags)
+    {
+        let load_end =
+            h.va.checked_add(h.filesz)
+                .ok_or_else(|| format!("{label} segment range overflow"))?;
         if address >= h.va && end <= load_end {
-            let file_offset = h.off.checked_add(address - h.va).ok_or_else(|| format!("{label} file offset overflow"))?;
+            let file_offset = h
+                .off
+                .checked_add(address - h.va)
+                .ok_or_else(|| format!("{label} file offset overflow"))?;
             return file_range(bytes, file_offset, size, label);
         }
     }
     Err(format!("{label} is not file-backed by PT_LOAD"))
 }
 
-fn map_memory(headers: &[Phdr], address: u64, size: u64, flags: u32, label: &str) -> Result<(), String> {
-    let end = address.checked_add(size).ok_or_else(|| format!("{label} address overflow"))?;
-    for h in headers.iter().filter(|h| h.kind == PT_LOAD && h.flags & flags == flags) {
-        let load_end = h.va.checked_add(h.memsz).ok_or_else(|| format!("{label} segment range overflow"))?;
+fn map_memory(
+    headers: &[Phdr],
+    address: u64,
+    size: u64,
+    flags: u32,
+    label: &str,
+) -> Result<(), String> {
+    let end = address
+        .checked_add(size)
+        .ok_or_else(|| format!("{label} address overflow"))?;
+    for h in headers
+        .iter()
+        .filter(|h| h.kind == PT_LOAD && h.flags & flags == flags)
+    {
+        let load_end =
+            h.va.checked_add(h.memsz)
+                .ok_or_else(|| format!("{label} segment range overflow"))?;
         if address >= h.va && end <= load_end {
             return Ok(());
         }
