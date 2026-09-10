@@ -141,7 +141,10 @@ fn accepts_gnu_hash_only_pc64_image() {
         .unwrap();
     assert!(relocations.status.success());
     let relocation_text = String::from_utf8(relocations.stdout).unwrap();
-    assert!(relocation_text.contains("R_X86_64_PC64"), "{relocation_text}");
+    assert!(
+        relocation_text.contains("R_X86_64_PC64"),
+        "{relocation_text}"
+    );
 
     let output = run(&image);
     assert!(

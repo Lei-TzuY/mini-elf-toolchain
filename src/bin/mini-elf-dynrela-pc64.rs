@@ -260,14 +260,7 @@ fn gnu_hash_symbol_count(bytes: &[u8], phdrs: &[Phdr], address: u64) -> Result<u
         .checked_add(bloom_bytes)
         .and_then(|value| value.checked_add(bucket_bytes))
         .ok_or_else(|| "DT_GNU_HASH prefix byte size overflows u64".to_owned())?;
-    let prefix = map_file(
-        bytes,
-        phdrs,
-        address,
-        prefix_size,
-        0,
-        "DT_GNU_HASH prefix",
-    )?;
+    let prefix = map_file(bytes, phdrs, address, prefix_size, 0, "DT_GNU_HASH prefix")?;
     let bucket_start = usize::try_from(
         16u64
             .checked_add(bloom_bytes)
@@ -396,10 +389,9 @@ fn map_file<'a>(
         .iter()
         .filter(|h| h.kind == PT_LOAD && h.flags & flags == flags)
     {
-        let load_end = h
-            .va
-            .checked_add(h.filesz)
-            .ok_or_else(|| format!("{label} segment range overflow"))?;
+        let load_end =
+            h.va.checked_add(h.filesz)
+                .ok_or_else(|| format!("{label} segment range overflow"))?;
         if address >= h.va && end <= load_end {
             let file_offset = h
                 .off
@@ -425,10 +417,9 @@ fn map_memory(
         .iter()
         .filter(|h| h.kind == PT_LOAD && h.flags & flags == flags)
     {
-        let load_end = h
-            .va
-            .checked_add(h.memsz)
-            .ok_or_else(|| format!("{label} segment range overflow"))?;
+        let load_end =
+            h.va.checked_add(h.memsz)
+                .ok_or_else(|| format!("{label} segment range overflow"))?;
         if address >= h.va && end <= load_end {
             return Ok(());
         }
