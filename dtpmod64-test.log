@@ -1,0 +1,62 @@
+[1m[92m   Compiling[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 15.50s
+[1m[92m     Running[0m tests/dynamic_rela_dtpmod64.rs (target/debug/deps/dynamic_rela_dtpmod64-c70fb5cfa1030ef2)
+
+running 6 tests
+/tmp/mini-elf-toolchain-dtpmod-overflow-3177-1789031396613996475/f.s: /tmp/mini-elf-toolchain-dtpmod-addend-3177-1789031396613973737/f.s: Assembler messages:
+Assembler messages:
+/tmp/mini-elf-toolchain-dtpmod-target-3177-1789031396613963638/f.s: /tmp/mini-elf-toolchain-dtpmod-overflow-3177-1789031396613996475/f.s:12: Error: junk at end of line, first unrecognized characte/tmp/mini-elf-toolchain-dtpmod-addend-3177-1789031396613973737/f.s:12: Error: junk at end of line, first unrecognized character Assembler messages:
+r is `@'
+is `@'
+/tmp/mini-elf-toolchain-dtpmod-target-3177-1789031396613963638/f.s:12: Error: junk at end of line, first unrecognized character is `@'
+/tmp/mini-elf-toolchain-dtpmod-index-3177-1789031396613915845/f.s: Assembler messages:
+/tmp/mini-elf-toolchain-dtpmod-index-3177-1789031396613915845/f.s:12: Error: junk at end of line, first unrecognized character is `@'
+
+thread 'rejects_bad_symbol_index' (3178) panicked at tests/dynamic_rela_dtpmod64.rs:30:5:
+assertion failed: Command::new("as").args(["-o", o.to_str().unwrap(),
+                        s.to_str().unwrap()]).status().unwrap().success()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+thread 'rejects_nonzero_addend' (3180) panicked at tests/dynamic_rela_dtpmod64.rs:30:5:
+assertion failed: Command::new("as").args(["-o", o.to_str().unwrap(),
+                        s.to_str().unwrap()]).status().unwrap().success()
+
+thread 'rejects_nonwritable_target' (3179) panicked at tests/dynamic_rela_dtpmod64.rs:30:5:
+assertion failed: Command::new("as").args(["-o", o.to_str().unwrap(),
+                        s.to_str().unwrap()]).status().unwrap().success()
+test rejects_bad_symbol_index ... FAILED
+
+thread 'rejects_runtime_target_overflow' (3181) panicked at tests/dynamic_rela_dtpmod64.rs:30:5:
+assertion failed: Command::new("as").args(["-o", o.to_str().unwrap(),
+                        s.to_str().unwrap()]).status().unwrap().success()
+test rejects_nonwritable_target ... FAILED
+test rejects_nonzero_addend ... FAILED
+test rejects_runtime_target_overflow ... FAILED
+/tmp/mini-elf-toolchain-dtpmod-zero-3177-1789031396680439350/f.s: Assembler messages:
+/tmp/mini-elf-toolchain-dtpmod-zero-3177-1789031396680439350/f.s:12: Error: junk at end of line, first unrecognized character is `@'
+/tmp/mini-elf-toolchain-dtpmod-good-3177-1789031396680462655/f.s: Assembler messages:
+/tmp/mini-elf-toolchain-dtpmod-good-3177-1789031396680462655/f.s:12: Error: junk at end of line, first unrecognized character is `@'
+
+thread 'rejects_zero_module_id' (3186) panicked at tests/dynamic_rela_dtpmod64.rs:30:5:
+assertion failed: Command::new("as").args(["-o", o.to_str().unwrap(),
+                        s.to_str().unwrap()]).status().unwrap().success()
+
+thread 'validates_gnu_dtpmodule64' (3187) panicked at tests/dynamic_rela_dtpmod64.rs:30:5:
+assertion failed: Command::new("as").args(["-o", o.to_str().unwrap(),
+                        s.to_str().unwrap()]).status().unwrap().success()
+test rejects_zero_module_id ... FAILED
+test validates_gnu_dtpmodule64 ... FAILED
+
+failures:
+
+failures:
+    rejects_bad_symbol_index
+    rejects_nonwritable_target
+    rejects_nonzero_addend
+    rejects_runtime_target_overflow
+    rejects_zero_module_id
+    validates_gnu_dtpmodule64
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+[1m[91merror[0m: test failed, to rerun pass `--test dynamic_rela_dtpmod64`
