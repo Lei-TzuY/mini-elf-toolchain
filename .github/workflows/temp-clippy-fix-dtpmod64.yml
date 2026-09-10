@@ -1,0 +1,29 @@
+name: Temporary clippy fix DTPMOD64
+on:
+  push:
+    branches:
+      - feat/dynrela-dtpmod64
+jobs:
+  clippy-fix:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy,rustfmt
+      - run: cargo clippy --all-targets --all-features --fix --allow-dirty --allow-staged -- -D warnings
+      - run: cargo fmt --all
+      - name: Commit clippy fixes
+        run: |
+          if git diff --quiet; then
+            echo "No clippy fixes required"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/bin/mini-elf-dynrela-dtpmod64.rs tests/dynamic_rela_dtpmod64.rs
+          git commit -m "fix: satisfy clippy for DTPMOD64 validator"
+          git push
