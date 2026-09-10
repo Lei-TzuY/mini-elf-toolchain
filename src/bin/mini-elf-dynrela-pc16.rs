@@ -148,9 +148,7 @@ fn inspect(bytes: &[u8]) -> Result<String, String> {
         bytes,
         &phdrs,
         symtab,
-        symbol_count
-            .checked_mul(24)
-            .ok_or("dynsym size overflow")?,
+        symbol_count.checked_mul(24).ok_or("dynsym size overflow")?,
         0,
         "DT_SYMTAB",
     )?;
@@ -199,8 +197,8 @@ fn inspect(bytes: &[u8]) -> Result<String, String> {
             .iter()
             .position(|byte| *byte == 0)
             .ok_or("dynamic symbol name is not NUL-terminated")?;
-        let name = std::str::from_utf8(&tail[..nul])
-            .map_err(|_| "dynamic symbol name is not UTF-8")?;
+        let name =
+            std::str::from_utf8(&tail[..nul]).map_err(|_| "dynamic symbol name is not UTF-8")?;
         let addend = read_i64(entry, 16);
 
         if section_index == 0 {
@@ -220,9 +218,8 @@ fn inspect(bytes: &[u8]) -> Result<String, String> {
             }
             map_memory(&phdrs, symbol_value, 1, 0, "PC16 symbol")?;
             let value = i128::from(symbol_value) + i128::from(addend) - i128::from(offset);
-            i16::try_from(value).map_err(|_| {
-                format!("R_X86_64_PC16 relocation {index} result does not fit i16")
-            })?;
+            i16::try_from(value)
+                .map_err(|_| format!("R_X86_64_PC16 relocation {index} result does not fit i16"))?;
             out.push_str(&format!(
                 "  index={index} symbol={symbol_index}:{name} binding=same-image target={offset:#x} addend={addend} result={value}\n"
             ));
