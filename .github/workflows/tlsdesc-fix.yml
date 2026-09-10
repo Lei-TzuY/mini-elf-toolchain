@@ -18,9 +18,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Patch GNU TLSDESC handling
+      - name: Diagnose repair
         shell: bash
         run: |
+          set +e
+          exec > >(tee tlsdesc-fix.log) 2>&1
           python3 - <<'PY'
           from pathlib import Path
           p=Path('src/bin/mini-elf-dynrela-tlsdesc.rs')
@@ -38,7 +40,6 @@ jobs:
 
           p=Path('tests/dynamic_rela_tlsdesc.rs')
           s=p.read_text()
-          s=s.replace('const DT_NULL: i64 = 0;\n', 'const DT_NULL: i64 = 0;\nconst DT_PLTRELSZ: i64 = 2;\n')
           s=s.replace('const DT_RELA: i64 = 7;\n', 'const DT_RELA: i64 = 7;\nconst DT_JMPREL: i64 = 23;\n')
           old='.section .data.rel,\\"aw\\",@progbits\\n.globl desc\\ndesc:\\n.quad 0\\n.quad 0\\n.reloc desc, R_X86_64_TLSDESC, tlsvar\\n'
           new='.text\\n.globl use_tls\\n.type use_tls,@function\\nuse_tls:\\nleaq tlsvar@TLSDESC(%rip), %rax\\ncall *tlsvar@TLSCALL(%rax)\\nret\\n'
@@ -50,13 +51,16 @@ jobs:
           s=s.replace(old,new)
           p.write_text(s)
           PY
-          cargo fmt --all
-          cargo clippy --all-targets --all-features -- -D warnings
-          cargo test --test dynamic_rela_tlsdesc -- --nocapture
-      - name: Commit repair
+          p=$?
+          if [ $p -eq 0 ]; then cargo fmt --all; p=$?; fi
+          if [ $p -eq 0 ]; then cargo clippy --all-targets --all-features -- -D warnings; p=$?; fi
+          if [ $p -eq 0 ]; then cargo test --test dynamic_rela_tlsdesc -- --nocapture; p=$?; fi
+          echo "$p" > tlsdesc-fix.status
+          exit 0
+      - name: Commit diagnostics
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/bin/mini-elf-dynrela-tlsdesc.rs tests/dynamic_rela_tlsdesc.rs
-          git commit -m "fix: validate GNU TLSDESC PLT relocations"
+          git add tlsdesc-fix.log tlsdesc-fix.status
+          git commit -m "ci: capture TLSDESC repair diagnostics"
           git push origin HEAD:feat/dynrela-tlsdesc
