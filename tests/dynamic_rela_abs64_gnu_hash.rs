@@ -1,0 +1,185 @@
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const PT_LOAD: u32 = 1;
+const PT_DYNAMIC: u32 = 2;
+const DT_NULL: i64 = 0;
+const DT_GNU_HASH: i64 = 0x6fff_fef5;
+
+fn temp_dir(label: &str) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "mini-elf-toolchain-{label}-{}-{stamp}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&path).unwrap();
+    path
+}
+
+fn build_fixture(dir: &Path) -> PathBuf {
+    let asm = dir.join("fixture.s");
+    let obj = dir.join("fixture.o");
+    let image = dir.join("fixture.so");
+    fs::write(
+        &asm,
+        ".text\n.globl dummy\n.type dummy,@function\ndummy:\nret\n.size dummy, .-dummy\n.data\n.globl ptr\n.type ptr,@object\n.size ptr,8\nptr:\n.quad target\n.globl target\n.type target,@object\n.size target,8\ntarget:\n.quad 0x1122334455667788\n",
+    )
+    .unwrap();
+    assert!(Command::new("as")
+        .args(["-o", obj.to_str().unwrap(), asm.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("ld")
+        .args([
+            "-shared",
+            "--hash-style=gnu",
+            "-o",
+            image.to_str().unwrap(),
+            obj.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap()
+        .success());
+    image
+}
+
+fn run_tool(image: &Path, bias: &str) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrela-abs64"))
+        .arg("--load-bias")
+        .arg(bias)
+        .arg(image)
+        .output()
+        .unwrap()
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn read_i64(bytes: &[u8], offset: usize) -> i64 {
+    i64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn program_headers(bytes: &[u8]) -> Vec<(u32, u64, u64, u64)> {
+    let phoff = read_u64(bytes, 32) as usize;
+    let phentsize = usize::from(read_u16(bytes, 54));
+    let phnum = usize::from(read_u16(bytes, 56));
+    (0..phnum)
+        .map(|index| {
+            let offset = phoff + index * phentsize;
+            (
+                read_u32(bytes, offset),
+                read_u64(bytes, offset + 8),
+                read_u64(bytes, offset + 16),
+                read_u64(bytes, offset + 32),
+            )
+        })
+        .collect()
+}
+
+fn map_vaddr(bytes: &[u8], address: u64) -> usize {
+    for (kind, offset, vaddr, filesz) in program_headers(bytes) {
+        if kind == PT_LOAD && address >= vaddr && address < vaddr + filesz {
+            return (offset + address - vaddr) as usize;
+        }
+    }
+    panic!("address {address:#x} is not file backed");
+}
+
+fn dynamic_tag(bytes: &[u8], wanted: i64) -> u64 {
+    let dynamic = program_headers(bytes)
+        .into_iter()
+        .find(|header| header.0 == PT_DYNAMIC)
+        .unwrap();
+    let mut cursor = dynamic.1 as usize;
+    let end = (dynamic.1 + dynamic.3) as usize;
+    while cursor + 16 <= end {
+        let tag = read_i64(bytes, cursor);
+        let value = read_u64(bytes, cursor + 8);
+        if tag == wanted {
+            return value;
+        }
+        if tag == DT_NULL {
+            break;
+        }
+        cursor += 16;
+    }
+    panic!("missing dynamic tag {wanted}");
+}
+
+#[test]
+fn accepts_gnu_hash_only_abs64_image() {
+    let dir = temp_dir("abs64-gnu-hash");
+    let image = build_fixture(&dir);
+
+    let dynamic = Command::new("readelf")
+        .args(["-dW", image.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(dynamic.status.success());
+    let dynamic_text = String::from_utf8(dynamic.stdout).unwrap();
+    assert!(dynamic_text.contains("GNU_HASH"), "{dynamic_text}");
+    assert!(
+        !dynamic_text.lines().any(|line| line.contains("(HASH)")),
+        "{dynamic_text}"
+    );
+
+    let relocations = Command::new("readelf")
+        .args(["-rW", image.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(relocations.status.success());
+    let relocation_text = String::from_utf8(relocations.stdout).unwrap();
+    assert!(relocation_text.contains("R_X86_64_64"), "{relocation_text}");
+
+    let output = run_tool(&image, "0x70000000");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("R_X86_64_64"));
+    assert!(stdout.contains(":target "));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_malformed_gnu_hash_bloom_count() {
+    let dir = temp_dir("abs64-gnu-hash-bloom");
+    let image = build_fixture(&dir);
+    let mut bytes = fs::read(&image).unwrap();
+    let gnu_hash = map_vaddr(&bytes, dynamic_tag(&bytes, DT_GNU_HASH));
+    bytes[gnu_hash + 8..gnu_hash + 12].copy_from_slice(&3_u32.to_le_bytes());
+    let bad = dir.join("bad-gnu-hash.so");
+    fs::write(&bad, bytes).unwrap();
+
+    let output = run_tool(&bad, "0x70000000");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("non-zero power of two"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_runtime_target_overflow_with_gnu_hash() {
+    let dir = temp_dir("abs64-gnu-hash-overflow");
+    let image = build_fixture(&dir);
+    let output = run_tool(&image, "0xffffffffffffffff");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("runtime target overflows u64"));
+    fs::remove_dir_all(dir).unwrap();
+}
