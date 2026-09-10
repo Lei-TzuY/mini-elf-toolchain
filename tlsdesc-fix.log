@@ -1,0 +1,16 @@
+[1m[92m    Checking[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[92m    Finished[0m `dev` profile [unoptimized + debuginfo] target(s) in 7.67s
+[1m[92m   Compiling[0m mini-elf-toolchain v0.1.0 (/home/runner/work/mini-elf-toolchain/mini-elf-toolchain)
+[1m[92m    Finished[0m `test` profile [unoptimized + debuginfo] target(s) in 7.13s
+[1m[92m     Running[0m tests/dynamic_rela_tlsdesc.rs (target/debug/deps/dynamic_rela_tlsdesc-5faabd533a155a97)
+
+running 6 tests
+test rejects_runtime_descriptor_overflow ... ok
+test malformed_later_input_keeps_stdout_atomic ... ok
+test rejects_nonwritable_descriptor ... ok
+test rejects_bad_symbol_index ... ok
+test rejects_tls_offset_underflow ... ok
+test validates_gnu_tlsdesc ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.29s
+
