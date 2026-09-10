@@ -42,15 +42,27 @@ jobs:
           s = s.replace('mini-elf-dynrela-u16', 'mini-elf-dynrela-u8')
           s = s.replace('R_X86_64_16', 'R_X86_64_8')
           s = s.replace('const R_X86_64_8: u32 = 12;', 'const R_X86_64_8: u32 = 14;')
+          s = s.replace('const DT_HASH: i64 = 4;\n', 'const DT_HASH: i64 = 4;\nconst DT_SYMTAB: i64 = 6;\n')
+          old = '''            bytes[cursor + 8..cursor + 16]\n                .copy_from_slice(&((symbol << 32) | u64::from(R_X86_64_8)).to_le_bytes());\n            break;'''
+          new = '''            bytes[cursor + 8..cursor + 16]\n                .copy_from_slice(&((symbol << 32) | u64::from(R_X86_64_8)).to_le_bytes());\n            let symtab = map_vaddr(&bytes, dynamic_tag(&bytes, DT_SYMTAB));\n            let symbol_value = read_u64(&bytes, symtab + symbol as usize * 24 + 8);\n            let addend = 0x80_i64 - i64::try_from(symbol_value).unwrap();\n            bytes[cursor + 16..cursor + 24].copy_from_slice(&addend.to_le_bytes());\n            break;'''
+          if old not in s:
+              raise SystemExit('fixture relocation anchor not found')
+          s = s.replace(old, new)
           s = s.replace('validates_gnu_recognized_16_relocation', 'validates_gnu_recognized_8_relocation')
           s = s.replace('rejects_result_outside_unsigned_16_bits', 'rejects_result_outside_unsigned_8_bits')
           s = s.replace('unsigned 16 bits', 'unsigned 8 bits')
           s = s.replace('"0x10000"', '"0x100"')
           s = s.replace('u16-good', 'u8-good').replace('u16-negative', 'u8-negative').replace('u16-index', 'u8-index').replace('u16-target', 'u8-target').replace('u16-overflow', 'u8-overflow').replace('u16-atomic', 'u8-atomic')
+          old = '''    bytes[rela + 16..rela + 24].copy_from_slice(&(-1_i64).to_le_bytes());\n    let patched = dir.join("negative.so");'''
+          new = '''    let addend = read_i64(&bytes, rela + 16) - 1;\n    assert!(addend < 0);\n    bytes[rela + 16..rela + 24].copy_from_slice(&addend.to_le_bytes());\n    let patched = dir.join("negative.so");'''
+          if old not in s:
+              raise SystemExit('negative addend anchor not found')
+          s = s.replace(old, new)
+          s = s.replace('assert!(String::from_utf8_lossy(&output.stdout).contains("addend=-1"));', 'assert!(String::from_utf8_lossy(&output.stdout).contains("result=127"));')
           p.write_text(s)
 
           p = Path('docs/mini-elf-dynrela-u8.md')
-          s = p.read_text().replace('mini-elf-dynrela-u16', 'mini-elf-dynrela-u8').replace('R_X86_64_16', 'R_X86_64_8').replace('unsigned 16-bit', 'unsigned 8-bit').replace('unsigned 16 bits', 'unsigned 8 bits').replace('two-byte', 'one-byte').replace('2-byte', '1-byte')
+          s = p.read_text().replace('mini-elf-dynrela-u16', 'mini-elf-dynrela-u8').replace('R_X86_64_16', 'R_X86_64_8').replace('type 12', 'type 14').replace('unsigned 16-bit', 'unsigned 8-bit').replace('unsigned 16 bits', 'unsigned 8 bits').replace('unsigned-16', 'unsigned-8').replace('two-byte', 'one-byte').replace('2-byte', '1-byte')
           p.write_text(s)
           PY
           cargo fmt --all
