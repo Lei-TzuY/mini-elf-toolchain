@@ -13,8 +13,14 @@ const R_X86_64_DTPOFF64: u32 = 17;
 const R_X86_64_DTPOFF32: u32 = 21;
 
 fn temp(label: &str) -> PathBuf {
-    let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-    let p = std::env::temp_dir().join(format!("mini-elf-toolchain-{label}-{}-{n}", std::process::id()));
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let p = std::env::temp_dir().join(format!(
+        "mini-elf-toolchain-{label}-{}-{n}",
+        std::process::id()
+    ));
     fs::create_dir_all(&p).unwrap();
     p
 }
@@ -28,12 +34,27 @@ fn fixture(dir: &Path) -> PathBuf {
         ".section .tdata,\"awT\",@progbits\n.globl tlsvar\n.type tlsvar,@tls_object\n.size tlsvar,8\ntlsvar:\n.quad 0\n.text\n.globl probe\n.type probe,@function\nprobe:\nleaq tlsvar@tlsgd(%rip), %rdi\ncall __tls_get_addr@PLT\nret\n",
     )
     .unwrap();
-    assert!(Command::new("as").args(["-o", o.to_str().unwrap(), s.to_str().unwrap()]).status().unwrap().success());
-    assert!(Command::new("ld").args(["-shared", "--hash-style=sysv", "-o", so.to_str().unwrap(), o.to_str().unwrap()]).status().unwrap().success());
+    assert!(Command::new("as")
+        .args(["-o", o.to_str().unwrap(), s.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("ld")
+        .args([
+            "-shared",
+            "--hash-style=sysv",
+            "-o",
+            so.to_str().unwrap(),
+            o.to_str().unwrap()
+        ])
+        .status()
+        .unwrap()
+        .success());
     let mut b = fs::read(&so).unwrap();
     let r = rela_of(&b, R_X86_64_DTPOFF64);
     let info = u64at(&b, r + 8);
-    b[r + 8..r + 16].copy_from_slice(&(((info >> 32) << 32) | R_X86_64_DTPOFF32 as u64).to_le_bytes());
+    b[r + 8..r + 16]
+        .copy_from_slice(&(((info >> 32) << 32) | R_X86_64_DTPOFF32 as u64).to_le_bytes());
     fs::write(&so, b).unwrap();
     so
 }
@@ -41,42 +62,94 @@ fn fixture(dir: &Path) -> PathBuf {
 fn run(paths: &[&Path], bias: &str) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrela-dtpoff32"));
     c.arg("--load-bias").arg(bias);
-    for p in paths { c.arg(p); }
+    for p in paths {
+        c.arg(p);
+    }
     c.output().unwrap()
 }
-fn u16at(b: &[u8], o: usize) -> u16 { u16::from_le_bytes(b[o..o + 2].try_into().unwrap()) }
-fn u32at(b: &[u8], o: usize) -> u32 { u32::from_le_bytes(b[o..o + 4].try_into().unwrap()) }
-fn u64at(b: &[u8], o: usize) -> u64 { u64::from_le_bytes(b[o..o + 8].try_into().unwrap()) }
-fn i64at(b: &[u8], o: usize) -> i64 { i64::from_le_bytes(b[o..o + 8].try_into().unwrap()) }
+fn u16at(b: &[u8], o: usize) -> u16 {
+    u16::from_le_bytes(b[o..o + 2].try_into().unwrap())
+}
+fn u32at(b: &[u8], o: usize) -> u32 {
+    u32::from_le_bytes(b[o..o + 4].try_into().unwrap())
+}
+fn u64at(b: &[u8], o: usize) -> u64 {
+    u64::from_le_bytes(b[o..o + 8].try_into().unwrap())
+}
+fn i64at(b: &[u8], o: usize) -> i64 {
+    i64::from_le_bytes(b[o..o + 8].try_into().unwrap())
+}
 fn ph(b: &[u8]) -> Vec<(u32, u32, u64, u64, u64, u64)> {
     let p = u64at(b, 32) as usize;
     let e = u16at(b, 54) as usize;
     let n = u16at(b, 56) as usize;
-    (0..n).map(|i| { let x = p + i * e; (u32at(b, x), u32at(b, x + 4), u64at(b, x + 8), u64at(b, x + 16), u64at(b, x + 32), u64at(b, x + 40)) }).collect()
+    (0..n)
+        .map(|i| {
+            let x = p + i * e;
+            (
+                u32at(b, x),
+                u32at(b, x + 4),
+                u64at(b, x + 8),
+                u64at(b, x + 16),
+                u64at(b, x + 32),
+                u64at(b, x + 40),
+            )
+        })
+        .collect()
 }
 fn map(b: &[u8], a: u64) -> usize {
-    for (k, _, o, v, f, _) in ph(b) { if k == PT_LOAD && a >= v && a < v + f { return (o + a - v) as usize; } }
+    for (k, _, o, v, f, _) in ph(b) {
+        if k == PT_LOAD && a >= v && a < v + f {
+            return (o + a - v) as usize;
+        }
+    }
     panic!("unmapped")
 }
 fn tag(b: &[u8], want: i64) -> u64 {
     let d = ph(b).into_iter().find(|x| x.0 == PT_DYNAMIC).unwrap();
     let mut c = d.2 as usize;
     let end = (d.2 + d.4) as usize;
-    while c + 16 <= end { let t = i64at(b, c); let v = u64at(b, c + 8); if t == want { return v; } if t == DT_NULL { break; } c += 16; }
+    while c + 16 <= end {
+        let t = i64at(b, c);
+        let v = u64at(b, c + 8);
+        if t == want {
+            return v;
+        }
+        if t == DT_NULL {
+            break;
+        }
+        c += 16;
+    }
     panic!("missing tag")
 }
 fn rela_of(b: &[u8], kind: u32) -> usize {
     let mut c = map(b, tag(b, DT_RELA));
-    loop { if u64at(b, c + 8) as u32 == kind { return c; } c += 24; }
+    loop {
+        if u64at(b, c + 8) as u32 == kind {
+            return c;
+        }
+        c += 24;
+    }
 }
-fn count(b: &[u8]) -> u64 { u32at(b, map(b, tag(b, DT_HASH)) + 4) as u64 }
-fn exec_addr(b: &[u8]) -> u64 { ph(b).into_iter().find(|x| x.0 == PT_LOAD && x.1 & PF_X != 0 && x.4 > 0).unwrap().3 }
+fn count(b: &[u8]) -> u64 {
+    u32at(b, map(b, tag(b, DT_HASH)) + 4) as u64
+}
+fn exec_addr(b: &[u8]) -> u64 {
+    ph(b)
+        .into_iter()
+        .find(|x| x.0 == PT_LOAD && x.1 & PF_X != 0 && x.4 > 0)
+        .unwrap()
+        .3
+}
 
 #[test]
 fn validates_gnu_recognized_dtpoff32() {
     let d = temp("dtpoff32-good");
     let so = fixture(&d);
-    let g = Command::new("readelf").args(["-rW", so.to_str().unwrap()]).output().unwrap();
+    let g = Command::new("readelf")
+        .args(["-rW", so.to_str().unwrap()])
+        .output()
+        .unwrap();
     assert!(g.status.success());
     let gt = String::from_utf8_lossy(&g.stdout);
     assert!(gt.contains("R_X86_64_DTPOFF32"), "{gt}");
@@ -88,29 +161,77 @@ fn validates_gnu_recognized_dtpoff32() {
 
 #[test]
 fn rejects_bad_symbol_index() {
-    let d = temp("dtpoff32-index"); let so = fixture(&d); let mut b = fs::read(&so).unwrap(); let r = rela_of(&b, R_X86_64_DTPOFF32); let n = count(&b);
+    let d = temp("dtpoff32-index");
+    let so = fixture(&d);
+    let mut b = fs::read(&so).unwrap();
+    let r = rela_of(&b, R_X86_64_DTPOFF32);
+    let n = count(&b);
     b[r + 8..r + 16].copy_from_slice(&((n << 32) | R_X86_64_DTPOFF32 as u64).to_le_bytes());
-    let bad = d.join("bad.so"); fs::write(&bad, b).unwrap(); let o = run(&[&bad], "0"); assert!(!o.status.success()); assert!(String::from_utf8_lossy(&o.stderr).contains("invalid dynamic symbol index")); fs::remove_dir_all(d).unwrap();
+    let bad = d.join("bad.so");
+    fs::write(&bad, b).unwrap();
+    let o = run(&[&bad], "0");
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("invalid dynamic symbol index"));
+    fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn rejects_nonwritable_target() {
-    let d = temp("dtpoff32-target"); let so = fixture(&d); let mut b = fs::read(&so).unwrap(); let r = rela_of(&b, R_X86_64_DTPOFF32); let a = exec_addr(&b); b[r..r + 8].copy_from_slice(&a.to_le_bytes());
-    let bad = d.join("bad.so"); fs::write(&bad, b).unwrap(); let o = run(&[&bad], "0"); assert!(!o.status.success()); assert!(String::from_utf8_lossy(&o.stderr).contains("target")); fs::remove_dir_all(d).unwrap();
+    let d = temp("dtpoff32-target");
+    let so = fixture(&d);
+    let mut b = fs::read(&so).unwrap();
+    let r = rela_of(&b, R_X86_64_DTPOFF32);
+    let a = exec_addr(&b);
+    b[r..r + 8].copy_from_slice(&a.to_le_bytes());
+    let bad = d.join("bad.so");
+    fs::write(&bad, b).unwrap();
+    let o = run(&[&bad], "0");
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("target"));
+    fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn rejects_signed_32_overflow() {
-    let d = temp("dtpoff32-overflow"); let so = fixture(&d); let mut b = fs::read(&so).unwrap(); let r = rela_of(&b, R_X86_64_DTPOFF32); let info = u64at(&b, r + 8); let si = (info >> 32) as usize; let symtab = tag(&b, 6); let s = map(&b, symtab) + si * 24; b[s + 8..s + 16].copy_from_slice(&((i32::MAX as u64) + 1).to_le_bytes());
-    let bad = d.join("bad.so"); fs::write(&bad, b).unwrap(); let o = run(&[&bad], "0"); assert!(!o.status.success()); assert!(String::from_utf8_lossy(&o.stderr).contains("does not fit signed 32-bit")); fs::remove_dir_all(d).unwrap();
+    let d = temp("dtpoff32-overflow");
+    let so = fixture(&d);
+    let mut b = fs::read(&so).unwrap();
+    let r = rela_of(&b, R_X86_64_DTPOFF32);
+    let info = u64at(&b, r + 8);
+    let si = (info >> 32) as usize;
+    let symtab = tag(&b, 6);
+    let s = map(&b, symtab) + si * 24;
+    b[s + 8..s + 16].copy_from_slice(&((i32::MAX as u64) + 1).to_le_bytes());
+    let bad = d.join("bad.so");
+    fs::write(&bad, b).unwrap();
+    let o = run(&[&bad], "0");
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("does not fit signed 32-bit"));
+    fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn rejects_runtime_target_overflow() {
-    let d = temp("dtpoff32-runtime"); let so = fixture(&d); let o = run(&[&so], "0xffffffffffffffff"); assert!(!o.status.success()); assert!(String::from_utf8_lossy(&o.stderr).contains("runtime target overflows u64")); fs::remove_dir_all(d).unwrap();
+    let d = temp("dtpoff32-runtime");
+    let so = fixture(&d);
+    let o = run(&[&so], "0xffffffffffffffff");
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("runtime target overflows u64"));
+    fs::remove_dir_all(d).unwrap();
 }
 
 #[test]
 fn malformed_later_input_keeps_stdout_atomic() {
-    let d = temp("dtpoff32-atomic"); let so = fixture(&d); let bad = d.join("bad.so"); fs::write(&bad, b"not an elf").unwrap(); let o = run(&[&so, &bad], "0"); assert!(!o.status.success()); assert!(o.stdout.is_empty(), "stdout was {}", String::from_utf8_lossy(&o.stdout)); fs::remove_dir_all(d).unwrap();
+    let d = temp("dtpoff32-atomic");
+    let so = fixture(&d);
+    let bad = d.join("bad.so");
+    fs::write(&bad, b"not an elf").unwrap();
+    let o = run(&[&so, &bad], "0");
+    assert!(!o.status.success());
+    assert!(
+        o.stdout.is_empty(),
+        "stdout was {}",
+        String::from_utf8_lossy(&o.stdout)
+    );
+    fs::remove_dir_all(d).unwrap();
 }
