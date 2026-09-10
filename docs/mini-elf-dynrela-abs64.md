@@ -12,9 +12,9 @@ The load bias may be decimal or `0x` hexadecimal. Multiple inputs are validated 
 
 ## Validated semantics
 
-The tool requires a checked `PT_DYNAMIC` with `DT_RELA`, `DT_RELASZ`, `DT_RELAENT`, SysV `DT_HASH`, `DT_SYMTAB`/`DT_SYMENT`, and `DT_STRTAB`/`DT_STRSZ`. For each `R_X86_64_64` relocation it validates:
+The tool requires a checked `PT_DYNAMIC` with `DT_RELA`, `DT_RELASZ`, `DT_RELAENT`, either SysV `DT_HASH` or GNU `DT_GNU_HASH`, `DT_SYMTAB`/`DT_SYMENT`, and `DT_STRTAB`/`DT_STRSZ`. For each `R_X86_64_64` relocation it validates:
 
-- a nonzero dynamic-symbol index bounded by `DT_HASH.nchain`;
+- a nonzero dynamic-symbol index bounded by `DT_HASH.nchain` or a checked `DT_GNU_HASH` chain walk;
 - an 8-byte relocation target contained in writable `PT_LOAD` memory;
 - a same-image defined symbol that is neither `SHN_ABS` nor TLS;
 - the symbol value lies in loadable memory;
@@ -29,4 +29,6 @@ This is not a general dynamic linker. It rejects undefined/external symbols inst
 
 ## Differential coverage
 
-Focused integration tests build a real shared object with GNU `as` and GNU `ld --hash-style=sysv`; GNU `readelf -rW` must independently report a real `R_X86_64_64` relocation. Malformed regressions cover invalid dynamic symbol indices, non-writable relocation targets, signed-addend arithmetic overflow, and multi-input stdout atomicity.
+Focused integration tests build a real shared object with GNU `as` and GNU `ld --hash-style=sysv` and `--hash-style=gnu`; GNU `readelf -rW` must independently report a real `R_X86_64_64` relocation. Malformed regressions cover invalid dynamic symbol indices, non-writable relocation targets, signed-addend arithmetic overflow, and multi-input stdout atomicity.
+
+GNU-hash-only images are accepted with checked bucket, bloom, prefix, and chain arithmetic; malformed or unterminated file-backed chain metadata is rejected before symbol access.
