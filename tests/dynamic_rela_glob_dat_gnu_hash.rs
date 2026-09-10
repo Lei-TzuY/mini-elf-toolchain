@@ -144,7 +144,10 @@ fn accepts_gnu_hash_only_glob_dat_image() {
         .unwrap();
     assert!(relocations.status.success());
     let relocation_text = String::from_utf8(relocations.stdout).unwrap();
-    assert!(relocation_text.contains("R_X86_64_GLOB_DAT"), "{relocation_text}");
+    assert!(
+        relocation_text.contains("R_X86_64_GLOB_DAT"),
+        "{relocation_text}"
+    );
 
     let output = run_tool(&image, "0x70000000");
     assert!(

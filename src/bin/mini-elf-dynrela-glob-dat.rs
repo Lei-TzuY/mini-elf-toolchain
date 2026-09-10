@@ -270,9 +270,9 @@ fn inspect(file: &[u8], load_bias: u64) -> Result<String, String> {
         let runtime_target = load_bias
             .checked_add(offset)
             .ok_or_else(|| format!("GLOB_DAT relocation {index} runtime target overflows u64"))?;
-        runtime_target
-            .checked_add(7)
-            .ok_or_else(|| format!("GLOB_DAT relocation {index} runtime target range overflows u64"))?;
+        runtime_target.checked_add(7).ok_or_else(|| {
+            format!("GLOB_DAT relocation {index} runtime target range overflows u64")
+        })?;
         let runtime_value = load_bias.checked_add(value).ok_or_else(|| {
             format!("GLOB_DAT relocation {index} runtime symbol value overflows u64")
         })?;
@@ -330,7 +330,8 @@ fn gnu_hash_symbol_count(
         .checked_add(bloom_bytes)
         .and_then(|value| value.checked_add(bucket_bytes))
         .ok_or_else(|| "DT_GNU_HASH prefix byte size overflows u64".to_owned())?;
-    let prefix = map_file_backed_range(file, headers, address, prefix_size, 0, "DT_GNU_HASH prefix")?;
+    let prefix =
+        map_file_backed_range(file, headers, address, prefix_size, 0, "DT_GNU_HASH prefix")?;
     let bucket_start = usize::try_from(
         16u64
             .checked_add(bloom_bytes)
