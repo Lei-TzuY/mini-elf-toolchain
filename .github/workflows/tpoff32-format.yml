@@ -1,0 +1,26 @@
+name: tpoff32-format
+on:
+  push:
+    branches: [feat/dynrela-tpoff32]
+permissions:
+  contents: write
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/dynrela-tpoff32
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo fmt --all
+      - name: Commit formatting if needed
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add src/bin/mini-elf-dynrela-tpoff32.rs tests/dynamic_rela_tpoff32.rs
+            git commit -m "style: apply canonical rustfmt"
+            git push origin HEAD:feat/dynrela-tpoff32
+          fi
