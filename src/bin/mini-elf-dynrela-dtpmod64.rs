@@ -334,7 +334,7 @@ fn program_headers(f: &[u8]) -> Result<Vec<Ph>, String> {
     }
     Ok(v)
 }
-fn program_bytes<'a>(f: &'a [u8], p: Ph) -> Result<&'a [u8], String> {
+fn program_bytes(f: &[u8], p: Ph) -> Result<&[u8], String> {
     let s = p.off as usize;
     let e = s
         .checked_add(p.filesz as usize)
