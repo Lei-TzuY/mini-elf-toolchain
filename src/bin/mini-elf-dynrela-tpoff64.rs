@@ -148,7 +148,8 @@ fn parse_u64(s: &str, label: &str) -> Result<u64, String> {
 
 fn parse_i64(s: &str, label: &str) -> Result<i64, String> {
     if let Some(h) = s.strip_prefix("-0x").or_else(|| s.strip_prefix("-0X")) {
-        let magnitude = i128::from_str_radix(h, 16).map_err(|_| format!("invalid {label} '{s}'"))?;
+        let magnitude =
+            i128::from_str_radix(h, 16).map_err(|_| format!("invalid {label} '{s}'"))?;
         return i64::try_from(-magnitude).map_err(|_| format!("invalid {label} '{s}'"));
     }
     if let Some(h) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
@@ -182,7 +183,9 @@ fn inspect(file: &[u8], bias: u64, tls_block_offset: i64) -> Result<String, Stri
         let val = u64at(e, 8);
         if term {
             if tag != DT_NULL || val != 0 {
-                return Err(format!("PT_DYNAMIC entry {idx} contains data after DT_NULL"));
+                return Err(format!(
+                    "PT_DYNAMIC entry {idx} contains data after DT_NULL"
+                ));
             }
             continue;
         }
@@ -210,7 +213,8 @@ fn inspect(file: &[u8], bias: u64, tls_block_offset: i64) -> Result<String, Stri
     if !term {
         return Err("PT_DYNAMIC is missing DT_NULL".into());
     }
-    let req = |v: Option<u64>, n: &str| v.ok_or_else(|| format!("PT_DYNAMIC is missing required {n}"));
+    let req =
+        |v: Option<u64>, n: &str| v.ok_or_else(|| format!("PT_DYNAMIC is missing required {n}"));
     let rela = req(d.rela, "DT_RELA")?;
     let relasz = req(d.relasz, "DT_RELASZ")?;
     let relaent = req(d.relaent, "DT_RELAENT")?;
@@ -276,7 +280,9 @@ fn inspect(file: &[u8], bias: u64, tls_block_offset: i64) -> Result<String, Stri
             return Err(format!("R_X86_64_TPOFF64 relocation {idx} references undefined TLS symbol; dependency lookup is outside this bounded slice"));
         }
         if sh == SHN_ABS || typ != STT_TLS {
-            return Err(format!("R_X86_64_TPOFF64 relocation {idx} requires a defined STT_TLS symbol"));
+            return Err(format!(
+                "R_X86_64_TPOFF64 relocation {idx} requires a defined STT_TLS symbol"
+            ));
         }
         let add = i64at(e, 16);
         let wide = tls_block_offset as i128 + value as i128 + add as i128;
@@ -301,7 +307,9 @@ fn inspect(file: &[u8], bias: u64, tls_block_offset: i64) -> Result<String, Stri
 fn dynstr(tab: &[u8], off: u32, si: u64) -> Result<String, String> {
     let s = off as usize;
     if s >= tab.len() {
-        return Err(format!("dynamic symbol {si} name offset is outside DT_STRTAB"));
+        return Err(format!(
+            "dynamic symbol {si} name offset is outside DT_STRTAB"
+        ));
     }
     let tail = &tab[s..];
     let n = tail
@@ -321,7 +329,10 @@ fn program_headers(f: &[u8]) -> Result<Vec<Ph>, String> {
         return Err("unsupported program-header size".into());
     }
     let end = off
-        .checked_add(ent.checked_mul(num).ok_or("program-header table size overflow")?)
+        .checked_add(
+            ent.checked_mul(num)
+                .ok_or("program-header table size overflow")?,
+        )
         .ok_or("program-header table overflow")?;
     if end > f.len() {
         return Err("program-header table exceeds input".into());
@@ -390,7 +401,9 @@ fn memory_range(ph: &[Ph], a: u64, n: u64, flags: u32, label: &str) -> Result<()
             return Ok(());
         }
     }
-    Err(format!("{label} is not contained in a matching PT_LOAD memory range"))
+    Err(format!(
+        "{label} is not contained in a matching PT_LOAD memory range"
+    ))
 }
 
 fn u16at(b: &[u8], o: usize) -> u16 {
