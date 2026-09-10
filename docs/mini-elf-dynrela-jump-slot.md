@@ -15,3 +15,7 @@ For every `R_X86_64_JUMP_SLOT` entry it requires a nonzero in-range dynamic symb
 Undefined dynamic symbols are intentionally accepted: resolving them across dependencies is the next loader layer, not part of this validation slice. Defined same-image symbols are also accepted. The tool reports the relocation target and symbol that require runtime resolution, but it does not mutate an image, perform dependency lookup, implement symbol versioning/interposition, initialize lazy-binding PLT state, or call a resolver.
 
 Integration coverage builds a real GNU-linked shared object with an undefined `external_target` called through the PLT and requires GNU `readelf -rW` to identify `R_X86_64_JUMP_SLOT`. Regressions cover an out-of-range dynamic symbol index, a non-writable relocation target, a nonzero addend, runtime target overflow, and output atomicity when a later input is malformed.
+
+## GNU hash compatibility
+
+Dynamic-symbol bounds accept SysV `DT_HASH` when present and otherwise derive the bound from a checked GNU `DT_GNU_HASH` table. GNU-hash validation checks non-zero buckets, a non-zero power-of-two bloom count, bucket lower bounds, checked prefix/chain address arithmetic, and file-backed chain termination before `DT_SYMTAB` is sliced. This allows GNU-hash-only shared objects without weakening malformed-input rejection.
