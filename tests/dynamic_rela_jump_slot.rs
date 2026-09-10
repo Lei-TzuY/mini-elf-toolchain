@@ -8,6 +8,7 @@ const PT_DYNAMIC: u32 = 2;
 const PF_X: u32 = 1;
 const DT_NULL: i64 = 0;
 const DT_HASH: i64 = 4;
+const DT_GNU_HASH: i64 = 0x6fff_fef5;
 const DT_PLTRELSZ: i64 = 2;
 const DT_JMPREL: i64 = 23;
 const R_X86_64_JUMP_SLOT: u32 = 7;
@@ -232,5 +233,80 @@ fn malformed_later_input_keeps_stdout_atomic() {
     let output = run(&[&shared, &bad], "0");
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
+    fs::remove_dir_all(dir).unwrap();
+}
+
+fn gnu_hash_fixture(dir: &Path) -> PathBuf {
+    let source = dir.join("jump-gnu-hash.s");
+    let object = dir.join("jump-gnu-hash.o");
+    let shared = dir.join("jump-gnu-hash.so");
+    fs::write(
+        &source,
+        ".text\n.globl call_external\n.type call_external,@function\ncall_external:\ncall external_target@PLT\nret\n",
+    )
+    .unwrap();
+    assert!(Command::new("as")
+        .args(["-o", object.to_str().unwrap(), source.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("ld")
+        .args([
+            "-shared",
+            "--hash-style=gnu",
+            "-o",
+            shared.to_str().unwrap(),
+            object.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap()
+        .success());
+    shared
+}
+
+#[test]
+fn validates_gnu_hash_only_jump_slot() {
+    let dir = temp("jump-slot-gnu-hash");
+    let shared = gnu_hash_fixture(&dir);
+    let dynamic = Command::new("readelf")
+        .args(["-dW", shared.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(dynamic.status.success());
+    let dynamic_text = String::from_utf8_lossy(&dynamic.stdout);
+    assert!(dynamic_text.contains("GNU_HASH"), "{dynamic_text}");
+    assert!(
+        !dynamic_text.lines().any(|line| line.contains("(HASH)")),
+        "{dynamic_text}"
+    );
+    let relocs = Command::new("readelf")
+        .args(["-rW", shared.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(relocs.status.success());
+    assert!(String::from_utf8_lossy(&relocs.stdout).contains("R_X86_64_JUMP_SLOT"));
+
+    let output = run(&[&shared], "0x70000000");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("external_target"));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_malformed_gnu_hash_bloom_count() {
+    let dir = temp("jump-slot-gnu-hash-bloom");
+    let shared = gnu_hash_fixture(&dir);
+    let mut bytes = fs::read(&shared).unwrap();
+    let header = map(&bytes, tag(&bytes, DT_GNU_HASH));
+    bytes[header + 8..header + 12].copy_from_slice(&0u32.to_le_bytes());
+    let bad = dir.join("bad.so");
+    fs::write(&bad, bytes).unwrap();
+    let output = run(&[&bad], "0");
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("bloom count"));
     fs::remove_dir_all(dir).unwrap();
 }
