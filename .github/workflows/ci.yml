@@ -17,14 +17,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - name: Format
-        run: cargo fmt --all
-      - name: Upload formatted files
-        uses: actions/upload-artifact@v4
-        with:
-          name: canonical-rustfmt
-          path: |
-            src/bin/mini-elf-sysv-hash-lookup.rs
-            tests/sysv_hash_lookup.rs
+        run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
