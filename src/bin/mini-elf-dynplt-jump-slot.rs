@@ -344,14 +344,8 @@ fn gnu_hash_symbol_count(
         .checked_add(bloom_bytes)
         .and_then(|value| value.checked_add(bucket_bytes))
         .ok_or_else(|| "DT_GNU_HASH prefix byte size overflows u64".to_owned())?;
-    let prefix = map_file_backed_range(
-        file,
-        headers,
-        address,
-        prefix_size,
-        0,
-        "DT_GNU_HASH prefix",
-    )?;
+    let prefix =
+        map_file_backed_range(file, headers, address, prefix_size, 0, "DT_GNU_HASH prefix")?;
     let bucket_start = usize::try_from(
         16u64
             .checked_add(bloom_bytes)

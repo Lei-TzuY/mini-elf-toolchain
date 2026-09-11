@@ -207,8 +207,7 @@ fn malformed_gnu_hash_bloom_count_is_rejected_atomically() {
     let output = run_tool(&bad);
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("bloom count 3 must be a non-zero power of two")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("bloom count 3 must be a non-zero power of two"));
     let _ = fs::remove_dir_all(dir);
 }
