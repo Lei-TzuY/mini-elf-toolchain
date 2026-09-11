@@ -59,7 +59,9 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
         }
     }
 
-    Ok(format!("SysV external resolve: symbol={symbol} not-found\n"))
+    Ok(format!(
+        "SysV external resolve: symbol={symbol} not-found\n"
+    ))
 }
 
 fn render_found(symbol: &str, input: &OsStr, index: u32) -> String {
