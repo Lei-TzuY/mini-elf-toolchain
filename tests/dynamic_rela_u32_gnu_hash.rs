@@ -36,7 +36,12 @@ fn fixture(dir: &Path) -> PathBuf {
     )
     .unwrap();
     assert!(Command::new("as")
-        .args(["--64", "-o", object.to_str().unwrap(), source.to_str().unwrap()])
+        .args([
+            "--64",
+            "-o",
+            object.to_str().unwrap(),
+            source.to_str().unwrap()
+        ])
         .status()
         .unwrap()
         .success());
@@ -165,7 +170,10 @@ fn validates_gnu_hash_only_u32() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Validated R_X86_64_32 relocations"), "{stdout}");
+    assert!(
+        stdout.contains("Validated R_X86_64_32 relocations"),
+        "{stdout}"
+    );
     assert!(stdout.contains(":target "), "{stdout}");
     fs::remove_dir_all(dir).unwrap();
 }
