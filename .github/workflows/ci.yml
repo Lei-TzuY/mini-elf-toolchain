@@ -13,8 +13,9 @@ jobs:
           ref: feat/dynrela-u16-gnu-hash
           fetch-depth: 0
       - name: Apply implementation and focused regression
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
           u16_path = Path('src/bin/mini-elf-dynrela-u16.rs')
           i32_path = Path('src/bin/mini-elf-dynrela-i32.rs')
@@ -57,6 +58,7 @@ jobs:
           doc = doc_path.read_text()
           doc += '''\n\nGNU-hash-only ET_DYN images are accepted by deriving the dynamic-symbol upper bound from checked `DT_GNU_HASH` metadata when `DT_HASH` is absent. The GNU-hash path validates nonzero bucket count, a nonzero power-of-two Bloom count, checked Bloom/bucket prefix arithmetic, bucket lower bounds, file-backed chain traversal, terminating chain entries, and symbol-index/address overflow. Focused regression coverage builds a real GNU `ld --hash-style=gnu` image and verifies the patched `R_X86_64_16` relocation with GNU `readelf -rW`, plus malformed Bloom metadata rejection.\n'''
           doc_path.write_text(doc)
+          PY
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
