@@ -37,15 +37,17 @@ fn build_gnu_hash_so(dir: &Path) -> PathBuf {
         ".text\n.globl public_api\n.type public_api,@function\npublic_api:\n  ret\n.size public_api, .-public_api\n",
     )
     .unwrap();
-    run(Command::new("as").arg("--64").arg("-o").arg(&object).arg(&source));
-    run(
-        Command::new("ld")
-            .arg("-shared")
-            .arg("--hash-style=gnu")
-            .arg("-o")
-            .arg(&image)
-            .arg(&object),
-    );
+    run(Command::new("as")
+        .arg("--64")
+        .arg("-o")
+        .arg(&object)
+        .arg(&source));
+    run(Command::new("ld")
+        .arg("-shared")
+        .arg("--hash-style=gnu")
+        .arg("-o")
+        .arg(&image)
+        .arg(&object));
     image
 }
 
@@ -106,7 +108,10 @@ fn resolves_default_visible_defined_global_from_real_gnu_hash_image() {
     assert!(dynamic.contains("GNU_HASH"));
     assert!(!dynamic.lines().any(|line| line.contains("(HASH)")));
 
-    let symbols = run(Command::new("readelf").arg("--dyn-syms").arg("-W").arg(&image));
+    let symbols = run(Command::new("readelf")
+        .arg("--dyn-syms")
+        .arg("-W")
+        .arg(&image));
     let symbols = String::from_utf8(symbols.stdout).unwrap();
     assert!(symbols.lines().any(|line| {
         line.contains("GLOBAL") && line.contains("DEFAULT") && line.ends_with(" public_api")
@@ -134,7 +139,9 @@ fn rejects_hidden_local_and_undefined_matches_without_changing_hash_membership()
     let mut bytes = original.clone();
     bytes[entry + 5] = (bytes[entry + 5] & !0x03) | 0x02;
     fs::write(&hidden, bytes).unwrap();
-    let raw = run(Command::new(checked_lookup()).arg("public_api").arg(&hidden));
+    let raw = run(Command::new(checked_lookup())
+        .arg("public_api")
+        .arg(&hidden));
     assert!(String::from_utf8(raw.stdout).unwrap().contains("index="));
     let output = run(Command::new(tool()).arg("public_api").arg(&hidden));
     assert_eq!(
