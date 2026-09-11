@@ -153,7 +153,9 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
         let val = u64at(e, 8);
         if term {
             if tag != DT_NULL || val != 0 {
-                return Err(format!("PT_DYNAMIC entry {idx} contains data after DT_NULL"));
+                return Err(format!(
+                    "PT_DYNAMIC entry {idx} contains data after DT_NULL"
+                ));
             }
             continue;
         }
@@ -182,9 +184,8 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
     if !term {
         return Err("PT_DYNAMIC is missing DT_NULL".into());
     }
-    let req = |v: Option<u64>, n: &str| {
-        v.ok_or_else(|| format!("PT_DYNAMIC is missing required {n}"))
-    };
+    let req =
+        |v: Option<u64>, n: &str| v.ok_or_else(|| format!("PT_DYNAMIC is missing required {n}"));
     let rela = req(d.rela, "DT_RELA")?;
     let relasz = req(d.relasz, "DT_RELASZ")?;
     let relaent = req(d.relaent, "DT_RELAENT")?;
@@ -250,7 +251,9 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
             return Err(format!("R_X86_64_DTPOFF64 relocation {idx} references undefined TLS symbol; dependency lookup is outside this bounded slice"));
         }
         if sh == SHN_ABS || typ != STT_TLS {
-            return Err(format!("R_X86_64_DTPOFF64 relocation {idx} requires a defined STT_TLS symbol"));
+            return Err(format!(
+                "R_X86_64_DTPOFF64 relocation {idx} requires a defined STT_TLS symbol"
+            ));
         }
         let add = i64at(e, 16);
         let wide = value as i128 + add as i128;
@@ -281,8 +284,7 @@ fn dynamic_symbol_count(
         return Ok(u64::from(u32at(header, 4)));
     }
     let address = gnu_hash.ok_or_else(|| {
-        "R_X86_64_DTPOFF64 validation requires DT_HASH or DT_GNU_HASH to bound DT_SYMTAB"
-            .to_owned()
+        "R_X86_64_DTPOFF64 validation requires DT_HASH or DT_GNU_HASH to bound DT_SYMTAB".to_owned()
     })?;
     gnu_hash_symbol_count(file, ph, address)
 }
@@ -374,7 +376,9 @@ fn gnu_hash_symbol_count(file: &[u8], ph: &[Ph], address: u64) -> Result<u64, St
 fn dynstr(tab: &[u8], off: u32, si: u64) -> Result<String, String> {
     let s = off as usize;
     if s >= tab.len() {
-        return Err(format!("dynamic symbol {si} name offset is outside DT_STRTAB"));
+        return Err(format!(
+            "dynamic symbol {si} name offset is outside DT_STRTAB"
+        ));
     }
     let tail = &tab[s..];
     let n = tail
@@ -414,8 +418,7 @@ fn program_headers(f: &[u8]) -> Result<Vec<Ph>, String> {
             memsz: u64at(f, p + 40),
         };
         if x.filesz > x.memsz
-            || x
-                .off
+            || x.off
                 .checked_add(x.filesz)
                 .ok_or("program file range overflow")?
                 > f.len() as u64
@@ -441,10 +444,9 @@ fn map_file<'a>(f: &'a [u8], ph: &[Ph], a: u64, n: u64, label: &str) -> Result<&
         .checked_add(n)
         .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
     for p in ph.iter().filter(|p| p.kind == PT_LOAD) {
-        let pe = p
-            .va
-            .checked_add(p.filesz)
-            .ok_or_else(|| format!("{label} PT_LOAD range overflows u64"))?;
+        let pe =
+            p.va.checked_add(p.filesz)
+                .ok_or_else(|| format!("{label} PT_LOAD range overflows u64"))?;
         if a >= p.va && end <= pe {
             let s = p
                 .off
@@ -453,8 +455,10 @@ fn map_file<'a>(f: &'a [u8], ph: &[Ph], a: u64, n: u64, label: &str) -> Result<&
             let e = s
                 .checked_add(n)
                 .ok_or_else(|| format!("{label} file range overflows u64"))?;
-            let s = usize::try_from(s).map_err(|_| format!("{label} file offset does not fit usize"))?;
-            let e = usize::try_from(e).map_err(|_| format!("{label} file end does not fit usize"))?;
+            let s = usize::try_from(s)
+                .map_err(|_| format!("{label} file offset does not fit usize"))?;
+            let e =
+                usize::try_from(e).map_err(|_| format!("{label} file end does not fit usize"))?;
             return f.get(s..e).ok_or_else(|| format!("{label} exceeds input"));
         }
     }
@@ -469,15 +473,16 @@ fn memory_range(ph: &[Ph], a: u64, n: u64, flags: u32, label: &str) -> Result<()
         .iter()
         .filter(|p| p.kind == PT_LOAD && p.flags & flags == flags)
     {
-        let pe = p
-            .va
-            .checked_add(p.memsz)
-            .ok_or_else(|| format!("{label} PT_LOAD memory range overflows u64"))?;
+        let pe =
+            p.va.checked_add(p.memsz)
+                .ok_or_else(|| format!("{label} PT_LOAD memory range overflows u64"))?;
         if a >= p.va && end <= pe {
             return Ok(());
         }
     }
-    Err(format!("{label} is not contained in a matching PT_LOAD memory range"))
+    Err(format!(
+        "{label} is not contained in a matching PT_LOAD memory range"
+    ))
 }
 
 fn u16at(b: &[u8], o: usize) -> u16 {

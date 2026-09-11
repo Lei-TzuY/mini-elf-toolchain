@@ -147,10 +147,7 @@ fn accepts_gnu_hash_only_image_and_gnu_readelf_recognizes_relocation() {
         .unwrap();
     assert!(relocs.status.success());
     let reloc_text = String::from_utf8(relocs.stdout).unwrap();
-    assert!(
-        reloc_text.contains("R_X86_64_DTPOFF64"),
-        "{reloc_text}"
-    );
+    assert!(reloc_text.contains("R_X86_64_DTPOFF64"), "{reloc_text}");
 
     let output = run_tool(&image);
     assert!(
@@ -158,8 +155,9 @@ fn accepts_gnu_hash_only_image_and_gnu_readelf_recognizes_relocation() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stdout)
-        .contains("Validated R_X86_64_DTPOFF64 relocations"));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("Validated R_X86_64_DTPOFF64 relocations")
+    );
     fs::remove_dir_all(dir).unwrap();
 }
 
