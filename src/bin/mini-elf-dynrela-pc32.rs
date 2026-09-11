@@ -12,6 +12,7 @@ const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
 const DT_STRSZ: i64 = 10;
 const DT_SYMENT: i64 = 11;
+const DT_GNU_HASH: i64 = 0x6fff_fef5;
 const R_X86_64_PC32: u32 = 2;
 
 #[derive(Clone, Copy)]
@@ -83,6 +84,7 @@ fn inspect(b: &[u8]) -> Result<String, String> {
         return Err("PT_DYNAMIC size is not a multiple of 16".into());
     }
     let mut hash = None;
+    let mut gnu_hash = None;
     let mut sym = None;
     let mut syment = None;
     let mut strtab = None;
@@ -100,6 +102,7 @@ fn inspect(b: &[u8]) -> Result<String, String> {
         }
         let slot = match t {
             DT_HASH => &mut hash,
+            DT_GNU_HASH => &mut gnu_hash,
             DT_SYMTAB => &mut sym,
             DT_SYMENT => &mut syment,
             DT_STRTAB => &mut strtab,
@@ -116,7 +119,6 @@ fn inspect(b: &[u8]) -> Result<String, String> {
     if !term {
         return Err("PT_DYNAMIC lacks DT_NULL".into());
     }
-    let hash = req(hash, "DT_HASH")?;
     let sym = req(sym, "DT_SYMTAB")?;
     let syment = req(syment, "DT_SYMENT")?;
     let strtab = req(strtab, "DT_STRTAB")?;
@@ -127,10 +129,9 @@ fn inspect(b: &[u8]) -> Result<String, String> {
     if syment != 24 || relaent != 24 || relasz % 24 != 0 {
         return Err("unsupported dynamic table entry size".into());
     }
-    let hb = map(b, &hs, hash, 8, 0, "DT_HASH")?;
-    let n = u64::from(u32at(hb, 4));
+    let n = dynamic_symbol_count(b, &hs, hash, gnu_hash)?;
     if n == 0 {
-        return Err("DT_HASH reports zero symbols".into());
+        return Err("dynamic hash metadata reports zero symbols".into());
     }
     let sb = map(
         b,
@@ -194,6 +195,107 @@ fn inspect(b: &[u8]) -> Result<String, String> {
         return Err("DT_RELA contains no R_X86_64_PC32 relocations".into());
     }
     Ok(text)
+}
+
+fn dynamic_symbol_count(
+    b: &[u8],
+    hs: &[Phdr],
+    hash: Option<u64>,
+    gnu_hash: Option<u64>,
+) -> Result<u64, String> {
+    if let Some(address) = hash {
+        let header = map(b, hs, address, 8, 0, "DT_HASH header")?;
+        return Ok(u64::from(u32at(header, 4)));
+    }
+    let address = gnu_hash.ok_or_else(|| {
+        "R_X86_64_PC32 validation requires DT_HASH or DT_GNU_HASH to bound DT_SYMTAB".to_owned()
+    })?;
+    gnu_hash_symbol_count(b, hs, address)
+}
+
+fn gnu_hash_symbol_count(b: &[u8], hs: &[Phdr], address: u64) -> Result<u64, String> {
+    let header = map(b, hs, address, 16, 0, "DT_GNU_HASH header")?;
+    let bucket_count = u32at(header, 0);
+    let symbol_offset = u32at(header, 4);
+    let bloom_count = u32at(header, 8);
+    if bucket_count == 0 {
+        return Err("DT_GNU_HASH bucket count must be non-zero".into());
+    }
+    if bloom_count == 0 || !bloom_count.is_power_of_two() {
+        return Err(format!(
+            "DT_GNU_HASH bloom count {bloom_count} must be a non-zero power of two"
+        ));
+    }
+    let bloom_bytes = u64::from(bloom_count)
+        .checked_mul(8)
+        .ok_or("DT_GNU_HASH bloom byte size overflows u64")?;
+    let bucket_bytes = u64::from(bucket_count)
+        .checked_mul(4)
+        .ok_or("DT_GNU_HASH bucket byte size overflows u64")?;
+    let prefix_size = 16u64
+        .checked_add(bloom_bytes)
+        .and_then(|value| value.checked_add(bucket_bytes))
+        .ok_or("DT_GNU_HASH prefix byte size overflows u64")?;
+    let prefix = map(b, hs, address, prefix_size, 0, "DT_GNU_HASH prefix")?;
+    let bucket_start = usize::try_from(
+        16u64
+            .checked_add(bloom_bytes)
+            .ok_or("DT_GNU_HASH bucket offset overflows u64")?,
+    )
+    .map_err(|_| "DT_GNU_HASH bucket offset does not fit usize")?;
+    let chain_address = address
+        .checked_add(prefix_size)
+        .ok_or("DT_GNU_HASH chain address overflows u64")?;
+    let mut count = symbol_offset;
+    for bucket_index in 0..bucket_count {
+        let bucket_delta = u64::from(bucket_index)
+            .checked_mul(4)
+            .ok_or("DT_GNU_HASH bucket offset overflows u64")?;
+        let offset = bucket_start
+            .checked_add(
+                usize::try_from(bucket_delta)
+                    .map_err(|_| "DT_GNU_HASH bucket offset does not fit usize")?,
+            )
+            .ok_or("DT_GNU_HASH bucket offset overflows usize")?;
+        let start_symbol = u32at(prefix, offset);
+        if start_symbol == 0 {
+            continue;
+        }
+        if start_symbol < symbol_offset {
+            return Err(format!(
+                "DT_GNU_HASH bucket {bucket_index} starts at symbol {start_symbol}, below symbol offset {symbol_offset}"
+            ));
+        }
+        let mut symbol = start_symbol;
+        loop {
+            let chain_index = symbol
+                .checked_sub(symbol_offset)
+                .ok_or("DT_GNU_HASH chain index underflows")?;
+            let chain_offset = u64::from(chain_index)
+                .checked_mul(4)
+                .ok_or("DT_GNU_HASH chain offset overflows u64")?;
+            let entry_address = chain_address
+                .checked_add(chain_offset)
+                .ok_or("DT_GNU_HASH chain address overflows u64")?;
+            let entry = map(
+                b,
+                hs,
+                entry_address,
+                4,
+                0,
+                &format!("DT_GNU_HASH bucket {bucket_index} chain entry for symbol {symbol}"),
+            )?;
+            let next = symbol
+                .checked_add(1)
+                .ok_or("DT_GNU_HASH symbol index overflows u32")?;
+            if u32at(entry, 0) & 1 != 0 {
+                count = count.max(next);
+                break;
+            }
+            symbol = next;
+        }
+    }
+    Ok(u64::from(count))
 }
 
 fn phdrs(b: &[u8]) -> Result<Vec<Phdr>, String> {

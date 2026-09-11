@@ -11,6 +11,7 @@ const PF_X: u32 = 1;
 const DT_NULL: i64 = 0;
 const DT_HASH: i64 = 4;
 const DT_RELA: i64 = 7;
+const DT_GNU_HASH: i64 = 0x6fff_fef5;
 const R_X86_64_PC32: u32 = 2;
 
 fn temp(label: &str) -> PathBuf {
@@ -49,6 +50,35 @@ fn fixture(d: &Path) -> PathBuf {
         .success());
     so
 }
+
+fn gnu_hash_fixture(d: &Path) -> PathBuf {
+    let s = d.join("gnu.s");
+    let o = d.join("gnu.o");
+    let so = d.join("gnu.so");
+    fs::write(
+        &s,
+        ".text\n.globl dummy\ndummy:\nret\n.data\n.globl slot\nslot:\n.long external - .\n",
+    )
+    .unwrap();
+    assert!(Command::new("as")
+        .args(["-o", o.to_str().unwrap(), s.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("ld")
+        .args([
+            "-shared",
+            "--hash-style=gnu",
+            "-o",
+            so.to_str().unwrap(),
+            o.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap()
+        .success());
+    so
+}
+
 fn run(ps: &[&Path]) -> Output {
     let mut c = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrela-pc32"));
     for p in ps {
@@ -148,6 +178,51 @@ fn validates_gnu_pc32() {
     assert!(s.contains("binding=external"), "{s}");
     fs::remove_dir_all(d).unwrap();
 }
+
+#[test]
+fn validates_gnu_hash_only_pc32() {
+    let d = temp("gnu-hash");
+    let so = gnu_hash_fixture(&d);
+    let dyns = Command::new("readelf")
+        .args(["-dW", so.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(dyns.status.success());
+    let dyntext = String::from_utf8_lossy(&dyns.stdout);
+    assert!(dyntext.contains("(GNU_HASH)"), "{dyntext}");
+    assert!(!dyntext.contains(" (HASH)"), "{dyntext}");
+    let rels = Command::new("readelf")
+        .args(["-rW", so.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(rels.status.success());
+    assert!(String::from_utf8_lossy(&rels.stdout).contains("R_X86_64_PC32"));
+    let out = run(&[&so]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(String::from_utf8_lossy(&out.stdout).contains("binding=external"));
+    fs::remove_dir_all(d).unwrap();
+}
+
+#[test]
+fn rejects_malformed_gnu_hash_bloom_count() {
+    let d = temp("gnu-hash-bloom");
+    let so = gnu_hash_fixture(&d);
+    let mut b = fs::read(&so).unwrap();
+    let hash = tag(&b, DT_GNU_HASH);
+    let o = map(&b, hash);
+    b[o + 8..o + 12].copy_from_slice(&0u32.to_le_bytes());
+    let bad = d.join("bad.so");
+    fs::write(&bad, b).unwrap();
+    let out = run(&[&bad]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("bloom count"));
+    fs::remove_dir_all(d).unwrap();
+}
+
 #[test]
 fn rejects_bad_symbol_index() {
     let d = temp("index");
