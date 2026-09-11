@@ -205,6 +205,9 @@ fn rejects_hash_table_virtual_range_overflow() {
 
     let output = run_tool("alpha", &bad);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("DT_HASH header virtual range overflows u64"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("DT_HASH header virtual range overflows u64")
+    );
     fs::remove_dir_all(dir).unwrap();
 }
