@@ -249,7 +249,11 @@ fn dynamic_symbol_count(
     gnu_hash_symbol_count(bytes, phdrs, address)
 }
 
-fn gnu_hash_symbol_count(bytes: &[u8], phdrs: &[Phdr], address: u64) -> Result<u64, String> {
+fn gnu_hash_symbol_count(
+    bytes: &[u8],
+    phdrs: &[Phdr],
+    address: u64,
+) -> Result<u64, String> {
     let header = map_file(bytes, phdrs, address, 16, 0, "DT_GNU_HASH header")?;
     let bucket_count = read_u32(header, 0);
     let symbol_offset = read_u32(header, 4);
@@ -272,7 +276,14 @@ fn gnu_hash_symbol_count(bytes: &[u8], phdrs: &[Phdr], address: u64) -> Result<u
         .checked_add(bloom_bytes)
         .and_then(|value| value.checked_add(bucket_bytes))
         .ok_or("DT_GNU_HASH prefix byte size overflows u64")?;
-    let prefix = map_file(bytes, phdrs, address, prefix_size, 0, "DT_GNU_HASH prefix")?;
+    let prefix = map_file(
+        bytes,
+        phdrs,
+        address,
+        prefix_size,
+        0,
+        "DT_GNU_HASH prefix",
+    )?;
     let bucket_start = usize::try_from(
         16u64
             .checked_add(bloom_bytes)
