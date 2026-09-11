@@ -1,0 +1,20 @@
+name: Format Artifact
+
+on:
+  pull_request:
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-output
+          path: |
+            src/bin/mini-elf-needed-resolve.rs
+            tests/dynamic_needed_resolve.rs
