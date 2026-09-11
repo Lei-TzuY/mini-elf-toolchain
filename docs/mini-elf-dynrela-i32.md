@@ -8,7 +8,7 @@
 mini-elf-dynrela-i32 --load-bias <address> <input>...
 ```
 
-The validator checks `PT_DYNAMIC`, the ELF64 `DT_RELA` tuple, `DT_SYMTAB`, `DT_SYMENT`, `DT_STRTAB`, and `DT_STRSZ`. Dynamic-symbol bounds come from SysV `DT_HASH.nchain` when present; GNU-hash-only images are also accepted by deriving the upper bound from checked `DT_GNU_HASH` metadata. The GNU-hash path validates a nonzero bucket count, a nonzero power-of-two Bloom count, checked Bloom/bucket prefix arithmetic, bucket lower bounds, file-backed chain traversal, terminating chain entries, and symbol-index/address overflow. At least one of `DT_HASH` or `DT_GNU_HASH` is required.
+The validator checks `PT_DYNAMIC`, the ELF64 `DT_RELA` tuple, `DT_SYMTAB`, `DT_SYMENT`, `DT_STRTAB`, and `DT_STRSZ`. Dynamic-symbol bounds come from SysV `DT_HASH.nchain` when present; GNU-hash-only images are also accepted by deriving the upper bound from checked `DT_GNU_HASH` metadata. When both hash tables are present, the SysV `DT_HASH` count remains authoritative for this bounded path. The GNU-hash path validates a nonzero bucket count, a nonzero power-of-two Bloom count, checked Bloom/bucket prefix arithmetic, bucket lower bounds, file-backed chain traversal, terminating chain entries, and symbol-index/address overflow. At least one of `DT_HASH` or `DT_GNU_HASH` is required.
 
 Each `R_X86_64_32S` entry must reference a nonzero in-range same-image defined symbol, target a complete four-byte range in writable `PT_LOAD` memory, and avoid absolute and TLS symbol semantics. Dynamic symbol names must terminate within the declared string table.
 
