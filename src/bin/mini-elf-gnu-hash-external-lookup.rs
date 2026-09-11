@@ -3,17 +3,12 @@ use std::ffi::OsString;
 use std::fs;
 use std::process::ExitCode;
 
+#[allow(dead_code)]
 mod checked_lookup {
     include!("mini-elf-gnu-hash-lookup.rs");
 
     pub fn lookup(symbol: &str, input: &std::ffi::OsStr) -> Result<String, String> {
-        run(
-            [
-                std::ffi::OsString::from(symbol),
-                input.to_os_string(),
-            ]
-            .into_iter(),
-        )
+        run([std::ffi::OsString::from(symbol), input.to_os_string()].into_iter())
     }
 }
 
@@ -71,7 +66,8 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
         let lookup = checked_lookup::lookup(symbol, input)?;
         let index = parse_lookup_index(&lookup)?;
         let body = if let Some(index) = index {
-            let bytes = fs::read(input).map_err(|error| format!("cannot read '{name}': {error}"))?;
+            let bytes =
+                fs::read(input).map_err(|error| format!("cannot read '{name}': {error}"))?;
             let eligibility = external_eligibility(&bytes, index)?;
             if eligibility.eligible {
                 format!(
