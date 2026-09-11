@@ -1,0 +1,26 @@
+name: Format Patch
+
+on:
+  pull_request:
+    paths:
+      - 'src/bin/mini-elf-gnu-hash.rs'
+      - 'tests/gnu_hash.rs'
+      - '.github/workflows/format-debug.yml'
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Capture canonical rustfmt patch
+        run: |
+          cargo fmt
+          git diff -- src/bin/mini-elf-gnu-hash.rs tests/gnu_hash.rs > rustfmt.patch
+          cat rustfmt.patch
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-patch
+          path: rustfmt.patch
