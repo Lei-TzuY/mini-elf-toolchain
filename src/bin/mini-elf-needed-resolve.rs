@@ -11,10 +11,13 @@ mod needed {
 
     pub fn names(input: &std::ffi::OsStr) -> Result<Vec<String>, String> {
         let display = input.to_string_lossy().into_owned();
-        let file = std::fs::read(input).map_err(|error| format!("cannot read '{display}': {error}"))?;
+        let file = std::fs::read(input)
+            .map_err(|error| format!("cannot read '{display}': {error}"))?;
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let headers = program_headers(header, &file).map_err(|error| format!("{display}: {error}"))?;
-        let entries = dynamic_entries(&headers, &file).map_err(|error| format!("{display}: {error}"))?;
+        let headers =
+            program_headers(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        let entries = dynamic_entries(&headers, &file)
+            .map_err(|error| format!("{display}: {error}"))?;
         let offsets = entries
             .iter()
             .filter(|entry| entry.tag == DT_NEEDED)
@@ -127,7 +130,8 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
 fn direct_dependency_path(directory: &Path, name: &str) -> Result<PathBuf, String> {
     let path = Path::new(name);
     let mut components = path.components();
-    let valid = matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none();
+    let valid = matches!(components.next(), Some(Component::Normal(_)))
+        && components.next().is_none();
     if !valid || name.is_empty() || path.file_name() != Some(OsStr::new(name)) {
         return Err(format!(
             "DT_NEEDED dependency '{name}' is not a plain library basename"
