@@ -174,9 +174,7 @@ fn format_gnu_hash(header: Elf64Header, file: &[u8]) -> Result<String, String> {
                 file.len(),
                 entry_address,
                 4,
-                &format!(
-                    "DT_GNU_HASH bucket {bucket_index} chain entry for symbol {symbol}"
-                ),
+                &format!("DT_GNU_HASH bucket {bucket_index} chain entry for symbol {symbol}"),
             )?;
             let entry_offset = usize::try_from(entry_offset)
                 .map_err(|_| "DT_GNU_HASH chain offset does not fit usize".to_owned())?;
