@@ -174,7 +174,6 @@ fn rejects_malformed_bloom_shift() {
 
     let output = run_tool("alpha", &bad);
     assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("bloom shift 64 must be less than 64"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("bloom shift 64 must be less than 64"));
     fs::remove_dir_all(dir).unwrap();
 }

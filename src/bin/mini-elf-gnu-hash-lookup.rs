@@ -112,7 +112,9 @@ fn inspect(file: &[u8], symbol: &str) -> Result<String, String> {
         let value = u64at(entry, 8);
         if terminated {
             if tag != DT_NULL || value != 0 {
-                return Err(format!("PT_DYNAMIC entry {index} contains data after DT_NULL"));
+                return Err(format!(
+                    "PT_DYNAMIC entry {index} contains data after DT_NULL"
+                ));
             }
             continue;
         }
@@ -165,7 +167,9 @@ fn inspect(file: &[u8], symbol: &str) -> Result<String, String> {
         ));
     }
     if bloom_shift >= 64 {
-        return Err(format!("DT_GNU_HASH bloom shift {bloom_shift} must be less than 64"));
+        return Err(format!(
+            "DT_GNU_HASH bloom shift {bloom_shift} must be less than 64"
+        ));
     }
 
     let bloom_bytes = u64::from(bloom_count)
@@ -287,7 +291,8 @@ fn gnu_hash(bytes: &[u8]) -> u32 {
 }
 
 fn dynstr(table: &[u8], offset: u32, symbol_index: u32) -> Result<String, String> {
-    let start = usize::try_from(offset).map_err(|_| "string offset does not fit usize".to_owned())?;
+    let start =
+        usize::try_from(offset).map_err(|_| "string offset does not fit usize".to_owned())?;
     if start >= table.len() {
         return Err(format!(
             "dynamic symbol {symbol_index} name offset is outside DT_STRTAB"
@@ -382,10 +387,10 @@ fn map_file<'a>(
             let finish = start
                 .checked_add(size)
                 .ok_or_else(|| format!("{label} file range overflows u64"))?;
-            let start = usize::try_from(start)
-                .map_err(|_| format!("{label} offset does not fit usize"))?;
-            let finish = usize::try_from(finish)
-                .map_err(|_| format!("{label} end does not fit usize"))?;
+            let start =
+                usize::try_from(start).map_err(|_| format!("{label} offset does not fit usize"))?;
+            let finish =
+                usize::try_from(finish).map_err(|_| format!("{label} end does not fit usize"))?;
             return file
                 .get(start..finish)
                 .ok_or_else(|| format!("{label} exceeds input"));
