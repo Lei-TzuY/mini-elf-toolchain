@@ -154,7 +154,9 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
         let val = u64at(e, 8);
         if term {
             if tag != DT_NULL || val != 0 {
-                return Err(format!("PT_DYNAMIC entry {idx} contains data after DT_NULL"));
+                return Err(format!(
+                    "PT_DYNAMIC entry {idx} contains data after DT_NULL"
+                ));
             }
             continue;
         }
@@ -281,8 +283,7 @@ fn dynamic_symbol_count(
         return Ok(u64::from(u32at(header, 4)));
     }
     let address = gnu_hash.ok_or_else(|| {
-        "R_X86_64_DTPOFF32 validation requires DT_HASH or DT_GNU_HASH to bound DT_SYMTAB"
-            .to_owned()
+        "R_X86_64_DTPOFF32 validation requires DT_HASH or DT_GNU_HASH to bound DT_SYMTAB".to_owned()
     })?;
     gnu_hash_symbol_count(file, ph, address)
 }
@@ -392,7 +393,8 @@ fn dynstr(tab: &[u8], off: u32, si: u64) -> Result<String, String> {
 }
 
 fn program_headers(f: &[u8]) -> Result<Vec<Ph>, String> {
-    let off = usize::try_from(u64at(f, 32)).map_err(|_| "program-header offset does not fit usize")?;
+    let off =
+        usize::try_from(u64at(f, 32)).map_err(|_| "program-header offset does not fit usize")?;
     let ent = u16at(f, 54) as usize;
     let num = u16at(f, 56) as usize;
     if ent != PHENT {
@@ -444,10 +446,9 @@ fn map_file<'a>(f: &'a [u8], ph: &[Ph], a: u64, n: u64, label: &str) -> Result<&
         .checked_add(n)
         .ok_or_else(|| format!("{label} virtual range overflows u64"))?;
     for p in ph.iter().filter(|p| p.kind == PT_LOAD) {
-        let pe = p
-            .va
-            .checked_add(p.filesz)
-            .ok_or_else(|| format!("{label} PT_LOAD file range overflows u64"))?;
+        let pe =
+            p.va.checked_add(p.filesz)
+                .ok_or_else(|| format!("{label} PT_LOAD file range overflows u64"))?;
         if a >= p.va && end <= pe {
             let s = p
                 .off
@@ -456,7 +457,8 @@ fn map_file<'a>(f: &'a [u8], ph: &[Ph], a: u64, n: u64, label: &str) -> Result<&
             let e = s
                 .checked_add(n)
                 .ok_or_else(|| format!("{label} file range overflows u64"))?;
-            let su = usize::try_from(s).map_err(|_| format!("{label} offset does not fit usize"))?;
+            let su =
+                usize::try_from(s).map_err(|_| format!("{label} offset does not fit usize"))?;
             let eu = usize::try_from(e).map_err(|_| format!("{label} end does not fit usize"))?;
             return f
                 .get(su..eu)
@@ -474,10 +476,9 @@ fn memory_range(ph: &[Ph], a: u64, n: u64, flags: u32, label: &str) -> Result<()
         .iter()
         .filter(|p| p.kind == PT_LOAD && p.flags & flags == flags)
     {
-        let pe = p
-            .va
-            .checked_add(p.memsz)
-            .ok_or_else(|| format!("{label} PT_LOAD memory range overflows u64"))?;
+        let pe =
+            p.va.checked_add(p.memsz)
+                .ok_or_else(|| format!("{label} PT_LOAD memory range overflows u64"))?;
         if a >= p.va && end <= pe {
             return Ok(());
         }

@@ -173,8 +173,7 @@ fn accepts_gnu_hash_only_image_and_gnu_readelf_recognizes_relocation() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .contains("Validated R_X86_64_DTPOFF32 relocations")
+        String::from_utf8_lossy(&output.stdout).contains("Validated R_X86_64_DTPOFF32 relocations")
     );
     fs::remove_dir_all(dir).unwrap();
 }
