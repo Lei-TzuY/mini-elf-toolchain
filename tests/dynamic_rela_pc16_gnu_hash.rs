@@ -150,9 +150,7 @@ fn accepts_gnu_hash_only_image_and_gnu_readelf_recognizes_relocation() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("Validated R_X86_64_PC16 relocations")
-    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("Validated R_X86_64_PC16 relocations"));
     fs::remove_dir_all(dir).unwrap();
 }
 
@@ -168,9 +166,7 @@ fn rejects_malformed_gnu_hash_bloom_count() {
 
     let output = run_tool(&bad);
     assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("bloom count 3 must be a non-zero power of two")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("bloom count 3 must be a non-zero power of two"));
     fs::remove_dir_all(dir).unwrap();
 }
