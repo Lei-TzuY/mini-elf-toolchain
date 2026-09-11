@@ -7,21 +7,14 @@ mod checked_external_lookup {
     include!("mini-elf-gnu-hash-external-lookup.rs");
 
     pub fn lookup(symbol: &str, input: &std::ffi::OsStr) -> Result<Option<u32>, String> {
-        let output = run(
-            [
-                std::ffi::OsString::from(symbol),
-                input.to_os_string(),
-            ]
-            .into_iter(),
-        )?;
+        let output = run([std::ffi::OsString::from(symbol), input.to_os_string()].into_iter())?;
         if output.contains(" not-found\n") {
             return Ok(None);
         }
         let marker = " index=";
-        let start = output
-            .find(marker)
-            .ok_or_else(|| "checked GNU external lookup returned an unrecognized result".to_owned())?
-            + marker.len();
+        let start = output.find(marker).ok_or_else(|| {
+            "checked GNU external lookup returned an unrecognized result".to_owned()
+        })? + marker.len();
         let end = output[start..]
             .find(' ')
             .map(|offset| start + offset)
