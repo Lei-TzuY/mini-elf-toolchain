@@ -1,0 +1,27 @@
+name: Format COPY GNU hash slice
+on:
+  push:
+    branches: [feat/copy-gnu-hash]
+permissions:
+  contents: write
+jobs:
+  format:
+    if: ${{ !contains(github.event.head_commit.message, '[skip-format]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/copy-gnu-hash
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit formatting
+        run: |
+          if ! git diff --quiet; then
+            git config user.name "LeiZ"
+            git config user.email "52287354+Lei-TzuY@users.noreply.github.com"
+            git add src/bin/mini-elf-dynrela-copy.rs tests/dynamic_rela_copy_gnu_hash.rs
+            git commit -m "style: apply rustfmt [skip-format]"
+            git push origin HEAD:feat/copy-gnu-hash
+          fi
