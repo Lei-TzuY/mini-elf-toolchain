@@ -21,6 +21,7 @@ const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
 const DT_STRSZ: i64 = 10;
 const DT_SYMENT: i64 = 11;
+const DT_GNU_HASH: i64 = 0x6fff_fef5;
 const R_X86_64_8: u32 = 14;
 const SHN_UNDEF: u16 = 0;
 const SHN_ABS: u16 = 0xfff1;
@@ -42,6 +43,7 @@ struct Dynamic {
     relasz: Option<u64>,
     relaent: Option<u64>,
     hash: Option<u64>,
+    gnu_hash: Option<u64>,
     symtab: Option<u64>,
     syment: Option<u64>,
     strtab: Option<u64>,
@@ -146,7 +148,6 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
     let rela = required(meta.rela, "DT_RELA")?;
     let relasz = required(meta.relasz, "DT_RELASZ")?;
     let relaent = required(meta.relaent, "DT_RELAENT")?;
-    let hash = required(meta.hash, "DT_HASH")?;
     let symtab = required(meta.symtab, "DT_SYMTAB")?;
     let syment = required(meta.syment, "DT_SYMENT")?;
     let strtab = required(meta.strtab, "DT_STRTAB")?;
@@ -155,10 +156,9 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
         return Err("unsupported dynamic RELA or symbol entry size".into());
     }
 
-    let hash_bytes = map_file(file, &phdrs, hash, 8, "DT_HASH header")?;
-    let symbol_count = u64::from(read_u32(hash_bytes, 4));
+    let symbol_count = dynamic_symbol_count(file, &phdrs, meta.hash, meta.gnu_hash)?;
     if symbol_count == 0 {
-        return Err("DT_HASH reports zero dynamic symbols".into());
+        return Err("dynamic hash metadata reports zero dynamic symbols".into());
     }
     let symtab_size = symbol_count
         .checked_mul(syment)
@@ -240,6 +240,106 @@ fn inspect(file: &[u8], bias: u64) -> Result<String, String> {
     Ok(out)
 }
 
+fn dynamic_symbol_count(
+    file: &[u8],
+    phdrs: &[Phdr],
+    hash: Option<u64>,
+    gnu_hash: Option<u64>,
+) -> Result<u64, String> {
+    if let Some(address) = hash {
+        let header = map_file(file, phdrs, address, 8, "DT_HASH header")?;
+        return Ok(u64::from(read_u32(header, 4)));
+    }
+    let address = gnu_hash.ok_or_else(|| {
+        "R_X86_64_8 validation requires DT_HASH or DT_GNU_HASH to bound DT_SYMTAB".to_owned()
+    })?;
+    gnu_hash_symbol_count(file, phdrs, address)
+}
+
+fn gnu_hash_symbol_count(file: &[u8], phdrs: &[Phdr], address: u64) -> Result<u64, String> {
+    let header = map_file(file, phdrs, address, 16, "DT_GNU_HASH header")?;
+    let bucket_count = read_u32(header, 0);
+    let symbol_offset = read_u32(header, 4);
+    let bloom_count = read_u32(header, 8);
+    if bucket_count == 0 {
+        return Err("DT_GNU_HASH bucket count must be non-zero".into());
+    }
+    if bloom_count == 0 || !bloom_count.is_power_of_two() {
+        return Err(format!(
+            "DT_GNU_HASH bloom count {bloom_count} must be a non-zero power of two"
+        ));
+    }
+    let bloom_bytes = u64::from(bloom_count)
+        .checked_mul(8)
+        .ok_or("DT_GNU_HASH bloom byte size overflows u64")?;
+    let bucket_bytes = u64::from(bucket_count)
+        .checked_mul(4)
+        .ok_or("DT_GNU_HASH bucket byte size overflows u64")?;
+    let prefix_size = 16u64
+        .checked_add(bloom_bytes)
+        .and_then(|value| value.checked_add(bucket_bytes))
+        .ok_or("DT_GNU_HASH prefix byte size overflows u64")?;
+    let prefix = map_file(file, phdrs, address, prefix_size, "DT_GNU_HASH prefix")?;
+    let bucket_start = usize::try_from(
+        16u64
+            .checked_add(bloom_bytes)
+            .ok_or("DT_GNU_HASH bucket offset overflows u64")?,
+    )
+    .map_err(|_| "DT_GNU_HASH bucket offset does not fit usize")?;
+    let chain_address = address
+        .checked_add(prefix_size)
+        .ok_or("DT_GNU_HASH chain address overflows u64")?;
+    let mut count = symbol_offset;
+    for bucket_index in 0..bucket_count {
+        let bucket_delta = u64::from(bucket_index)
+            .checked_mul(4)
+            .ok_or("DT_GNU_HASH bucket offset overflows u64")?;
+        let offset = bucket_start
+            .checked_add(
+                usize::try_from(bucket_delta)
+                    .map_err(|_| "DT_GNU_HASH bucket offset does not fit usize")?,
+            )
+            .ok_or("DT_GNU_HASH bucket offset overflows usize")?;
+        let start_symbol = read_u32(prefix, offset);
+        if start_symbol == 0 {
+            continue;
+        }
+        if start_symbol < symbol_offset {
+            return Err(format!(
+                "DT_GNU_HASH bucket {bucket_index} starts at symbol {start_symbol}, below symbol offset {symbol_offset}"
+            ));
+        }
+        let mut symbol = start_symbol;
+        loop {
+            let chain_index = symbol
+                .checked_sub(symbol_offset)
+                .ok_or("DT_GNU_HASH chain index underflows")?;
+            let chain_offset = u64::from(chain_index)
+                .checked_mul(4)
+                .ok_or("DT_GNU_HASH chain offset overflows u64")?;
+            let entry_address = chain_address
+                .checked_add(chain_offset)
+                .ok_or("DT_GNU_HASH chain address overflows u64")?;
+            let entry = map_file(
+                file,
+                phdrs,
+                entry_address,
+                4,
+                &format!("DT_GNU_HASH bucket {bucket_index} chain entry for symbol {symbol}"),
+            )?;
+            let next = symbol
+                .checked_add(1)
+                .ok_or("DT_GNU_HASH symbol index overflows u32")?;
+            if read_u32(entry, 0) & 1 != 0 {
+                count = count.max(next);
+                break;
+            }
+            symbol = next;
+        }
+    }
+    Ok(u64::from(count))
+}
+
 fn parse_dynamic(bytes: &[u8]) -> Result<Dynamic, String> {
     if bytes.len() % DYN_SIZE != 0 {
         return Err("PT_DYNAMIC size is not a whole number of entries".into());
@@ -264,6 +364,7 @@ fn parse_dynamic(bytes: &[u8]) -> Result<Dynamic, String> {
             DT_RELASZ => set_once(&mut d.relasz, value, "DT_RELASZ")?,
             DT_RELAENT => set_once(&mut d.relaent, value, "DT_RELAENT")?,
             DT_HASH => set_once(&mut d.hash, value, "DT_HASH")?,
+            DT_GNU_HASH => set_once(&mut d.gnu_hash, value, "DT_GNU_HASH")?,
             DT_SYMTAB => set_once(&mut d.symtab, value, "DT_SYMTAB")?,
             DT_SYMENT => set_once(&mut d.syment, value, "DT_SYMENT")?,
             DT_STRTAB => set_once(&mut d.strtab, value, "DT_STRTAB")?,
