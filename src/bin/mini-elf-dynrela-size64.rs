@@ -389,10 +389,9 @@ fn map_file<'a>(
         .iter()
         .filter(|h| h.kind == PT_LOAD && h.flags & flags == flags)
     {
-        let load_end = h
-            .va
-            .checked_add(h.filesz)
-            .ok_or_else(|| format!("{label} segment range overflow"))?;
+        let load_end =
+            h.va.checked_add(h.filesz)
+                .ok_or_else(|| format!("{label} segment range overflow"))?;
         if address >= h.va && end <= load_end {
             let file_offset = h
                 .off
@@ -418,10 +417,9 @@ fn map_memory(
         .iter()
         .filter(|h| h.kind == PT_LOAD && h.flags & flags == flags)
     {
-        let load_end = h
-            .va
-            .checked_add(h.memsz)
-            .ok_or_else(|| format!("{label} segment range overflow"))?;
+        let load_end =
+            h.va.checked_add(h.memsz)
+                .ok_or_else(|| format!("{label} segment range overflow"))?;
         if address >= h.va && end <= load_end {
             return Ok(());
         }

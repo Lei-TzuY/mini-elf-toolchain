@@ -144,9 +144,7 @@ fn validates_gnu_hash_only_size64() {
         .output()
         .unwrap();
     assert!(relocations.status.success());
-    assert!(
-        String::from_utf8_lossy(&relocations.stdout).contains("R_X86_64_SIZE64")
-    );
+    assert!(String::from_utf8_lossy(&relocations.stdout).contains("R_X86_64_SIZE64"));
 
     let output = run(&image);
     assert!(
