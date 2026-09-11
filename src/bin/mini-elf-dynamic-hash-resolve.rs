@@ -91,10 +91,9 @@ fn parse_lookup_index(output: &str, style: &str) -> Result<Option<u32>, String> 
         return Ok(None);
     }
     let marker = " index=";
-    let start = output
-        .find(marker)
-        .ok_or_else(|| format!("checked {style} external lookup returned an unrecognized result"))?
-        + marker.len();
+    let start = output.find(marker).ok_or_else(|| {
+        format!("checked {style} external lookup returned an unrecognized result")
+    })? + marker.len();
     let end = output[start..]
         .find(' ')
         .map(|offset| start + offset)
