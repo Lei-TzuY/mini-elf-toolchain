@@ -54,7 +54,7 @@ fn build_dependency(
     soname: &str,
 ) -> PathBuf {
     let object = assemble(dir, stem, symbol);
-    let image = dir.join(format!("{stem}.so"));
+    let image = dir.join(format!("lib{stem}.so"));
     run(Command::new("ld")
         .arg("-shared")
         .arg(format!("--hash-style={hash_style}"))
