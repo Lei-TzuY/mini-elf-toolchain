@@ -1,80 +1,24 @@
 name: CI
+
 on:
   push:
-    branches: [feat/dynrela-u16-gnu-hash]
+    branches: [main]
+  pull_request:
+
 permissions:
-  contents: write
+  contents: read
+
 jobs:
-  apply:
+  rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: feat/dynrela-u16-gnu-hash
-          fetch-depth: 0
-      - name: Apply implementation and focused regression
-        shell: bash
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          u16_path = Path('src/bin/mini-elf-dynrela-u16.rs')
-          i32_path = Path('src/bin/mini-elf-dynrela-i32.rs')
-          text = u16_path.read_text()
-          i32 = i32_path.read_text()
-          text = text.replace('const DT_SYMENT: i64 = 11;\n', 'const DT_SYMENT: i64 = 11;\nconst DT_GNU_HASH: i64 = 0x6fff_fef5;\n', 1)
-          text = text.replace('    hash: Option<u64>,\n    symtab: Option<u64>,', '    hash: Option<u64>,\n    gnu_hash: Option<u64>,\n    symtab: Option<u64>,', 1)
-          text = text.replace('    let hash = required(meta.hash, "DT_HASH")?;\n', '', 1)
-          old = '''    let hash_bytes = map_file(file, &phdrs, hash, 8, "DT_HASH header")?;
-    let symbol_count = u64::from(read_u32(hash_bytes, 4));
-    if symbol_count == 0 {
-        return Err("DT_HASH reports zero dynamic symbols".into());
-    }
-'''
-          new = '''    let symbol_count = dynamic_symbol_count(file, &phdrs, meta.hash, meta.gnu_hash)?;
-    if symbol_count == 0 {
-        return Err("dynamic hash metadata reports zero dynamic symbols".into());
-    }
-'''
-          if old not in text:
-              raise SystemExit('u16 symbol-count anchor not found')
-          text = text.replace(old, new, 1)
-          start = i32.index('fn dynamic_symbol_count(')
-          end = i32.index('fn parse_dynamic(', start)
-          helper = i32[start:end].replace('R_X86_64_32S validation', 'R_X86_64_16 validation')
-          marker = 'fn parse_dynamic(bytes: &[u8]) -> Result<Dynamic, String> {'
-          text = text.replace(marker, helper + marker, 1)
-          text = text.replace('            DT_HASH => set_once(&mut d.hash, value, "DT_HASH")?,\n', '            DT_HASH => set_once(&mut d.hash, value, "DT_HASH")?,\n            DT_GNU_HASH => set_once(&mut d.gnu_hash, value, "DT_GNU_HASH")?,\n', 1)
-          u16_path.write_text(text)
-
-          test = Path('tests/dynamic_rela_i32_gnu_hash.rs').read_text()
-          test = test.replace('R_X86_64_32S', 'R_X86_64_16')
-          test = test.replace('mini-elf-dynrela-i32', 'mini-elf-dynrela-u16')
-          test = test.replace('i32-gnu-hash', 'u16-gnu-hash')
-          test = test.replace('const R_X86_64_16: u32 = 11;', 'const R_X86_64_16: u32 = 12;')
-          test = test.replace('.args(["--load-bias", "0x10000000"])', '.args(["--load-bias", "0"])')
-          Path('tests/dynamic_rela_u16_gnu_hash.rs').write_text(test)
-
-          doc_path = Path('docs/mini-elf-dynrela-u16.md')
-          doc = doc_path.read_text()
-          doc += '''\n\nGNU-hash-only ET_DYN images are accepted by deriving the dynamic-symbol upper bound from checked `DT_GNU_HASH` metadata when `DT_HASH` is absent. The GNU-hash path validates nonzero bucket count, a nonzero power-of-two Bloom count, checked Bloom/bucket prefix arithmetic, bucket lower bounds, file-backed chain traversal, terminating chain entries, and symbol-index/address overflow. Focused regression coverage builds a real GNU `ld --hash-style=gnu` image and verifies the patched `R_X86_64_16` relocation with GNU `readelf -rW`, plus malformed Bloom metadata rejection.\n'''
-          doc_path.write_text(doc)
-          PY
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Validate slice
-        run: |
-          cargo fmt --all
-          cargo test --test dynamic_rela_u16_gnu_hash
-          cargo clippy --all-targets --all-features -- -D warnings
-          cargo test --all-targets --all-features
-      - name: Commit slice and restore CI
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git fetch origin main
-          git checkout origin/main -- .github/workflows/ci.yml
-          git rm -f .github/workflows/conquest-u16-gnu-hash.yml
-          git add src/bin/mini-elf-dynrela-u16.rs tests/dynamic_rela_u16_gnu_hash.rs docs/mini-elf-dynrela-u16.md .github/workflows/ci.yml
-          git commit -m 'feat: accept GNU-hash-only R_X86_64_16 images'
-          git push origin HEAD:feat/dynrela-u16-gnu-hash
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Test
+        run: cargo test --all-targets --all-features
