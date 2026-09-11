@@ -151,19 +151,13 @@ fn resolves_first_eligible_definition_across_mixed_hash_styles() {
             .any(|line| line.ends_with(" public_api")));
     }
 
-    let output = run(Command::new(tool())
-        .arg("public_api")
-        .arg(&sysv)
-        .arg(&gnu));
+    let output = run(Command::new(tool()).arg("public_api").arg(&sysv).arg(&gnu));
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains(&format!("file={}", sysv.to_string_lossy())));
     assert!(stdout.contains("hash=sysv"));
     assert!(!stdout.contains(&format!("file={}", gnu.to_string_lossy())));
 
-    let output = run(Command::new(tool())
-        .arg("public_api")
-        .arg(&gnu)
-        .arg(&sysv));
+    let output = run(Command::new(tool()).arg("public_api").arg(&gnu).arg(&sysv));
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains(&format!("file={}", gnu.to_string_lossy())));
     assert!(stdout.contains("hash=gnu"));
@@ -177,10 +171,7 @@ fn returns_not_found_across_mixed_hash_styles() {
     let dir = temp_dir();
     let gnu = build_so(&dir, "gnu", "gnu");
     let sysv = build_so(&dir, "sysv", "sysv");
-    let output = run(Command::new(tool())
-        .arg("missing_api")
-        .arg(&gnu)
-        .arg(&sysv));
+    let output = run(Command::new(tool()).arg("missing_api").arg(&gnu).arg(&sysv));
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         "Dynamic external resolve: symbol=missing_api not-found\n"
