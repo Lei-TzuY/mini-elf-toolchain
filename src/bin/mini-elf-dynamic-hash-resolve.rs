@@ -75,7 +75,8 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
 
 fn lookup_one(symbol: &str, input: &OsStr) -> Result<Option<(HashStyle, u32)>, String> {
     match gnu_external_lookup::lookup(symbol, input) {
-        Ok(output) => parse_lookup_index(&output, "GNU").map(|index| index.map(|index| (HashStyle::Gnu, index))),
+        Ok(output) => parse_lookup_index(&output, "GNU")
+            .map(|index| index.map(|index| (HashStyle::Gnu, index))),
         Err(error) if error == MISSING_GNU_HASH => {
             let output = sysv_external_lookup::lookup(symbol, input)?;
             parse_lookup_index(&output, "SysV")
@@ -97,7 +98,9 @@ fn parse_lookup_index(output: &str, style: &str) -> Result<Option<u32>, String> 
     let end = output[start..]
         .find(' ')
         .map(|offset| start + offset)
-        .ok_or_else(|| format!("checked {style} external lookup omitted the symbol index terminator"))?;
+        .ok_or_else(|| {
+            format!("checked {style} external lookup omitted the symbol index terminator")
+        })?;
     output[start..end]
         .parse::<u32>()
         .map(Some)
