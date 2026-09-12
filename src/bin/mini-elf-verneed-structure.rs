@@ -54,7 +54,10 @@ where
             Err("usage: mini-elf-verneed-structure <input>...".to_owned())
         };
     }
-    if args.iter().any(|arg| arg.to_string_lossy().starts_with('-')) {
+    if args
+        .iter()
+        .any(|arg| arg.to_string_lossy().starts_with('-'))
+    {
         return Err("usage: mini-elf-verneed-structure <input>...".to_owned());
     }
 
@@ -62,7 +65,8 @@ where
     let mut reports = Vec::with_capacity(args.len());
     for input in args {
         let display = input.to_string_lossy().into_owned();
-        let file = fs::read(&input).map_err(|error| format!("cannot read '{display}': {error}"))?;
+        let file =
+            fs::read(&input).map_err(|error| format!("cannot read '{display}': {error}"))?;
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
         let report = inspect(header, &file).map_err(|error| format!("{display}: {error}"))?;
         reports.push((display, report));
@@ -87,7 +91,9 @@ fn inspect(header: Elf64Header, file: &[u8]) -> Result<String, String> {
     let address = unique_tag_value(&entries, DT_VERNEED, "DT_VERNEED")?;
     let count = unique_tag_value(&entries, DT_VERNEEDNUM, "DT_VERNEEDNUM")?;
     match (address, count) {
-        (None, None) => return Ok("No DT_VERNEED version-requirement table found.\n".to_owned()),
+        (None, None) => {
+            return Ok("No DT_VERNEED version-requirement table found.\n".to_owned());
+        }
         (Some(_), None) | (None, Some(_)) => {
             return Err("PT_DYNAMIC must provide DT_VERNEED and DT_VERNEEDNUM together".to_owned());
         }
@@ -198,7 +204,12 @@ fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader
     let table_size = u64::from(header.program_header_count)
         .checked_mul(u64::from(header.program_header_entry_size))
         .ok_or_else(|| "program header table size overflows u64".to_owned())?;
-    checked_file_range(file.len(), header.program_header_offset, table_size, "program header table")?;
+    checked_file_range(
+        file.len(),
+        header.program_header_offset,
+        table_size,
+        "program header table",
+    )?;
 
     let mut result = Vec::with_capacity(usize::from(header.program_header_count));
     for index in 0..u64::from(header.program_header_count) {
@@ -219,7 +230,12 @@ fn program_headers(header: Elf64Header, file: &[u8]) -> Result<Vec<ProgramHeader
             ));
         }
         let segment_offset = read_u64(file, offset + 8);
-        checked_file_range(file.len(), segment_offset, file_size, &format!("program header {index}"))?;
+        checked_file_range(
+            file.len(),
+            segment_offset,
+            file_size,
+            &format!("program header {index}"),
+        )?;
         let virtual_address = read_u64(file, offset + 16);
         virtual_address
             .checked_add(memory_size)
@@ -274,7 +290,11 @@ fn dynamic_entries(headers: &[ProgramHeader], file: &[u8]) -> Result<Vec<Dynamic
     Err("PT_DYNAMIC has no DT_NULL terminator within p_filesz".to_owned())
 }
 
-fn unique_tag_value(entries: &[DynamicEntry], wanted: i64, name: &str) -> Result<Option<u64>, String> {
+fn unique_tag_value(
+    entries: &[DynamicEntry],
+    wanted: i64,
+    name: &str,
+) -> Result<Option<u64>, String> {
     let mut found = None;
     for entry in entries {
         if entry.tag == wanted && found.replace(entry.value).is_some() {
@@ -327,7 +347,8 @@ fn checked_file_range(file_len: usize, offset: u64, size: u64, label: &str) -> R
     let end = offset
         .checked_add(size)
         .ok_or_else(|| format!("{label} file range overflows u64"))?;
-    let file_len = u64::try_from(file_len).map_err(|_| "file length does not fit u64".to_owned())?;
+    let file_len =
+        u64::try_from(file_len).map_err(|_| "file length does not fit u64".to_owned())?;
     if end > file_len {
         return Err(format!(
             "{label} file range {offset}..{end} exceeds file length {file_len}"
