@@ -98,7 +98,12 @@ fn build_grandchild(work: &Path, directory: &Path) -> PathBuf {
     image
 }
 
-fn build_middle(work: &Path, directory: &Path, grandchild_dir: &Path, nodefaultlib: bool) -> PathBuf {
+fn build_middle(
+    work: &Path,
+    directory: &Path,
+    grandchild_dir: &Path,
+    nodefaultlib: bool,
+) -> PathBuf {
     fs::create_dir_all(directory).unwrap();
     let object = assemble(work, "middle", "middle_api");
     let image = directory.join("libmiddle.so");
@@ -183,7 +188,8 @@ fn corrupt_first_needed_to_duplicate_flags_1(image: &Path) {
     let needed_offset = needed_offset.expect("middle DSO should contain DT_NEEDED");
     let flags_1_value = flags_1_value.expect("middle DSO should contain DT_FLAGS_1");
     bytes[needed_offset..needed_offset + 8].copy_from_slice(&DT_FLAGS_1.to_le_bytes());
-    bytes[needed_offset + 8..needed_offset + 16].copy_from_slice(&flags_1_value.to_le_bytes());
+    bytes[needed_offset + 8..needed_offset + 16]
+        .copy_from_slice(&flags_1_value.to_le_bytes());
     fs::write(image, bytes).unwrap();
 }
 
