@@ -90,6 +90,14 @@ fn virtual_to_file_offset(bytes: &[u8], address: u64) -> usize {
     panic!("virtual address {address:#x} should be file-backed")
 }
 
+fn first_vernaux_offset(bytes: &[u8]) -> usize {
+    let verneed_entry = dynamic_entry_offset(bytes, DT_VERNEED);
+    let verneed_address = read_u64(bytes, verneed_entry + 8);
+    let verneed_offset = virtual_to_file_offset(bytes, verneed_address);
+    let aux_relative = read_u32(bytes, verneed_offset + 8) as usize;
+    verneed_offset + aux_relative
+}
+
 fn build_versioned_dependency(dir: &std::path::Path) -> std::path::PathBuf {
     let provider_s = dir.join("provider.s");
     let provider_o = dir.join("provider.o");
@@ -207,6 +215,33 @@ fn external_versym_names_match_gnu_readelf() {
 }
 
 #[test]
+fn corrupted_verneed_hash_is_rejected_atomically() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("versym-needed-hash");
+    let good = build_versioned_dependency(&dir);
+    let bad = dir.join("bad-hash.so");
+    let mut bytes = fs::read(&good).unwrap();
+    let aux_offset = first_vernaux_offset(&bytes);
+    let original = read_u32(&bytes, aux_offset);
+    bytes[aux_offset..aux_offset + 4].copy_from_slice(&original.wrapping_add(1).to_le_bytes());
+    fs::write(&bad, bytes).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym-needed"))
+        .arg(&good)
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "stdout must remain atomic");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("vna_hash"), "{stderr}");
+    assert!(stderr.contains("VERS_1"), "{stderr}");
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn reserved_verneed_index_is_rejected_atomically() {
     if !tool_available("as") || !tool_available("ld") {
         return;
@@ -215,11 +250,7 @@ fn reserved_verneed_index_is_rejected_atomically() {
     let good = build_versioned_dependency(&dir);
     let bad = dir.join("reserved.so");
     let mut bytes = fs::read(&good).unwrap();
-    let verneed_entry = dynamic_entry_offset(&bytes, DT_VERNEED);
-    let verneed_address = read_u64(&bytes, verneed_entry + 8);
-    let verneed_offset = virtual_to_file_offset(&bytes, verneed_address);
-    let aux_relative = read_u32(&bytes, verneed_offset + 8) as usize;
-    let aux_offset = verneed_offset + aux_relative;
+    let aux_offset = first_vernaux_offset(&bytes);
     bytes[aux_offset + 6..aux_offset + 8].copy_from_slice(&1u16.to_le_bytes());
     fs::write(&bad, bytes).unwrap();
 
