@@ -288,3 +288,59 @@ fn overflowing_verneed_address_is_rejected_atomically() {
     assert!(String::from_utf8_lossy(&output.stderr).contains("virtual range overflows u64"));
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn weak_verneed_flag_is_accepted() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("versym-needed-weak-flag");
+    let good = build_versioned_dependency(&dir);
+    let weak = dir.join("weak.so");
+    let mut bytes = fs::read(&good).unwrap();
+    let aux_offset = first_vernaux_offset(&bytes);
+    bytes[aux_offset + 4..aux_offset + 6].copy_from_slice(&2u16.to_le_bytes());
+    fs::write(&weak, bytes).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym-needed"))
+        .arg(&weak)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("requirement=libprovider.so:VERS_1"),
+        "{stdout}"
+    );
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn unknown_verneed_flags_are_rejected_atomically() {
+    if !tool_available("as") || !tool_available("ld") {
+        return;
+    }
+    let dir = temp_dir("versym-needed-unknown-flags");
+    let good = build_versioned_dependency(&dir);
+    let bad = dir.join("bad-flags.so");
+    let mut bytes = fs::read(&good).unwrap();
+    let aux_offset = first_vernaux_offset(&bytes);
+    bytes[aux_offset + 4..aux_offset + 6].copy_from_slice(&0x8000u16.to_le_bytes());
+    fs::write(&bad, bytes).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym-needed"))
+        .arg(&good)
+        .arg(&bad)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty(), "stdout must remain atomic");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("vna_flags"), "{stderr}");
+    assert!(stderr.contains("0x8000"), "{stderr}");
+    let _ = fs::remove_dir_all(dir);
+}
