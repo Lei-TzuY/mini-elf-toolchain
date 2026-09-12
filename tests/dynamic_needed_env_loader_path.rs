@@ -214,8 +214,7 @@ fn secure_mode_suppresses_ambient_loader_path() {
     let fallback = dir.join("fallback");
 
     build_shared(&dir, &env_dir, "dep", "ambient_api", &[], &[], None);
-    let fallback_dependency =
-        build_shared(&dir, &fallback, "dep", "secure_api", &[], &[], None);
+    let fallback_dependency = build_shared(&dir, &fallback, "dep", "secure_api", &[], &[], None);
     let root = build_shared(
         &dir,
         &root_dir,
@@ -239,10 +238,7 @@ fn secure_mode_suppresses_ambient_loader_path() {
         .arg(&fallback));
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dependencies=1"));
-    assert!(stdout.contains(&format!(
-        "file={}",
-        fallback_dependency.to_string_lossy()
-    )));
+    assert!(stdout.contains(&format!("file={}", fallback_dependency.to_string_lossy())));
 
     fs::remove_dir_all(dir).unwrap();
 }
