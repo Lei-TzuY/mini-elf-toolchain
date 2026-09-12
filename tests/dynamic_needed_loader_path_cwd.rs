@@ -90,14 +90,7 @@ fn empty_loader_path_component_resolves_from_process_cwd() {
     fs::create_dir_all(&fallback).unwrap();
 
     let dependency = build_shared(&dir, &cwd, "dep", "public_api", &[], &[]);
-    let root = build_shared(
-        &dir,
-        &root_dir,
-        "root",
-        "root_marker",
-        &["dep"],
-        &[&cwd],
-    );
+    let root = build_shared(&dir, &root_dir, "root", "root_marker", &["dep"], &[&cwd]);
 
     let dynamic = run(Command::new("readelf").arg("-dW").arg(&root));
     let dynamic = String::from_utf8(dynamic.stdout).unwrap();
@@ -129,14 +122,7 @@ fn empty_component_precedes_later_explicit_directory() {
 
     let cwd_dependency = build_shared(&dir, &cwd, "dep", "public_api", &[], &[]);
     build_shared(&dir, &later, "dep", "other_api", &[], &[]);
-    let root = build_shared(
-        &dir,
-        &root_dir,
-        "root",
-        "root_marker",
-        &["dep"],
-        &[&cwd],
-    );
+    let root = build_shared(&dir, &root_dir, "root", "root_marker", &["dep"], &[&cwd]);
 
     let loader_path = format!(":{}", later.display());
     let output = run(Command::new(tool())
@@ -162,14 +148,7 @@ fn non_directory_after_empty_component_fails_before_stdout() {
     fs::create_dir_all(&cwd).unwrap();
 
     let dependency = build_shared(&dir, &cwd, "dep", "public_api", &[], &[]);
-    let root = build_shared(
-        &dir,
-        &root_dir,
-        "root",
-        "root_marker",
-        &["dep"],
-        &[&cwd],
-    );
+    let root = build_shared(&dir, &root_dir, "root", "root_marker", &["dep"], &[&cwd]);
     let not_directory = dir.join("not-a-directory");
     fs::write(&not_directory, b"x").unwrap();
 
