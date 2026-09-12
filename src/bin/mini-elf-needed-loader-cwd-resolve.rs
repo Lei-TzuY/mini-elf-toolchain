@@ -49,10 +49,12 @@ fn normalize_loader_path(value: &OsString) -> Result<OsString, String> {
         .ok_or_else(|| "--ld-library-path value is not UTF-8".to_owned())?;
     let cwd = env::current_dir()
         .map_err(|error| format!("cannot determine current working directory: {error}"))?;
-    let cwd = cwd.to_str().ok_or_else(|| {
-        "current working directory is not UTF-8 and cannot be used as an empty loader-path component"
-            .to_owned()
-    })?;
+    let cwd = cwd
+        .to_str()
+        .ok_or_else(|| {
+            "current working directory is not UTF-8 and cannot be used as an empty loader-path component"
+                .to_owned()
+        })?;
     if cwd.contains(':') {
         return Err(format!(
             "current working directory '{}' contains ':' and cannot be represented in the bounded loader-path list",
