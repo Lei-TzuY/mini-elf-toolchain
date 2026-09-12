@@ -121,7 +121,9 @@ fn reports_missing_soname_without_guessing_filename() {
     let shared = build_shared(&dir, "libwithout.so", None);
 
     let readelf = run(Command::new("readelf").arg("-dW").arg(&shared));
-    assert!(!String::from_utf8(readelf.stdout).unwrap().contains("(SONAME)"));
+    assert!(!String::from_utf8(readelf.stdout)
+        .unwrap()
+        .contains("(SONAME)"));
 
     let output = run(Command::new(tool()).arg(&shared));
     assert_eq!(
