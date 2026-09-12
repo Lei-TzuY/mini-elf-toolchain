@@ -46,14 +46,14 @@ fn assemble(work: &Path, stem: &str, symbol: &str) -> PathBuf {
     object
 }
 
-fn build_shared(
+fn build_shared_with_dtags(
     work: &Path,
     output_dir: &Path,
     stem: &str,
     symbol: &str,
     dependencies: &[&str],
     link_dirs: &[&Path],
-    rpath: Option<&str>,
+    dynamic_path: Option<(&str, bool)>,
 ) -> PathBuf {
     fs::create_dir_all(output_dir).unwrap();
     let object = assemble(work, stem, symbol);
@@ -68,10 +68,13 @@ fn build_shared(
         .arg(&image)
         .arg(&object)
         .arg("--no-as-needed");
-    if let Some(rpath) = rpath {
-        command
-            .arg("--disable-new-dtags")
-            .arg(format!("--rpath={rpath}"));
+    if let Some((path, new_dtags)) = dynamic_path {
+        command.arg(if new_dtags {
+            "--enable-new-dtags"
+        } else {
+            "--disable-new-dtags"
+        });
+        command.arg(format!("--rpath={path}"));
     }
     for directory in link_dirs {
         command.arg("-L").arg(directory);
@@ -81,6 +84,26 @@ fn build_shared(
     }
     run(&mut command);
     image
+}
+
+fn build_shared(
+    work: &Path,
+    output_dir: &Path,
+    stem: &str,
+    symbol: &str,
+    dependencies: &[&str],
+    link_dirs: &[&Path],
+    rpath: Option<&str>,
+) -> PathBuf {
+    build_shared_with_dtags(
+        work,
+        output_dir,
+        stem,
+        symbol,
+        dependencies,
+        link_dirs,
+        rpath.map(|path| (path, false)),
+    )
 }
 
 fn tool() -> &'static str {
@@ -132,6 +155,107 @@ fn resolves_transitive_dependency_through_each_parents_origin_rpath() {
     assert!(stdout.contains("runpath-directories=0"));
     assert!(stdout.contains("rpath-directories=2"));
     assert!(stdout.contains(&format!("file={}", leaf.to_string_lossy())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn inherits_ancestor_rpath_for_grandchild_dependency() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let plugins = root_dir.join("plugins");
+    let leaves = root_dir.join("leaves");
+    let fallback = dir.join("fallback");
+    fs::create_dir_all(&fallback).unwrap();
+
+    let leaf = build_shared(&dir, &leaves, "leaf", "public_api", &[], &[], None);
+    let first = build_shared(
+        &dir,
+        &plugins,
+        "first",
+        "first_marker",
+        &["leaf"],
+        &[&leaves],
+        None,
+    );
+    let root = build_shared(
+        &dir,
+        &root_dir,
+        "root",
+        "root_marker",
+        &["first"],
+        &[&plugins],
+        Some("$ORIGIN/plugins:$ORIGIN/leaves"),
+    );
+
+    let root_dynamic = run(Command::new("readelf").arg("-dW").arg(&root));
+    let root_dynamic = String::from_utf8(root_dynamic.stdout).unwrap();
+    assert!(root_dynamic.contains("(RPATH)"));
+    assert!(!root_dynamic.contains("(RUNPATH)"));
+
+    let first_dynamic = run(Command::new("readelf").arg("-dW").arg(&first));
+    let first_dynamic = String::from_utf8(first_dynamic.stdout).unwrap();
+    assert!(!first_dynamic.contains("(RPATH)"));
+    assert!(!first_dynamic.contains("(RUNPATH)"));
+
+    let output = run(Command::new(tool())
+        .arg("public_api")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("dependencies=2"));
+    assert!(stdout.contains("runpath-directories=0"));
+    assert!(stdout.contains("rpath-directories=2"));
+    assert!(stdout.contains(&format!("file={}", leaf.to_string_lossy())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn does_not_inherit_runpath_for_grandchild_dependency() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let plugins = root_dir.join("plugins");
+    let leaves = root_dir.join("leaves");
+    let fallback = dir.join("fallback");
+    fs::create_dir_all(&fallback).unwrap();
+
+    build_shared(&dir, &leaves, "leaf", "public_api", &[], &[], None);
+    let first = build_shared(
+        &dir,
+        &plugins,
+        "first",
+        "first_marker",
+        &["leaf"],
+        &[&leaves],
+        None,
+    );
+    let root = build_shared_with_dtags(
+        &dir,
+        &root_dir,
+        "root",
+        "root_marker",
+        &["first"],
+        &[&plugins],
+        Some(("$ORIGIN/plugins:$ORIGIN/leaves", true)),
+    );
+
+    let root_dynamic = run(Command::new("readelf").arg("-dW").arg(&root));
+    let root_dynamic = String::from_utf8(root_dynamic.stdout).unwrap();
+    assert!(root_dynamic.contains("(RUNPATH)"));
+    assert!(!root_dynamic.contains("(RPATH)"));
+
+    let output = Command::new(tool())
+        .arg("public_api")
+        .arg(&root)
+        .arg(&fallback)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("libfirst.so") || stderr.contains("libleaf.so"));
+    assert!(stderr.contains("cannot resolve DT_NEEDED dependency 'libleaf.so'"));
 
     fs::remove_dir_all(dir).unwrap();
 }
