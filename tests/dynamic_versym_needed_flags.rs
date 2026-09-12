@@ -109,30 +109,34 @@ fn build_versioned_dependency(dir: &std::path::Path) -> std::path::PathBuf {
     )
     .unwrap();
     fs::write(&provider_map, "VERS_1 { global: foo; local: *; };\n").unwrap();
+    let assembled = Command::new("as")
+        .arg("--64")
+        .arg("-o")
+        .arg(&provider_o)
+        .arg(&provider_s)
+        .output()
+        .unwrap();
     assert!(
-        Command::new("as")
-            .arg("--64")
-            .arg("-o")
-            .arg(&provider_o)
-            .arg(&provider_s)
-            .status()
-            .unwrap()
-            .success()
+        assembled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&assembled.stderr)
     );
+    let linked = Command::new("ld")
+        .arg("-shared")
+        .arg("--hash-style=gnu")
+        .arg("--version-script")
+        .arg(&provider_map)
+        .arg("-soname")
+        .arg("libprovider.so")
+        .arg("-o")
+        .arg(&provider_so)
+        .arg(&provider_o)
+        .output()
+        .unwrap();
     assert!(
-        Command::new("ld")
-            .arg("-shared")
-            .arg("--hash-style=gnu")
-            .arg("--version-script")
-            .arg(&provider_map)
-            .arg("-soname")
-            .arg("libprovider.so")
-            .arg("-o")
-            .arg(&provider_so)
-            .arg(&provider_o)
-            .status()
-            .unwrap()
-            .success()
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
     );
 
     let consumer_s = dir.join("consumer.s");
@@ -143,30 +147,34 @@ fn build_versioned_dependency(dir: &std::path::Path) -> std::path::PathBuf {
         ".text\n.globl call_foo\n.type call_foo,@function\ncall_foo:\n  jmp foo@PLT\n.size call_foo,.-call_foo\n",
     )
     .unwrap();
+    let assembled = Command::new("as")
+        .arg("--64")
+        .arg("-o")
+        .arg(&consumer_o)
+        .arg(&consumer_s)
+        .output()
+        .unwrap();
     assert!(
-        Command::new("as")
-            .arg("--64")
-            .arg("-o")
-            .arg(&consumer_o)
-            .arg(&consumer_s)
-            .status()
-            .unwrap()
-            .success()
+        assembled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&assembled.stderr)
     );
+    let linked = Command::new("ld")
+        .arg("-shared")
+        .arg("--hash-style=gnu")
+        .arg("--no-as-needed")
+        .arg("-o")
+        .arg(&consumer_so)
+        .arg(&consumer_o)
+        .arg("-L")
+        .arg(dir)
+        .arg("-lprovider")
+        .output()
+        .unwrap();
     assert!(
-        Command::new("ld")
-            .arg("-shared")
-            .arg("--hash-style=gnu")
-            .arg("--no-as-needed")
-            .arg("-o")
-            .arg(&consumer_so)
-            .arg(&consumer_o)
-            .arg("-L")
-            .arg(dir)
-            .arg("-lprovider")
-            .status()
-            .unwrap()
-            .success()
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
     );
     consumer_so
 }
@@ -193,9 +201,8 @@ fn weak_verneed_flag_is_accepted() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("requirement=libprovider.so:VERS_1")
-    );
+    assert!(String::from_utf8_lossy(&output.stdout)
+        .contains("requirement=libprovider.so:VERS_1"));
     let _ = fs::remove_dir_all(dir);
 }
 
