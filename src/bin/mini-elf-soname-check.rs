@@ -1,6 +1,5 @@
 use std::env;
-use std::ffi::{OsStr, OsString};
-use std::fs;
+use std::ffi::OsString;
 use std::process::ExitCode;
 
 #[allow(dead_code)]
@@ -9,12 +8,15 @@ mod checked {
 
     const DT_SONAME_TAG: i64 = 14;
 
-    pub fn soname(input: &OsStr) -> Result<Option<String>, String> {
+    pub fn soname(input: &std::ffi::OsStr) -> Result<Option<String>, String> {
         let display = input.to_string_lossy().into_owned();
-        let file = fs::read(input).map_err(|error| format!("cannot read '{display}': {error}"))?;
+        let file = std::fs::read(input)
+            .map_err(|error| format!("cannot read '{display}': {error}"))?;
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let headers = program_headers(header, &file).map_err(|error| format!("{display}: {error}"))?;
-        let entries = dynamic_entries(&headers, &file).map_err(|error| format!("{display}: {error}"))?;
+        let headers =
+            program_headers(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        let entries =
+            dynamic_entries(&headers, &file).map_err(|error| format!("{display}: {error}"))?;
         let soname_offset = unique_tag_value(&entries, DT_SONAME_TAG, "DT_SONAME")
             .map_err(|error| format!("{display}: {error}"))?;
         let Some(soname_offset) = soname_offset else {
