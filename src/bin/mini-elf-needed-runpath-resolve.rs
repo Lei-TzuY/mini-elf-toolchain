@@ -395,8 +395,14 @@ fn resolve_needed_dependency(
         );
     }
 
-    let origin = parent.parent().unwrap_or_else(|| Path::new("."));
-    let candidate = expand_dynamic_path_entry(parent, origin, "DT_NEEDED", dependency)?;
+    let dependency_path = Path::new(dependency);
+    let candidate = if dependency_path.is_absolute() {
+        validate_absolute_direct_dependency(dependency_path, dependency)?;
+        dependency_path.to_path_buf()
+    } else {
+        let origin = parent.parent().unwrap_or_else(|| Path::new("."));
+        expand_dynamic_path_entry(parent, origin, "DT_NEEDED", dependency)?
+    };
     match fs::metadata(&candidate) {
         Ok(metadata) if metadata.is_file() => Ok(candidate),
         Ok(_) => Err(format!(
@@ -412,6 +418,38 @@ fn resolve_needed_dependency(
             candidate.display()
         )),
     }
+}
+
+fn validate_absolute_direct_dependency(path: &Path, dependency: &str) -> Result<(), String> {
+    if dependency.contains('$') {
+        return Err(format!(
+            "absolute direct DT_NEEDED dependency '{dependency}' contains an unsupported dynamic token"
+        ));
+    }
+
+    let mut components = path.components();
+    if !matches!(components.next(), Some(Component::RootDir)) {
+        return Err(format!(
+            "direct DT_NEEDED dependency '{dependency}' is not an absolute path"
+        ));
+    }
+    let mut saw_component = false;
+    for component in components {
+        match component {
+            Component::Normal(_) => saw_component = true,
+            _ => {
+                return Err(format!(
+                    "absolute direct DT_NEEDED dependency '{dependency}' contains a non-normal path component"
+                ));
+            }
+        }
+    }
+    if !saw_component {
+        return Err(format!(
+            "absolute direct DT_NEEDED dependency '{dependency}' does not name a file"
+        ));
+    }
+    Ok(())
 }
 
 fn resolve_dependency(
