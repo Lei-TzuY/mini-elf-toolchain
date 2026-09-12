@@ -22,8 +22,11 @@ mod dynflags {
         let display = input.to_string_lossy().into_owned();
         let file = fs::read(input).map_err(|error| format!("cannot read '{display}': {error}"))?;
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
-        let rendered = format_flags(header, &file).map_err(|error| format!("{display}: {error}"))?;
-        Ok(rendered.split_ascii_whitespace().any(|token| token == "NODEFLIB"))
+        let rendered =
+            format_flags(header, &file).map_err(|error| format!("{display}: {error}"))?;
+        Ok(rendered
+            .split_ascii_whitespace()
+            .any(|token| token == "NODEFLIB"))
     }
 }
 
