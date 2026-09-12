@@ -117,11 +117,7 @@ fn rejects_parent_traversal_in_cwd_relative_direct_needed_path_atomically() {
     let fallback = dir.join("fallback");
     fs::create_dir_all(&fallback).unwrap();
 
-    let leaf = build_leaf(
-        &dir,
-        &deps.join("libleaf.so"),
-        "deps/../deps/libleaf.so",
-    );
+    let leaf = build_leaf(&dir, &deps.join("libleaf.so"), "deps/../deps/libleaf.so");
     let root = build_root(&dir, &leaf);
 
     let dynamic = run(Command::new("readelf").arg("-dW").arg(&root));
@@ -137,9 +133,7 @@ fn rejects_parent_traversal_in_cwd_relative_direct_needed_path_atomically() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("not a normalized relative path")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("not a normalized relative path"));
 
     fs::remove_dir_all(dir).unwrap();
 }

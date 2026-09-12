@@ -254,9 +254,10 @@ mod base {
                 "cwd-relative direct DT_NEEDED dependency '{dependency}' contains an unsupported dynamic token"
             ));
         }
-        if dependency.split('/').any(|component| {
-            component.is_empty() || component == "." || component == ".."
-        }) || !safe_relative_path(path)
+        if dependency
+            .split('/')
+            .any(|component| component.is_empty() || component == "." || component == "..")
+            || !safe_relative_path(path)
         {
             return Err(format!(
                 "cwd-relative direct DT_NEEDED dependency '{dependency}' is not a normalized relative path"
