@@ -74,35 +74,35 @@ mod base {
             if let Some(soname) = metadata.soname.as_ref() {
                 loaded_sonames.insert(soname.clone());
             }
-            let (before_loader_dirs, after_loader_dirs, child_inherited_rpath) = if let Some(runpath) =
-                metadata.runpath.as_deref()
-            {
-                let runpath_dirs =
-                    dynamic_path_directories(Path::new(&parent.path), "DT_RUNPATH", runpath)?;
-                runpath_directories_used = runpath_directories_used
-                    .checked_add(runpath_dirs.len())
-                    .ok_or_else(|| "RUNPATH directory count overflows usize".to_owned())?;
-                (
-                    parent.inherited_rpath.clone(),
-                    runpath_dirs,
-                    parent.inherited_rpath.clone(),
-                )
-            } else if let Some(rpath) = metadata.rpath.as_deref() {
-                let rpath_dirs =
-                    dynamic_path_directories(Path::new(&parent.path), "DT_RPATH", rpath)?;
-                rpath_directories_used = rpath_directories_used
-                    .checked_add(rpath_dirs.len())
-                    .ok_or_else(|| "RPATH directory count overflows usize".to_owned())?;
-                let mut inherited = rpath_dirs;
-                append_unique_paths(&mut inherited, parent.inherited_rpath.clone());
-                (inherited.clone(), Vec::new(), inherited)
-            } else {
-                (
-                    parent.inherited_rpath.clone(),
-                    Vec::new(),
-                    parent.inherited_rpath.clone(),
-                )
-            };
+            let (before_loader_dirs, after_loader_dirs, child_inherited_rpath) =
+                if let Some(runpath) = metadata.runpath.as_deref() {
+                    let runpath_dirs =
+                        dynamic_path_directories(Path::new(&parent.path), "DT_RUNPATH", runpath)?;
+                    runpath_directories_used = runpath_directories_used
+                        .checked_add(runpath_dirs.len())
+                        .ok_or_else(|| "RUNPATH directory count overflows usize".to_owned())?;
+                    (
+                        parent.inherited_rpath.clone(),
+                        runpath_dirs,
+                        parent.inherited_rpath.clone(),
+                    )
+                } else if let Some(rpath) = metadata.rpath.as_deref() {
+                    let rpath_dirs =
+                        dynamic_path_directories(Path::new(&parent.path), "DT_RPATH", rpath)?;
+                    rpath_directories_used =
+                        rpath_directories_used
+                            .checked_add(rpath_dirs.len())
+                            .ok_or_else(|| "RPATH directory count overflows usize".to_owned())?;
+                    let mut inherited = rpath_dirs;
+                    append_unique_paths(&mut inherited, parent.inherited_rpath.clone());
+                    (inherited.clone(), Vec::new(), inherited)
+                } else {
+                    (
+                        parent.inherited_rpath.clone(),
+                        Vec::new(),
+                        parent.inherited_rpath.clone(),
+                    )
+                };
 
             for dependency in metadata.names {
                 if seen.contains(&dependency) || loaded_sonames.contains(&dependency) {
