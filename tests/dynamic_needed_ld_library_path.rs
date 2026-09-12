@@ -99,24 +99,8 @@ fn explicit_loader_path_precedes_local_runpath() {
     let fallback = dir.join("fallback");
     fs::create_dir_all(&fallback).unwrap();
 
-    let loader_choice = build_shared(
-        &dir,
-        &loader_dir,
-        "choice",
-        "loader_api",
-        &[],
-        &[],
-        None,
-    );
-    build_shared(
-        &dir,
-        &runpath_dir,
-        "choice",
-        "runpath_api",
-        &[],
-        &[],
-        None,
-    );
+    let loader_choice = build_shared(&dir, &loader_dir, "choice", "loader_api", &[], &[], None);
+    build_shared(&dir, &runpath_dir, "choice", "runpath_api", &[], &[], None);
     let root = build_shared(
         &dir,
         &root_dir,
@@ -154,24 +138,8 @@ fn legacy_rpath_precedes_explicit_loader_path() {
     let fallback = dir.join("fallback");
     fs::create_dir_all(&fallback).unwrap();
 
-    let rpath_choice = build_shared(
-        &dir,
-        &rpath_dir,
-        "choice",
-        "rpath_api",
-        &[],
-        &[],
-        None,
-    );
-    build_shared(
-        &dir,
-        &loader_dir,
-        "choice",
-        "loader_api",
-        &[],
-        &[],
-        None,
-    );
+    let rpath_choice = build_shared(&dir, &rpath_dir, "choice", "rpath_api", &[], &[], None);
+    build_shared(&dir, &loader_dir, "choice", "loader_api", &[], &[], None);
     let root = build_shared(
         &dir,
         &root_dir,
