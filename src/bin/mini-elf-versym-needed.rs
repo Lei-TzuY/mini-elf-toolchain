@@ -26,8 +26,8 @@ mod checked {
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
         let program_headers =
             program_headers(header, &file).map_err(|error| format!("{display}: {error}"))?;
-        let entries =
-            dynamic_entries(&program_headers, &file).map_err(|error| format!("{display}: {error}"))?;
+        let entries = dynamic_entries(&program_headers, &file)
+            .map_err(|error| format!("{display}: {error}"))?;
         let Some(versym_address) = unique_tag_value(&entries, DT_VERSYM, "DT_VERSYM")
             .map_err(|error| format!("{display}: {error}"))?
         else {
@@ -131,15 +131,7 @@ mod checked {
         let needed = entries
             .iter()
             .filter(|entry| entry.tag == DT_NEEDED_X)
-            .map(|entry| {
-                dynamic_string(
-                    file,
-                    strtab_offset,
-                    strsz,
-                    entry.value,
-                    "DT_NEEDED name",
-                )
-            })
+            .map(|entry| dynamic_string(file, strtab_offset, strsz, entry.value, "DT_NEEDED name"))
             .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
 
         let mut names = BTreeMap::new();
@@ -257,9 +249,9 @@ mod checked {
                 if next_relative == 0 {
                     return Err(format!("DT_VERNEED chain ends before count {count}"));
                 }
-                address = address.checked_add(u64::from(next_relative)).ok_or_else(|| {
-                    "DT_VERNEED next-entry address overflows u64".to_owned()
-                })?;
+                address = address
+                    .checked_add(u64::from(next_relative))
+                    .ok_or_else(|| "DT_VERNEED next-entry address overflows u64".to_owned())?;
             }
         }
         Ok(names)
@@ -291,7 +283,10 @@ where
             Err("usage: mini-elf-versym-needed <input>...".to_owned())
         };
     }
-    if args.iter().any(|arg| arg.to_string_lossy().starts_with('-')) {
+    if args
+        .iter()
+        .any(|arg| arg.to_string_lossy().starts_with('-'))
+    {
         return Err("usage: mini-elf-versym-needed <input>...".to_owned());
     }
 
