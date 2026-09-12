@@ -123,18 +123,16 @@ fn main() -> ExitCode {
 
 fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
     let args = args.collect::<Vec<_>>();
-    if args.len() != 3 {
-        return Err(usage());
-    }
-    let symbol = args[0]
+    let (loader_dirs, positional) = parse_args(&args)?;
+    let symbol = positional[0]
         .to_str()
         .ok_or_else(|| "symbol name is not UTF-8".to_owned())?;
     if symbol.is_empty() {
         return Err("symbol name must not be empty".to_owned());
     }
 
-    let root = &args[1];
-    let fallback_dir = PathBuf::from(&args[2]);
+    let root = positional[1];
+    let fallback_dir = PathBuf::from(positional[2]);
     let metadata = fs::metadata(&fallback_dir).map_err(|error| {
         format!(
             "cannot inspect fallback library directory '{}': {error}",
@@ -163,31 +161,34 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
         if let Some(soname) = metadata.soname.as_ref() {
             loaded_sonames.insert(soname.clone());
         }
-        let (search_dirs, child_inherited_rpath) = if let Some(runpath) =
-            metadata.runpath.as_deref()
-        {
-            let runpath_dirs =
-                dynamic_path_directories(Path::new(&parent.path), "DT_RUNPATH", runpath)?;
-            runpath_directories_used = runpath_directories_used
-                .checked_add(runpath_dirs.len())
-                .ok_or_else(|| "RUNPATH directory count overflows usize".to_owned())?;
-            let mut search_dirs = parent.inherited_rpath.clone();
-            append_unique_paths(&mut search_dirs, runpath_dirs);
-            (search_dirs, parent.inherited_rpath.clone())
-        } else if let Some(rpath) = metadata.rpath.as_deref() {
-            let rpath_dirs = dynamic_path_directories(Path::new(&parent.path), "DT_RPATH", rpath)?;
-            rpath_directories_used = rpath_directories_used
-                .checked_add(rpath_dirs.len())
-                .ok_or_else(|| "RPATH directory count overflows usize".to_owned())?;
-            let mut inherited = rpath_dirs;
-            append_unique_paths(&mut inherited, parent.inherited_rpath.clone());
-            (inherited.clone(), inherited)
-        } else {
-            (
-                parent.inherited_rpath.clone(),
-                parent.inherited_rpath.clone(),
-            )
-        };
+        let (before_loader_dirs, after_loader_dirs, child_inherited_rpath) =
+            if let Some(runpath) = metadata.runpath.as_deref() {
+                let runpath_dirs =
+                    dynamic_path_directories(Path::new(&parent.path), "DT_RUNPATH", runpath)?;
+                runpath_directories_used = runpath_directories_used
+                    .checked_add(runpath_dirs.len())
+                    .ok_or_else(|| "RUNPATH directory count overflows usize".to_owned())?;
+                (
+                    parent.inherited_rpath.clone(),
+                    runpath_dirs,
+                    parent.inherited_rpath.clone(),
+                )
+            } else if let Some(rpath) = metadata.rpath.as_deref() {
+                let rpath_dirs =
+                    dynamic_path_directories(Path::new(&parent.path), "DT_RPATH", rpath)?;
+                rpath_directories_used = rpath_directories_used
+                    .checked_add(rpath_dirs.len())
+                    .ok_or_else(|| "RPATH directory count overflows usize".to_owned())?;
+                let mut inherited = rpath_dirs;
+                append_unique_paths(&mut inherited, parent.inherited_rpath.clone());
+                (inherited.clone(), Vec::new(), inherited)
+            } else {
+                (
+                    parent.inherited_rpath.clone(),
+                    Vec::new(),
+                    parent.inherited_rpath.clone(),
+                )
+            };
 
         for dependency in metadata.names {
             if seen.contains(&dependency) || loaded_sonames.contains(&dependency) {
@@ -196,7 +197,9 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
             let path = resolve_needed_dependency(
                 Path::new(&parent.path),
                 &dependency,
-                &search_dirs,
+                &before_loader_dirs,
+                &loader_dirs,
+                &after_loader_dirs,
                 &fallback_dir,
             )?;
             let child_metadata = needed::metadata(path.as_os_str())?;
@@ -222,12 +225,65 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
         .collect::<Vec<_>>();
     let resolved = dynamic_resolve::resolve(symbol, &inputs)?;
     Ok(format!(
-        "RUNPATH/RPATH DT_NEEDED scope: root={} dependencies={} runpath-directories={} rpath-directories={}\n{resolved}",
+        "RUNPATH/RPATH DT_NEEDED scope: root={} dependencies={} loader-path-directories={} runpath-directories={} rpath-directories={}\n{resolved}",
         root.to_string_lossy(),
         scope.len() - 1,
+        loader_dirs.len(),
         runpath_directories_used,
         rpath_directories_used
     ))
+}
+
+fn parse_args(args: &[OsString]) -> Result<(Vec<PathBuf>, [&OsString; 3]), String> {
+    match args {
+        [symbol, root, fallback] => Ok((Vec::new(), [symbol, root, fallback])),
+        [flag, value, symbol, root, fallback] if flag == "--ld-library-path" => {
+            let loader_dirs = loader_path_directories(value)?;
+            Ok((loader_dirs, [symbol, root, fallback]))
+        }
+        _ => Err(usage()),
+    }
+}
+
+fn loader_path_directories(value: &OsStr) -> Result<Vec<PathBuf>, String> {
+    let value = value
+        .to_str()
+        .ok_or_else(|| "--ld-library-path value is not UTF-8".to_owned())?;
+    if value.is_empty() {
+        return Err("--ld-library-path must not be empty".to_owned());
+    }
+
+    let mut directories = Vec::new();
+    for entry in value.split(':') {
+        if entry.is_empty() {
+            return Err(
+                "--ld-library-path contains an empty directory entry; implicit current-directory lookup is unsupported"
+                    .to_owned(),
+            );
+        }
+        if entry.contains('$') {
+            return Err(format!(
+                "--ld-library-path entry '{entry}' contains an unsupported dynamic token"
+            ));
+        }
+        let path = PathBuf::from(entry);
+        let metadata = fs::metadata(&path).map_err(|error| {
+            format!(
+                "cannot inspect --ld-library-path directory '{}': {error}",
+                path.display()
+            )
+        })?;
+        if !metadata.is_dir() {
+            return Err(format!(
+                "--ld-library-path entry '{}' is not a directory",
+                path.display()
+            ));
+        }
+        if !directories.contains(&path) {
+            directories.push(path);
+        }
+    }
+    Ok(directories)
 }
 
 fn append_unique_paths(paths: &mut Vec<PathBuf>, additions: Vec<PathBuf>) {
@@ -324,11 +380,19 @@ fn safe_relative_path(path: &Path) -> bool {
 fn resolve_needed_dependency(
     parent: &Path,
     dependency: &str,
-    search_dirs: &[PathBuf],
+    before_loader_dirs: &[PathBuf],
+    loader_dirs: &[PathBuf],
+    after_loader_dirs: &[PathBuf],
     fallback_dir: &Path,
 ) -> Result<PathBuf, String> {
     if !dependency.contains('/') {
-        return resolve_dependency(dependency, search_dirs, fallback_dir);
+        return resolve_dependency(
+            dependency,
+            before_loader_dirs,
+            loader_dirs,
+            after_loader_dirs,
+            fallback_dir,
+        );
     }
 
     let origin = parent.parent().unwrap_or_else(|| Path::new("."));
@@ -352,12 +416,17 @@ fn resolve_needed_dependency(
 
 fn resolve_dependency(
     dependency: &str,
-    search_dirs: &[PathBuf],
+    before_loader_dirs: &[PathBuf],
+    loader_dirs: &[PathBuf],
+    after_loader_dirs: &[PathBuf],
     fallback_dir: &Path,
 ) -> Result<PathBuf, String> {
     validate_dependency_name(dependency)?;
-    let mut directories = search_dirs.to_vec();
-    directories.push(fallback_dir.to_path_buf());
+    let mut directories = Vec::new();
+    append_unique_paths(&mut directories, before_loader_dirs.to_vec());
+    append_unique_paths(&mut directories, loader_dirs.to_vec());
+    append_unique_paths(&mut directories, after_loader_dirs.to_vec());
+    append_unique_paths(&mut directories, vec![fallback_dir.to_path_buf()]);
     let mut checked = BTreeSet::new();
 
     for directory in directories {
@@ -384,7 +453,7 @@ fn resolve_dependency(
     }
 
     Err(format!(
-        "cannot resolve DT_NEEDED dependency '{dependency}' through DT_RUNPATH/DT_RPATH or fallback directory '{}'",
+        "cannot resolve DT_NEEDED dependency '{dependency}' through DT_RPATH, explicit loader path, DT_RUNPATH, or fallback directory '{}'",
         fallback_dir.display()
     ))
 }
@@ -403,6 +472,6 @@ fn validate_dependency_name(name: &str) -> Result<(), String> {
 }
 
 fn usage() -> String {
-    "usage: mini-elf-needed-runpath-resolve <symbol> <root-et-dyn> <fallback-library-dir>"
+    "usage: mini-elf-needed-runpath-resolve [--ld-library-path <dir[:dir...]>] <symbol> <root-et-dyn> <fallback-library-dir>"
         .to_owned()
 }
