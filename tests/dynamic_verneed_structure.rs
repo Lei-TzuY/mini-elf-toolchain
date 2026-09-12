@@ -105,20 +105,30 @@ fn build_fixture(dir: &std::path::Path) -> std::path::PathBuf {
     )
     .unwrap();
     fs::write(&map, "VERS_1 { global: foo; local: *; };\n").unwrap();
-    assert!(Command::new("as").args(["-o"]).arg(&dep_o).arg(&dep_s).status().unwrap().success());
-    assert!(Command::new("ld")
-        .arg("-shared")
-        .arg("--hash-style=sysv")
-        .arg("-soname")
-        .arg("libdep.so")
-        .arg("--version-script")
-        .arg(&map)
-        .arg("-o")
-        .arg(&dep_so)
-        .arg(&dep_o)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("as")
+            .args(["-o"])
+            .arg(&dep_o)
+            .arg(&dep_s)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("ld")
+            .arg("-shared")
+            .arg("--hash-style=sysv")
+            .arg("-soname")
+            .arg("libdep.so")
+            .arg("--version-script")
+            .arg(&map)
+            .arg("-o")
+            .arg(&dep_so)
+            .arg(&dep_o)
+            .status()
+            .unwrap()
+            .success()
+    );
 
     let consumer_s = dir.join("consumer.s");
     let consumer_o = dir.join("consumer.o");
@@ -128,25 +138,29 @@ fn build_fixture(dir: &std::path::Path) -> std::path::PathBuf {
         ".text\n.globl caller\n.type caller,@function\ncaller:\n  call foo@PLT\n  ret\n.size caller,.-caller\n",
     )
     .unwrap();
-    assert!(Command::new("as")
-        .args(["-o"])
-        .arg(&consumer_o)
-        .arg(&consumer_s)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("ld")
-        .arg("-shared")
-        .arg("--hash-style=sysv")
-        .arg("-o")
-        .arg(&consumer_so)
-        .arg(&consumer_o)
-        .arg("-L")
-        .arg(dir)
-        .arg("-ldep")
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("as")
+            .args(["-o"])
+            .arg(&consumer_o)
+            .arg(&consumer_s)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("ld")
+            .arg("-shared")
+            .arg("--hash-style=sysv")
+            .arg("-o")
+            .arg(&consumer_so)
+            .arg(&consumer_o)
+            .arg("-L")
+            .arg(dir)
+            .arg("-ldep")
+            .status()
+            .unwrap()
+            .success()
+    );
     consumer_so
 }
 
@@ -157,7 +171,11 @@ fn gnu_verneed_structure_is_accepted() {
     }
     let dir = temp_dir("gnu");
     let shared = build_fixture(&dir);
-    let gnu = Command::new("readelf").arg("-VW").arg(&shared).output().unwrap();
+    let gnu = Command::new("readelf")
+        .arg("-VW")
+        .arg(&shared)
+        .output()
+        .unwrap();
     assert!(gnu.status.success());
     assert!(String::from_utf8_lossy(&gnu.stdout).contains("VERS_1"));
 
@@ -165,7 +183,11 @@ fn gnu_verneed_structure_is_accepted() {
         .arg(&shared)
         .output()
         .unwrap();
-    assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
     assert!(String::from_utf8_lossy(&ours.stdout).contains("forward and non-overlapping"));
     let _ = fs::remove_dir_all(dir);
 }
