@@ -10,11 +10,13 @@ use std::process::ExitCode;
 mod needed {
     include!("mini-elf-needed-check.rs");
 
+    const DT_RPATH_TAG: i64 = 15;
     const DT_RUNPATH_TAG: i64 = 29;
 
     pub struct Metadata {
         pub names: Vec<String>,
         pub runpath: Option<String>,
+        pub rpath: Option<String>,
     }
 
     pub fn metadata(input: &std::ffi::OsStr) -> Result<Metadata, String> {
@@ -33,11 +35,14 @@ mod needed {
             .collect::<Vec<_>>();
         let runpath_offset = unique_tag_value(&entries, DT_RUNPATH_TAG, "DT_RUNPATH")
             .map_err(|error| format!("{display}: {error}"))?;
+        let rpath_offset = unique_tag_value(&entries, DT_RPATH_TAG, "DT_RPATH")
+            .map_err(|error| format!("{display}: {error}"))?;
 
-        if needed_offsets.is_empty() && runpath_offset.is_none() {
+        if needed_offsets.is_empty() && runpath_offset.is_none() && rpath_offset.is_none() {
             return Ok(Metadata {
                 names: Vec::new(),
                 runpath: None,
+                rpath: None,
             });
         }
 
@@ -56,8 +61,18 @@ mod needed {
                     .map_err(|error| format!("{display}: {error}"))
             })
             .transpose()?;
+        let rpath = rpath_offset
+            .map(|offset| {
+                dynamic_string(&file, strtab_offset, strsz, offset, "DT_RPATH value")
+                    .map_err(|error| format!("{display}: {error}"))
+            })
+            .transpose()?;
 
-        Ok(Metadata { names, runpath })
+        Ok(Metadata {
+            names,
+            runpath,
+            rpath,
+        })
     }
 }
 
@@ -115,19 +130,38 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
     let mut seen = BTreeSet::new();
     let mut cursor = 0usize;
     let mut runpath_directories_used = 0usize;
+    let mut rpath_directories_used = 0usize;
     while cursor < scope.len() {
         let parent = scope[cursor].clone();
         let metadata = needed::metadata(&parent)?;
-        let runpath_dirs = runpath_directories(Path::new(&parent), metadata.runpath.as_deref())?;
-        runpath_directories_used = runpath_directories_used
-            .checked_add(runpath_dirs.len())
-            .ok_or_else(|| "RUNPATH directory count overflows usize".to_owned())?;
+        let (search_dirs, used_runpath) = if let Some(runpath) = metadata.runpath.as_deref() {
+            (
+                dynamic_path_directories(Path::new(&parent), "DT_RUNPATH", runpath)?,
+                true,
+            )
+        } else if let Some(rpath) = metadata.rpath.as_deref() {
+            (
+                dynamic_path_directories(Path::new(&parent), "DT_RPATH", rpath)?,
+                false,
+            )
+        } else {
+            (Vec::new(), true)
+        };
+        if used_runpath {
+            runpath_directories_used = runpath_directories_used
+                .checked_add(search_dirs.len())
+                .ok_or_else(|| "RUNPATH directory count overflows usize".to_owned())?;
+        } else {
+            rpath_directories_used = rpath_directories_used
+                .checked_add(search_dirs.len())
+                .ok_or_else(|| "RPATH directory count overflows usize".to_owned())?;
+        }
 
         for dependency in metadata.names {
             if !seen.insert(dependency.clone()) {
                 continue;
             }
-            let path = resolve_dependency(&dependency, &runpath_dirs, &fallback_dir)?;
+            let path = resolve_dependency(&dependency, &search_dirs, &fallback_dir)?;
             scope.push(path.into_os_string());
         }
         cursor += 1;
@@ -135,32 +169,39 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
 
     let resolved = dynamic_resolve::resolve(symbol, &scope)?;
     Ok(format!(
-        "RUNPATH DT_NEEDED scope: root={} dependencies={} runpath-directories={}\n{resolved}",
+        "RUNPATH/RPATH DT_NEEDED scope: root={} dependencies={} runpath-directories={} rpath-directories={}\n{resolved}",
         root.to_string_lossy(),
         scope.len() - 1,
-        runpath_directories_used
+        runpath_directories_used,
+        rpath_directories_used
     ))
 }
 
-fn runpath_directories(parent: &Path, runpath: Option<&str>) -> Result<Vec<PathBuf>, String> {
-    let Some(runpath) = runpath else {
-        return Ok(Vec::new());
-    };
-    if runpath.is_empty() {
+fn dynamic_path_directories(
+    parent: &Path,
+    tag: &str,
+    path_value: &str,
+) -> Result<Vec<PathBuf>, String> {
+    if path_value.is_empty() {
         return Err(format!(
-            "{}: DT_RUNPATH must not be empty in this bounded resolver",
+            "{}: {tag} must not be empty in this bounded resolver",
             parent.display()
         ));
     }
 
     let origin = parent.parent().unwrap_or_else(|| Path::new("."));
-    runpath
+    path_value
         .split(':')
-        .map(|entry| expand_runpath_entry(parent, origin, entry))
+        .map(|entry| expand_dynamic_path_entry(parent, origin, tag, entry))
         .collect()
 }
 
-fn expand_runpath_entry(parent: &Path, origin: &Path, entry: &str) -> Result<PathBuf, String> {
+fn expand_dynamic_path_entry(
+    parent: &Path,
+    origin: &Path,
+    tag: &str,
+    entry: &str,
+) -> Result<PathBuf, String> {
     let suffix = if entry == "$ORIGIN" || entry == "${ORIGIN}" {
         ""
     } else if let Some(suffix) = entry.strip_prefix("$ORIGIN/") {
@@ -169,7 +210,7 @@ fn expand_runpath_entry(parent: &Path, origin: &Path, entry: &str) -> Result<Pat
         suffix
     } else {
         return Err(format!(
-            "{}: unsupported DT_RUNPATH entry '{entry}'; expected $ORIGIN or $ORIGIN/<relative-path>",
+            "{}: unsupported {tag} entry '{entry}'; expected $ORIGIN or $ORIGIN/<relative-path>",
             parent.display()
         ));
     };
@@ -180,7 +221,7 @@ fn expand_runpath_entry(parent: &Path, origin: &Path, entry: &str) -> Result<Pat
     let relative = Path::new(suffix);
     if !safe_relative_path(relative) {
         return Err(format!(
-            "{}: DT_RUNPATH entry '{entry}' escapes or is not a safe relative path",
+            "{}: {tag} entry '{entry}' escapes or is not a safe relative path",
             parent.display()
         ));
     }
@@ -200,11 +241,11 @@ fn safe_relative_path(path: &Path) -> bool {
 
 fn resolve_dependency(
     dependency: &str,
-    runpath_dirs: &[PathBuf],
+    search_dirs: &[PathBuf],
     fallback_dir: &Path,
 ) -> Result<PathBuf, String> {
     validate_dependency_name(dependency)?;
-    let mut directories = runpath_dirs.to_vec();
+    let mut directories = search_dirs.to_vec();
     directories.push(fallback_dir.to_path_buf());
     let mut checked = BTreeSet::new();
 
@@ -232,7 +273,7 @@ fn resolve_dependency(
     }
 
     Err(format!(
-        "cannot resolve DT_NEEDED dependency '{dependency}' through DT_RUNPATH or fallback directory '{}'",
+        "cannot resolve DT_NEEDED dependency '{dependency}' through DT_RUNPATH/DT_RPATH or fallback directory '{}'",
         fallback_dir.display()
     ))
 }
