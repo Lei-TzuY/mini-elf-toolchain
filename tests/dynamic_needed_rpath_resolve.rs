@@ -221,7 +221,7 @@ fn does_not_inherit_runpath_for_grandchild_dependency() {
     fs::create_dir_all(&fallback).unwrap();
 
     build_shared(&dir, &leaves, "leaf", "public_api", &[], &[], None);
-    let first = build_shared(
+    build_shared(
         &dir,
         &plugins,
         "first",
