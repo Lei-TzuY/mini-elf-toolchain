@@ -118,7 +118,7 @@ mod base {
             .collect::<Vec<_>>();
         let resolved = dynamic_resolve::resolve(symbol, &inputs)?;
         Ok(format!(
-            "absolute RUNPATH/RPATH DT_NEEDED scope: root={} dependencies={} loader-path-directories={} runpath-directories={} rpath-directories={}\n{resolved}",
+            "absolute/relative RUNPATH/RPATH DT_NEEDED scope: root={} dependencies={} loader-path-directories={} runpath-directories={} rpath-directories={}\n{resolved}",
             root.to_string_lossy(),
             scope.len() - 1,
             loader_dirs.len(),
@@ -140,12 +140,33 @@ mod base {
         }
 
         let origin = parent.parent().unwrap_or_else(|| Path::new("."));
+        let cwd = std::env::current_dir()
+            .map_err(|error| format!("cannot determine process current directory: {error}"))?;
         path_value
             .split(':')
             .map(|entry| {
                 let path = Path::new(entry);
                 if !path.is_absolute() {
-                    return expand_dynamic_path_entry(parent, origin, tag, entry);
+                    if entry.contains('$') {
+                        return expand_dynamic_path_entry(parent, origin, tag, entry);
+                    }
+                    if entry.is_empty()
+                        || entry
+                            .split('/')
+                            .any(|component| component.is_empty() || component == "." || component == "..")
+                    {
+                        return Err(format!(
+                            "{}: relative {tag} entry '{entry}' is not a normalized relative path",
+                            parent.display()
+                        ));
+                    }
+                    if !safe_relative_path(path) {
+                        return Err(format!(
+                            "{}: relative {tag} entry '{entry}' is not a normalized relative path",
+                            parent.display()
+                        ));
+                    }
+                    return Ok(cwd.join(path));
                 }
                 if entry.contains('$') {
                     return Err(format!(

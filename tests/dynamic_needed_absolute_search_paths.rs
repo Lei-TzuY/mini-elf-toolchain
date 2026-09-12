@@ -207,3 +207,121 @@ fn rejects_non_normalized_absolute_runpath_before_stdout() {
 
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn resolves_relative_runpath_against_process_cwd() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let libraries = dir.join("libraries");
+    let fallback = dir.join("fallback");
+    fs::create_dir_all(&fallback).unwrap();
+
+    let dependency = build_shared(&dir, &libraries, "dep", "public_api", &[], &[], None);
+    let root = build_shared(
+        &dir,
+        &root_dir,
+        "root",
+        "root_marker",
+        &["dep"],
+        &[&libraries],
+        Some(("libraries", true)),
+    );
+
+    let dynamic = run(Command::new("readelf").arg("-dW").arg(&root));
+    let dynamic = String::from_utf8(dynamic.stdout).unwrap();
+    assert!(dynamic.contains("(RUNPATH)"));
+    assert!(dynamic.contains("[libraries]"));
+
+    let output = run(Command::new(tool())
+        .current_dir(&dir)
+        .arg("public_api")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("dependencies=1"));
+    assert!(stdout.contains("runpath-directories=1"));
+    assert!(stdout.contains(&format!("file={}", dependency.to_string_lossy())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn inherits_relative_rpath_against_process_cwd() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let libraries = dir.join("libraries");
+    let middle_dir = dir.join("middle");
+    let fallback = dir.join("fallback");
+    fs::create_dir_all(&fallback).unwrap();
+
+    let leaf = build_shared(&dir, &libraries, "leaf", "public_api", &[], &[], None);
+    let middle = build_shared(
+        &dir,
+        &middle_dir,
+        "middle",
+        "middle_marker",
+        &["leaf"],
+        &[&libraries],
+        None,
+    );
+    let root = build_shared(
+        &dir,
+        &root_dir,
+        "root",
+        "root_marker",
+        &["middle"],
+        &[&middle_dir],
+        Some(("middle:libraries", false)),
+    );
+
+    let dynamic = run(Command::new("readelf").arg("-dW").arg(&root));
+    let dynamic = String::from_utf8(dynamic.stdout).unwrap();
+    assert!(dynamic.contains("(RPATH)"));
+    assert!(dynamic.contains("[middle:libraries]"));
+
+    let output = run(Command::new(tool())
+        .current_dir(&dir)
+        .arg("public_api")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("dependencies=2"));
+    assert!(stdout.contains("rpath-directories=2"));
+    assert!(stdout.contains(&format!("file={}", leaf.to_string_lossy())));
+    assert!(middle.exists());
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn rejects_non_normalized_relative_runpath_before_stdout() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let libraries = dir.join("libraries");
+    let fallback = dir.join("fallback");
+    fs::create_dir_all(&fallback).unwrap();
+
+    build_shared(&dir, &libraries, "dep", "public_api", &[], &[], None);
+    let root = build_shared(
+        &dir,
+        &root_dir,
+        "root",
+        "root_marker",
+        &["dep"],
+        &[&libraries],
+        Some(("libraries/../libraries", true)),
+    );
+
+    let output = Command::new(tool())
+        .current_dir(&dir)
+        .arg("public_api")
+        .arg(&root)
+        .arg(&fallback)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("normalized relative path"));
+
+    fs::remove_dir_all(dir).unwrap();
+}
