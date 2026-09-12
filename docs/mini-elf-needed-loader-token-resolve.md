@@ -1,0 +1,11 @@
+# mini-elf-needed-loader-token-resolve
+
+`mini-elf-needed-loader-token-resolve --ld-library-path <dir[:dir...]> <symbol> <root-et-dyn> <fallback-library-dir>` is a bounded dynamic-loader front end over `mini-elf-needed-runpath-resolve`. It keeps the existing deterministic `DT_NEEDED` breadth-first closure, RPATH/RUNPATH precedence, SONAME identity, direct-path handling, hash lookup, and fail-closed metadata validation, while adding dynamic-string token expansion to the explicit loader-path input.
+
+The explicit loader path remains deterministic and does not read ambient `LD_LIBRARY_PATH`. Ordinary directory entries are preserved exactly. A tokenized entry must be anchored by `$ORIGIN` or `${ORIGIN}`, where ORIGIN is the directory containing the root image passed on the command line. Safe relative suffix components may include x86-64 `$LIB` / `${LIB}` and `$PLATFORM` / `${PLATFORM}` components, which expand to `lib64` and `x86_64` respectively. Thus `${ORIGIN}/${LIB}/${PLATFORM}` resolves beneath the root image directory.
+
+Tokenized entries deliberately remain narrower than the host loader: empty components, `.` / `..`, parent traversal, unanchored tokenized paths, and embedded token text such as `pre$LIB` fail closed before resolver stdout. The underlying resolver still validates every expanded directory as an existing directory, deduplicates explicit directories while preserving first occurrence, and retains legacy RPATH-before-loader-path versus loader-path-before-RUNPATH precedence.
+
+GNU binutils-backed integration coverage constructs real ELF64 x86-64 shared objects with `as` and `ld`, confirms the root's `DT_NEEDED` entry with `readelf -dW`, places the dependency under `root/lib64/x86_64`, and proves that `${ORIGIN}/${LIB}/${PLATFORM}` reaches it without RPATH or RUNPATH. Focused regressions also preserve ordinary explicit-directory behavior and verify atomic rejection of parent traversal and embedded-token placements.
+
+This slice intentionally does not read ambient `LD_LIBRARY_PATH`, model secure-execution suppression, accept implicit current-directory components, expand arbitrary embedded dynamic strings, search the ld.so cache/default system directories, add glibc hardware-capability subdirectory selection, perform symbol-version matching, execute IFUNC resolvers, or apply relocations.
