@@ -237,7 +237,7 @@ fn expand_dynamic_path_entry(
         suffix
     } else {
         return Err(format!(
-            "{}: unsupported {tag} entry '{entry}'; expected $ORIGIN or $ORIGIN/<relative-path>",
+            "{}: unsupported {tag} entry '{entry}'; expected $ORIGIN or $ORIGIN/<safe-relative-path>",
             parent.display()
         ));
     };
@@ -245,14 +245,34 @@ fn expand_dynamic_path_entry(
     if suffix.is_empty() {
         return Ok(origin.to_path_buf());
     }
-    let relative = Path::new(suffix);
-    if !safe_relative_path(relative) {
+
+    let mut expanded = PathBuf::new();
+    for component in suffix.split('/') {
+        if component.is_empty() || component == "." || component == ".." {
+            return Err(format!(
+                "{}: {tag} entry '{entry}' escapes or is not a safe relative path",
+                parent.display()
+            ));
+        }
+        match component {
+            "$LIB" | "${LIB}" => expanded.push("lib64"),
+            normal if normal.contains('$') => {
+                return Err(format!(
+                    "{}: unsupported {tag} dynamic token placement in entry '{entry}'",
+                    parent.display()
+                ));
+            }
+            normal => expanded.push(normal),
+        }
+    }
+
+    if !safe_relative_path(&expanded) {
         return Err(format!(
             "{}: {tag} entry '{entry}' escapes or is not a safe relative path",
             parent.display()
         ));
     }
-    Ok(origin.join(relative))
+    Ok(origin.join(expanded))
 }
 
 fn safe_relative_path(path: &Path) -> bool {
