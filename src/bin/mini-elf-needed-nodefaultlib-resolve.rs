@@ -74,9 +74,8 @@ mod base {
             if let Some(soname) = metadata.soname.as_ref() {
                 loaded_sonames.insert(soname.clone());
             }
-            let (before_loader_dirs, after_loader_dirs, child_inherited_rpath) = if let Some(
-                runpath,
-            ) = metadata.runpath.as_deref()
+            let (before_loader_dirs, after_loader_dirs, child_inherited_rpath) = if let Some(runpath) =
+                metadata.runpath.as_deref()
             {
                 let runpath_dirs =
                     dynamic_path_directories(Path::new(&parent.path), "DT_RUNPATH", runpath)?;
