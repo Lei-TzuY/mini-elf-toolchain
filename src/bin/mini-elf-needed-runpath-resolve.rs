@@ -173,7 +173,12 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
             if !seen.insert(dependency.clone()) {
                 continue;
             }
-            let path = resolve_dependency(&dependency, &search_dirs, &fallback_dir)?;
+            let path = resolve_needed_dependency(
+                Path::new(&parent.path),
+                &dependency,
+                &search_dirs,
+                &fallback_dir,
+            )?;
             scope.push(ScopeEntry {
                 path: path.into_os_string(),
                 inherited_rpath: child_inherited_rpath.clone(),
@@ -285,6 +290,35 @@ fn safe_relative_path(path: &Path) -> bool {
         }
     }
     saw_component
+}
+
+fn resolve_needed_dependency(
+    parent: &Path,
+    dependency: &str,
+    search_dirs: &[PathBuf],
+    fallback_dir: &Path,
+) -> Result<PathBuf, String> {
+    if !dependency.contains('/') {
+        return resolve_dependency(dependency, search_dirs, fallback_dir);
+    }
+
+    let origin = parent.parent().unwrap_or_else(|| Path::new("."));
+    let candidate = expand_dynamic_path_entry(parent, origin, "DT_NEEDED", dependency)?;
+    match fs::metadata(&candidate) {
+        Ok(metadata) if metadata.is_file() => Ok(candidate),
+        Ok(_) => Err(format!(
+            "direct DT_NEEDED dependency '{dependency}' resolved to non-file '{}'",
+            candidate.display()
+        )),
+        Err(error) if error.kind() == ErrorKind::NotFound => Err(format!(
+            "cannot resolve direct DT_NEEDED dependency '{dependency}' as '{}'",
+            candidate.display()
+        )),
+        Err(error) => Err(format!(
+            "cannot inspect direct DT_NEEDED candidate '{}': {error}",
+            candidate.display()
+        )),
+    }
 }
 
 fn resolve_dependency(
