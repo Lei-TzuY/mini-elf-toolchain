@@ -256,6 +256,7 @@ fn expand_dynamic_path_entry(
         }
         match component {
             "$LIB" | "${LIB}" => expanded.push("lib64"),
+            "$PLATFORM" | "${PLATFORM}" => expanded.push("x86_64"),
             normal if normal.contains('$') => {
                 return Err(format!(
                     "{}: unsupported {tag} dynamic token placement in entry '{entry}'",
