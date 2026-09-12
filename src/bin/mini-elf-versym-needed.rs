@@ -80,6 +80,14 @@ mod checked {
                 1 => "global",
                 _ => "versioned",
             };
+            if version_index >= 2
+                && !definition_names.contains_key(&version_index)
+                && !requirement_names.contains_key(&version_index)
+            {
+                return Err(format!(
+                    "{display}: DT_VERSYM symbol[{symbol_index}] references orphan version index {version_index} with no matching DT_VERDEF or DT_VERNEED record"
+                ));
+            }
             let binding = if let Some(name) = definition_names.get(&version_index) {
                 format!(" definition={name}")
             } else if let Some(requirement) = requirement_names.get(&version_index) {
