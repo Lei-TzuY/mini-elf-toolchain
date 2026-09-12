@@ -132,7 +132,15 @@ fn empty_ambient_loader_path_component_resolves_from_cwd() {
     fs::create_dir_all(&fallback).unwrap();
 
     let dependency = build_shared(&dir, &cwd, "dep", "public_api", &[], &[], None);
-    let root = build_shared(&dir, &root_dir, "root", "root_marker", &["dep"], &[&cwd], None);
+    let root = build_shared(
+        &dir,
+        &root_dir,
+        "root",
+        "root_marker",
+        &["dep"],
+        &[&cwd],
+        None,
+    );
 
     let output = run(Command::new(tool())
         .current_dir(&cwd)
