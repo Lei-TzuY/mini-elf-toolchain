@@ -76,11 +76,8 @@ mod base {
             }
             let (before_loader_dirs, after_loader_dirs, child_inherited_rpath) =
                 if let Some(runpath) = metadata.runpath.as_deref() {
-                    let runpath_dirs = dynamic_path_directories(
-                        Path::new(&parent.path),
-                        "DT_RUNPATH",
-                        runpath,
-                    )?;
+                    let runpath_dirs =
+                        dynamic_path_directories(Path::new(&parent.path), "DT_RUNPATH", runpath)?;
                     runpath_directories_used = runpath_directories_used
                         .checked_add(runpath_dirs.len())
                         .ok_or_else(|| "RUNPATH directory count overflows usize".to_owned())?;
