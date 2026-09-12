@@ -98,15 +98,7 @@ fn resolves_dependency_through_absolute_runpath() {
     let fallback = dir.join("fallback");
     fs::create_dir_all(&fallback).unwrap();
 
-    let dependency = build_shared(
-        &dir,
-        &libraries,
-        "dep",
-        "public_api",
-        &[],
-        &[],
-        None,
-    );
+    let dependency = build_shared(&dir, &libraries, "dep", "public_api", &[], &[], None);
     let absolute = libraries.to_string_lossy().into_owned();
     let root = build_shared(
         &dir,
@@ -144,15 +136,7 @@ fn inherits_absolute_rpath_for_transitive_dependency() {
     let fallback = dir.join("fallback");
     fs::create_dir_all(&fallback).unwrap();
 
-    let leaf = build_shared(
-        &dir,
-        &libraries,
-        "leaf",
-        "public_api",
-        &[],
-        &[],
-        None,
-    );
+    let leaf = build_shared(&dir, &libraries, "leaf", "public_api", &[], &[], None);
     let middle = build_shared(
         &dir,
         &middle_dir,
