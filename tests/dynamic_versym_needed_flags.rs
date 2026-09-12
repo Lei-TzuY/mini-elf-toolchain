@@ -109,27 +109,31 @@ fn build_versioned_dependency(dir: &std::path::Path) -> std::path::PathBuf {
     )
     .unwrap();
     fs::write(&provider_map, "VERS_1 { global: foo; local: *; };\n").unwrap();
-    assert!(Command::new("as")
-        .arg("--64")
-        .arg("-o")
-        .arg(&provider_o)
-        .arg(&provider_s)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("ld")
-        .arg("-shared")
-        .arg("--hash-style=gnu")
-        .arg("--version-script")
-        .arg(&provider_map)
-        .arg("-soname")
-        .arg("libprovider.so")
-        .arg("-o")
-        .arg(&provider_so)
-        .arg(&provider_o)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("as")
+            .arg("--64")
+            .arg("-o")
+            .arg(&provider_o)
+            .arg(&provider_s)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("ld")
+            .arg("-shared")
+            .arg("--hash-style=gnu")
+            .arg("--version-script")
+            .arg(&provider_map)
+            .arg("-soname")
+            .arg("libprovider.so")
+            .arg("-o")
+            .arg(&provider_so)
+            .arg(&provider_o)
+            .status()
+            .unwrap()
+            .success()
+    );
 
     let consumer_s = dir.join("consumer.s");
     let consumer_o = dir.join("consumer.o");
@@ -139,27 +143,31 @@ fn build_versioned_dependency(dir: &std::path::Path) -> std::path::PathBuf {
         ".text\n.globl call_foo\n.type call_foo,@function\ncall_foo:\n  jmp foo@PLT\n.size call_foo,.-call_foo\n",
     )
     .unwrap();
-    assert!(Command::new("as")
-        .arg("--64")
-        .arg("-o")
-        .arg(&consumer_o)
-        .arg(&consumer_s)
-        .status()
-        .unwrap()
-        .success());
-    assert!(Command::new("ld")
-        .arg("-shared")
-        .arg("--hash-style=gnu")
-        .arg("--no-as-needed")
-        .arg("-o")
-        .arg(&consumer_so)
-        .arg(&consumer_o)
-        .arg("-L")
-        .arg(dir)
-        .arg("-lprovider")
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("as")
+            .arg("--64")
+            .arg("-o")
+            .arg(&consumer_o)
+            .arg(&consumer_s)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(
+        Command::new("ld")
+            .arg("-shared")
+            .arg("--hash-style=gnu")
+            .arg("--no-as-needed")
+            .arg("-o")
+            .arg(&consumer_so)
+            .arg(&consumer_o)
+            .arg("-L")
+            .arg(dir)
+            .arg("-lprovider")
+            .status()
+            .unwrap()
+            .success()
+    );
     consumer_so
 }
 
@@ -180,8 +188,14 @@ fn weak_verneed_flag_is_accepted() {
         .arg(&weak)
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    assert!(String::from_utf8_lossy(&output.stdout).contains("requirement=libprovider.so:VERS_1"));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("requirement=libprovider.so:VERS_1")
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
