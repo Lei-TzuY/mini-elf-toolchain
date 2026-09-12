@@ -1,12 +1,12 @@
 use std::env;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::process::ExitCode;
 
 #[allow(dead_code)]
 mod checked {
     include!("mini-elf-verneed.rs");
 
-    pub fn inspect(input: &OsStr) -> Result<String, String> {
+    pub fn inspect(input: &std::ffi::OsStr) -> Result<String, String> {
         let display = input.to_string_lossy().into_owned();
         let file = fs::read(input).map_err(|error| format!("cannot read '{display}': {error}"))?;
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
