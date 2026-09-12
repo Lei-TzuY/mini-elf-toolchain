@@ -86,6 +86,12 @@ mod dynamic_resolve {
     }
 }
 
+#[derive(Clone)]
+struct ScopeEntry {
+    path: OsString,
+    inherited_rpath: Vec<PathBuf>,
+}
+
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
         Ok(output) => {
@@ -126,48 +132,64 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
         ));
     }
 
-    let mut scope = vec![root.clone()];
+    let mut scope = vec![ScopeEntry {
+        path: root.clone(),
+        inherited_rpath: Vec::new(),
+    }];
     let mut seen = BTreeSet::new();
     let mut cursor = 0usize;
     let mut runpath_directories_used = 0usize;
     let mut rpath_directories_used = 0usize;
     while cursor < scope.len() {
         let parent = scope[cursor].clone();
-        let metadata = needed::metadata(&parent)?;
-        let (search_dirs, used_runpath) = if let Some(runpath) = metadata.runpath.as_deref() {
-            (
-                dynamic_path_directories(Path::new(&parent), "DT_RUNPATH", runpath)?,
-                true,
-            )
-        } else if let Some(rpath) = metadata.rpath.as_deref() {
-            (
-                dynamic_path_directories(Path::new(&parent), "DT_RPATH", rpath)?,
-                false,
-            )
-        } else {
-            (Vec::new(), true)
-        };
-        if used_runpath {
-            runpath_directories_used = runpath_directories_used
-                .checked_add(search_dirs.len())
-                .ok_or_else(|| "RUNPATH directory count overflows usize".to_owned())?;
-        } else {
-            rpath_directories_used = rpath_directories_used
-                .checked_add(search_dirs.len())
-                .ok_or_else(|| "RPATH directory count overflows usize".to_owned())?;
-        }
+        let metadata = needed::metadata(&parent.path)?;
+        let (search_dirs, child_inherited_rpath) =
+            if let Some(runpath) = metadata.runpath.as_deref() {
+                let runpath_dirs = dynamic_path_directories(
+                    Path::new(&parent.path),
+                    "DT_RUNPATH",
+                    runpath,
+                )?;
+                runpath_directories_used = runpath_directories_used
+                    .checked_add(runpath_dirs.len())
+                    .ok_or_else(|| "RUNPATH directory count overflows usize".to_owned())?;
+                let mut search_dirs = parent.inherited_rpath.clone();
+                append_unique_paths(&mut search_dirs, runpath_dirs);
+                (search_dirs, parent.inherited_rpath.clone())
+            } else if let Some(rpath) = metadata.rpath.as_deref() {
+                let rpath_dirs =
+                    dynamic_path_directories(Path::new(&parent.path), "DT_RPATH", rpath)?;
+                rpath_directories_used = rpath_directories_used
+                    .checked_add(rpath_dirs.len())
+                    .ok_or_else(|| "RPATH directory count overflows usize".to_owned())?;
+                let mut inherited = rpath_dirs;
+                append_unique_paths(&mut inherited, parent.inherited_rpath.clone());
+                (inherited.clone(), inherited)
+            } else {
+                (
+                    parent.inherited_rpath.clone(),
+                    parent.inherited_rpath.clone(),
+                )
+            };
 
         for dependency in metadata.names {
             if !seen.insert(dependency.clone()) {
                 continue;
             }
             let path = resolve_dependency(&dependency, &search_dirs, &fallback_dir)?;
-            scope.push(path.into_os_string());
+            scope.push(ScopeEntry {
+                path: path.into_os_string(),
+                inherited_rpath: child_inherited_rpath.clone(),
+            });
         }
         cursor += 1;
     }
 
-    let resolved = dynamic_resolve::resolve(symbol, &scope)?;
+    let inputs = scope
+        .iter()
+        .map(|entry| entry.path.clone())
+        .collect::<Vec<_>>();
+    let resolved = dynamic_resolve::resolve(symbol, &inputs)?;
     Ok(format!(
         "RUNPATH/RPATH DT_NEEDED scope: root={} dependencies={} runpath-directories={} rpath-directories={}\n{resolved}",
         root.to_string_lossy(),
@@ -175,6 +197,14 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
         runpath_directories_used,
         rpath_directories_used
     ))
+}
+
+fn append_unique_paths(paths: &mut Vec<PathBuf>, additions: Vec<PathBuf>) {
+    for path in additions {
+        if !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
 }
 
 fn dynamic_path_directories(
