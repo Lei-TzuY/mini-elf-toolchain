@@ -132,28 +132,23 @@ mod base {
         tag: &str,
         path_value: &str,
     ) -> Result<Vec<PathBuf>, String> {
-        if path_value.is_empty() {
-            return Err(format!(
-                "{}: {tag} must not be empty in this bounded resolver",
-                parent.display()
-            ));
-        }
-
         let origin = parent.parent().unwrap_or_else(|| Path::new("."));
         let cwd = std::env::current_dir()
             .map_err(|error| format!("cannot determine process current directory: {error}"))?;
         path_value
             .split(':')
             .map(|entry| {
+                if entry.is_empty() {
+                    return Ok(cwd.clone());
+                }
                 let path = Path::new(entry);
                 if !path.is_absolute() {
                     if entry.contains('$') {
                         return expand_dynamic_path_entry(parent, origin, tag, entry);
                     }
-                    if entry.is_empty()
-                        || entry
-                            .split('/')
-                            .any(|component| component.is_empty() || component == "." || component == "..")
+                    if entry
+                        .split('/')
+                        .any(|component| component.is_empty() || component == "." || component == "..")
                     {
                         return Err(format!(
                             "{}: relative {tag} entry '{entry}' is not a normalized relative path",
