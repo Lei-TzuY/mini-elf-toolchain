@@ -205,3 +205,75 @@ fn malformed_ambient_loader_path_fails_before_stdout() {
 
     fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn secure_mode_suppresses_ambient_loader_path() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let env_dir = dir.join("env");
+    let fallback = dir.join("fallback");
+
+    build_shared(&dir, &env_dir, "dep", "ambient_api", &[], &[], None);
+    let fallback_dependency =
+        build_shared(&dir, &fallback, "dep", "secure_api", &[], &[], None);
+    let root = build_shared(
+        &dir,
+        &root_dir,
+        "root",
+        "root_marker",
+        &["dep"],
+        &[&env_dir],
+        None,
+    );
+
+    let dynamic = run(Command::new("readelf").arg("-dW").arg(&root));
+    let dynamic = String::from_utf8(dynamic.stdout).unwrap();
+    assert!(dynamic.contains("(NEEDED)"));
+    assert!(dynamic.contains("libdep.so"));
+
+    let output = run(Command::new(tool())
+        .env("LD_LIBRARY_PATH", &env_dir)
+        .arg("--secure")
+        .arg("secure_api")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("dependencies=1"));
+    assert!(stdout.contains(&format!(
+        "file={}",
+        fallback_dependency.to_string_lossy()
+    )));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn secure_mode_does_not_parse_malformed_ambient_loader_path() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let fallback = dir.join("fallback");
+    let not_directory = dir.join("not-a-directory");
+    fs::write(&not_directory, b"x").unwrap();
+
+    let dependency = build_shared(&dir, &fallback, "dep", "secure_api", &[], &[], None);
+    let root = build_shared(
+        &dir,
+        &root_dir,
+        "root",
+        "root_marker",
+        &["dep"],
+        &[&fallback],
+        None,
+    );
+
+    let output = run(Command::new(tool())
+        .env("LD_LIBRARY_PATH", &not_directory)
+        .arg("--secure")
+        .arg("secure_api")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(&format!("file={}", dependency.to_string_lossy())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
