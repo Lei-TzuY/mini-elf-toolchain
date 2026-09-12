@@ -6,7 +6,9 @@ use std::process::ExitCode;
 mod base {
     include!("mini-elf-needed-runpath-resolve.rs");
 
-    pub fn run_with_absolute_dynamic_paths(args: Vec<std::ffi::OsString>) -> Result<String, String> {
+    pub fn run_with_absolute_dynamic_paths(
+        args: Vec<std::ffi::OsString>,
+    ) -> Result<String, String> {
         let (loader_dirs, positional) = parse_args(&args)?;
         let symbol = positional[0]
             .to_str()
@@ -66,9 +68,10 @@ mod base {
                         "DT_RPATH",
                         rpath,
                     )?;
-                    rpath_directories_used = rpath_directories_used
-                        .checked_add(rpath_dirs.len())
-                        .ok_or_else(|| "RPATH directory count overflows usize".to_owned())?;
+                    rpath_directories_used =
+                        rpath_directories_used
+                            .checked_add(rpath_dirs.len())
+                            .ok_or_else(|| "RPATH directory count overflows usize".to_owned())?;
                     let mut inherited = rpath_dirs;
                     append_unique_paths(&mut inherited, parent.inherited_rpath.clone());
                     (inherited.clone(), Vec::new(), inherited)
