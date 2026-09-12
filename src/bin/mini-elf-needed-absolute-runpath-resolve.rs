@@ -87,7 +87,7 @@ mod base {
                 if seen.contains(&dependency) || loaded_sonames.contains(&dependency) {
                     continue;
                 }
-                let path = resolve_needed_dependency(
+                let path = resolve_needed_dependency_with_cwd_relative(
                     Path::new(&parent.path),
                     &dependency,
                     &before_loader_dirs,
@@ -146,10 +146,9 @@ mod base {
                     if entry.contains('$') {
                         return expand_dynamic_path_entry(parent, origin, tag, entry);
                     }
-                    if entry
-                        .split('/')
-                        .any(|component| component.is_empty() || component == "." || component == "..")
-                    {
+                    if entry.split('/').any(|component| {
+                        component.is_empty() || component == "." || component == ".."
+                    }) {
                         return Err(format!(
                             "{}: relative {tag} entry '{entry}' is not a normalized relative path",
                             parent.display()
@@ -191,6 +190,79 @@ mod base {
                 Ok(path.to_path_buf())
             })
             .collect()
+    }
+
+    fn resolve_needed_dependency_with_cwd_relative(
+        parent: &Path,
+        dependency: &str,
+        before_loader_dirs: &[PathBuf],
+        loader_dirs: &[PathBuf],
+        after_loader_dirs: &[PathBuf],
+        fallback_dir: &Path,
+    ) -> Result<PathBuf, String> {
+        if !dependency.contains('/') {
+            return resolve_dependency(
+                dependency,
+                before_loader_dirs,
+                loader_dirs,
+                after_loader_dirs,
+                fallback_dir,
+            );
+        }
+
+        let dependency_path = Path::new(dependency);
+        let candidate = if dependency_path.is_absolute() {
+            validate_absolute_direct_dependency(dependency_path, dependency)?;
+            dependency_path.to_path_buf()
+        } else if dependency == "$ORIGIN"
+            || dependency == "${ORIGIN}"
+            || dependency.starts_with("$ORIGIN/")
+            || dependency.starts_with("${ORIGIN}/")
+        {
+            let origin = parent.parent().unwrap_or_else(|| Path::new("."));
+            expand_dynamic_path_entry(parent, origin, "DT_NEEDED", dependency)?
+        } else {
+            validate_cwd_relative_direct_dependency(dependency_path, dependency)?;
+            let cwd = std::env::current_dir()
+                .map_err(|error| format!("cannot determine process current directory: {error}"))?;
+            cwd.join(dependency_path)
+        };
+
+        match fs::metadata(&candidate) {
+            Ok(metadata) if metadata.is_file() => Ok(candidate),
+            Ok(_) => Err(format!(
+                "direct DT_NEEDED dependency '{dependency}' resolved to non-file '{}'",
+                candidate.display()
+            )),
+            Err(error) if error.kind() == ErrorKind::NotFound => Err(format!(
+                "cannot resolve direct DT_NEEDED dependency '{dependency}' as '{}'",
+                candidate.display()
+            )),
+            Err(error) => Err(format!(
+                "cannot inspect direct DT_NEEDED candidate '{}': {error}",
+                candidate.display()
+            )),
+        }
+    }
+
+    fn validate_cwd_relative_direct_dependency(
+        path: &Path,
+        dependency: &str,
+    ) -> Result<(), String> {
+        if dependency.contains('$') {
+            return Err(format!(
+                "cwd-relative direct DT_NEEDED dependency '{dependency}' contains an unsupported dynamic token"
+            ));
+        }
+        if dependency.split('/').any(|component| {
+            component.is_empty() || component == "." || component == ".."
+        }) || !safe_relative_path(path)
+        {
+            return Err(format!(
+                "cwd-relative direct DT_NEEDED dependency '{dependency}' is not a normalized relative path"
+            ));
+        }
+        Ok(())
     }
 }
 
