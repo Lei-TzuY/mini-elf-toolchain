@@ -47,7 +47,6 @@ fn assemble(work: &Path, stem: &str, symbol: &str) -> PathBuf {
 }
 
 fn build_shared(
-    work: &Path,
     output_dir: &Path,
     filename: &str,
     soname: &str,
@@ -57,7 +56,7 @@ fn build_shared(
     runpath: Option<&str>,
 ) -> PathBuf {
     fs::create_dir_all(output_dir).unwrap();
-    let object = assemble(work, filename, symbol);
+    let object = assemble(output_dir, filename, symbol);
     let image = output_dir.join(filename);
     let mut command = Command::new("ld");
     command
@@ -142,7 +141,6 @@ fn earlier_loaded_soname_suppresses_later_transitive_alias_lookup() {
     fs::create_dir_all(&fallback).unwrap();
 
     let first = build_shared(
-        &dir,
         &plugins,
         "libfirst.so",
         "libcanon.so",
@@ -152,7 +150,6 @@ fn earlier_loaded_soname_suppresses_later_transitive_alias_lookup() {
         None,
     );
     let bridge = build_shared(
-        &dir,
         &plugins,
         "libbridge.so",
         "libbridge.so",
@@ -162,7 +159,6 @@ fn earlier_loaded_soname_suppresses_later_transitive_alias_lookup() {
         None,
     );
     let root = build_shared(
-        &dir,
         &root_dir,
         "libroot.so",
         "libroot.so",
@@ -209,7 +205,6 @@ fn malformed_soname_in_discovered_dependency_fails_closed() {
     fs::create_dir_all(&fallback).unwrap();
 
     let first = build_shared(
-        &dir,
         &plugins,
         "libfirst.so",
         "libfirst.so",
@@ -219,7 +214,6 @@ fn malformed_soname_in_discovered_dependency_fails_closed() {
         None,
     );
     let root = build_shared(
-        &dir,
         &root_dir,
         "libroot.so",
         "libroot.so",
