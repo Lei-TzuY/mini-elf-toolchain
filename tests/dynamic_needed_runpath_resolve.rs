@@ -123,12 +123,10 @@ fn resolves_transitive_dependency_through_each_parents_origin_runpath() {
             .contains("(RUNPATH)"));
     }
 
-    let output = run(
-        Command::new(tool())
-            .arg("public_api")
-            .arg(&root)
-            .arg(&fallback),
-    );
+    let output = run(Command::new(tool())
+        .arg("public_api")
+        .arg(&root)
+        .arg(&fallback));
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dependencies=2"));
     assert!(stdout.contains("runpath-directories=2"));
@@ -153,12 +151,10 @@ fn falls_back_to_explicit_library_directory_without_runpath() {
         None,
     );
 
-    let output = run(
-        Command::new(tool())
-            .arg("public_api")
-            .arg(&root)
-            .arg(&fallback),
-    );
+    let output = run(Command::new(tool())
+        .arg("public_api")
+        .arg(&root)
+        .arg(&fallback));
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("dependencies=1"));
     assert!(stdout.contains("runpath-directories=0"));
