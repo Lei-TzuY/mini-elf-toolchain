@@ -323,7 +323,7 @@ fn malformed_transitive_dynamic_flags_fail_before_partial_output() {
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("DT_FLAGS_1"));
-    assert!(stderr.contains("multiple"));
+    assert!(stderr.contains("duplicate"));
 
     fs::remove_dir_all(dir).unwrap();
 }
