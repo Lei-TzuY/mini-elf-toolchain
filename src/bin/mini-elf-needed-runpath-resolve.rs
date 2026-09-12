@@ -10,11 +10,13 @@ use std::process::ExitCode;
 mod needed {
     include!("mini-elf-needed-check.rs");
 
+    const DT_SONAME_TAG: i64 = 14;
     const DT_RPATH_TAG: i64 = 15;
     const DT_RUNPATH_TAG: i64 = 29;
 
     pub struct Metadata {
         pub names: Vec<String>,
+        pub soname: Option<String>,
         pub runpath: Option<String>,
         pub rpath: Option<String>,
     }
@@ -33,14 +35,21 @@ mod needed {
             .filter(|entry| entry.tag == DT_NEEDED)
             .map(|entry| entry.value)
             .collect::<Vec<_>>();
+        let soname_offset = unique_tag_value(&entries, DT_SONAME_TAG, "DT_SONAME")
+            .map_err(|error| format!("{display}: {error}"))?;
         let runpath_offset = unique_tag_value(&entries, DT_RUNPATH_TAG, "DT_RUNPATH")
             .map_err(|error| format!("{display}: {error}"))?;
         let rpath_offset = unique_tag_value(&entries, DT_RPATH_TAG, "DT_RPATH")
             .map_err(|error| format!("{display}: {error}"))?;
 
-        if needed_offsets.is_empty() && runpath_offset.is_none() && rpath_offset.is_none() {
+        if needed_offsets.is_empty()
+            && soname_offset.is_none()
+            && runpath_offset.is_none()
+            && rpath_offset.is_none()
+        {
             return Ok(Metadata {
                 names: Vec::new(),
+                soname: None,
                 runpath: None,
                 rpath: None,
             });
@@ -55,6 +64,12 @@ mod needed {
                     .map_err(|error| format!("{display}: {error}"))
             })
             .collect::<Result<Vec<_>, _>>()?;
+        let soname = soname_offset
+            .map(|offset| {
+                dynamic_string(&file, strtab_offset, strsz, offset, "DT_SONAME name")
+                    .map_err(|error| format!("{display}: {error}"))
+            })
+            .transpose()?;
         let runpath = runpath_offset
             .map(|offset| {
                 dynamic_string(&file, strtab_offset, strsz, offset, "DT_RUNPATH value")
@@ -70,6 +85,7 @@ mod needed {
 
         Ok(Metadata {
             names,
+            soname,
             runpath,
             rpath,
         })
@@ -137,12 +153,16 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
         inherited_rpath: Vec::new(),
     }];
     let mut seen = BTreeSet::new();
+    let mut loaded_sonames = BTreeSet::new();
     let mut cursor = 0usize;
     let mut runpath_directories_used = 0usize;
     let mut rpath_directories_used = 0usize;
     while cursor < scope.len() {
         let parent = scope[cursor].clone();
         let metadata = needed::metadata(&parent.path)?;
+        if let Some(soname) = metadata.soname.as_ref() {
+            loaded_sonames.insert(soname.clone());
+        }
         let (search_dirs, child_inherited_rpath) = if let Some(runpath) =
             metadata.runpath.as_deref()
         {
@@ -170,7 +190,7 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
         };
 
         for dependency in metadata.names {
-            if !seen.insert(dependency.clone()) {
+            if seen.contains(&dependency) || loaded_sonames.contains(&dependency) {
                 continue;
             }
             let path = resolve_needed_dependency(
@@ -179,6 +199,15 @@ fn run<I: Iterator<Item = OsString>>(args: I) -> Result<String, String> {
                 &search_dirs,
                 &fallback_dir,
             )?;
+            let child_metadata = needed::metadata(path.as_os_str())?;
+            if let Some(soname) = child_metadata.soname.as_ref() {
+                if loaded_sonames.contains(soname) {
+                    seen.insert(dependency);
+                    continue;
+                }
+                loaded_sonames.insert(soname.clone());
+            }
+            seen.insert(dependency);
             scope.push(ScopeEntry {
                 path: path.into_os_string(),
                 inherited_rpath: child_inherited_rpath.clone(),
