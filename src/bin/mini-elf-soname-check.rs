@@ -10,8 +10,8 @@ mod checked {
 
     pub fn soname(input: &std::ffi::OsStr) -> Result<Option<String>, String> {
         let display = input.to_string_lossy().into_owned();
-        let file = std::fs::read(input)
-            .map_err(|error| format!("cannot read '{display}': {error}"))?;
+        let file =
+            std::fs::read(input).map_err(|error| format!("cannot read '{display}': {error}"))?;
         let header = Elf64Header::parse(&file).map_err(|error| format!("{display}: {error}"))?;
         let headers =
             program_headers(header, &file).map_err(|error| format!("{display}: {error}"))?;
@@ -24,14 +24,8 @@ mod checked {
         };
         let (strtab_offset, strsz) = dynamic_string_table(&entries, &headers, &file)
             .map_err(|error| format!("{display}: {error}"))?;
-        let soname = dynamic_string(
-            &file,
-            strtab_offset,
-            strsz,
-            soname_offset,
-            "DT_SONAME name",
-        )
-        .map_err(|error| format!("{display}: {error}"))?;
+        let soname = dynamic_string(&file, strtab_offset, strsz, soname_offset, "DT_SONAME name")
+            .map_err(|error| format!("{display}: {error}"))?;
         Ok(Some(soname))
     }
 }
