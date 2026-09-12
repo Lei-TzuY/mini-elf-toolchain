@@ -12,6 +12,7 @@ mod checked {
     const ELF64_VERNEED_SIZE_X: u64 = 16;
     const ELF64_VERNAUX_SIZE_X: u64 = 16;
     const VER_NEED_CURRENT_X: u16 = 1;
+    const VER_FLG_WEAK_X: u16 = 0x2;
 
     #[derive(Clone)]
     struct RequirementName {
@@ -202,6 +203,13 @@ mod checked {
                 let aux_offset = usize::try_from(aux_offset)
                     .map_err(|_| "DT_VERNEED Vernaux offset does not fit usize".to_owned())?;
                 let stored_hash = read_u32(file, aux_offset);
+                let flags = read_u16(file, aux_offset + 4);
+                if flags & !VER_FLG_WEAK_X != 0 {
+                    return Err(format!(
+                        "DT_VERNEED entry {record_index} Vernaux {aux_index} has unsupported vna_flags bits {:#06x}",
+                        flags & !VER_FLG_WEAK_X
+                    ));
+                }
                 let raw_index = read_u16(file, aux_offset + 6);
                 let version_index = raw_index & VERSYM_INDEX_MASK;
                 if version_index < 2 {
