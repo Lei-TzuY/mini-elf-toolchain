@@ -97,6 +97,19 @@ mod checked {
         Ok(output)
     }
 
+    fn sysv_elf_hash(name: &str) -> u32 {
+        let mut hash = 0u32;
+        for byte in name.bytes() {
+            hash = hash.wrapping_shl(4).wrapping_add(u32::from(byte));
+            let high = hash & 0xf000_0000;
+            if high != 0 {
+                hash ^= high >> 24;
+            }
+            hash &= !high;
+        }
+        hash
+    }
+
     fn version_requirement_names(
         entries: &[DynamicEntry],
         program_headers: &[ProgramHeader],
@@ -188,6 +201,7 @@ mod checked {
                 )?;
                 let aux_offset = usize::try_from(aux_offset)
                     .map_err(|_| "DT_VERNEED Vernaux offset does not fit usize".to_owned())?;
+                let stored_hash = read_u32(file, aux_offset);
                 let raw_index = read_u16(file, aux_offset + 6);
                 let version_index = raw_index & VERSYM_INDEX_MASK;
                 if version_index < 2 {
@@ -204,6 +218,12 @@ mod checked {
                     name_offset,
                     "Vernaux version name",
                 )?;
+                let expected_hash = sysv_elf_hash(&version_name);
+                if stored_hash != expected_hash {
+                    return Err(format!(
+                        "DT_VERNEED entry {record_index} Vernaux {aux_index} has vna_hash {stored_hash:#010x}, expected {expected_hash:#010x} for version '{version_name}'"
+                    ));
+                }
                 if names
                     .insert(
                         version_index,
