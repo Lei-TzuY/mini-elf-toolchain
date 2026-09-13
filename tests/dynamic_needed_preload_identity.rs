@@ -67,7 +67,12 @@ fn tools() -> [&'static str; 2] {
     ]
 }
 
-fn assert_aliases_deduplicate(preload_value: String, preload: &Path, root: &Path, fallback: &Path) {
+fn assert_aliases_deduplicate(
+    preload_value: String,
+    preload: &Path,
+    root: &Path,
+    fallback: &Path,
+) {
     for tool in tools() {
         let output = run(Command::new(tool)
             .env("LD_PRELOAD", &preload_value)
@@ -95,7 +100,11 @@ fn symlink_aliases_share_one_preload_identity() {
     symlink(&preload, &alias).unwrap();
 
     let dynamic = run(Command::new("readelf").arg("-dW").arg(&preload));
-    assert!(String::from_utf8(dynamic.stdout).unwrap().contains("libpreload.so"));
+    assert!(
+        String::from_utf8(dynamic.stdout)
+            .unwrap()
+            .contains("libpreload.so")
+    );
 
     assert_aliases_deduplicate(
         format!("{}:{}", preload.display(), alias.display()),
