@@ -1,12 +1,11 @@
 use std::env;
-use std::ffi::OsString;
 use std::process::ExitCode;
 
 #[allow(dead_code)]
 mod base {
     include!("mini-elf-needed-preload-resolve.rs");
 
-    pub fn resolve_with_preload_dependencies(mut args: Vec<OsString>) -> Result<String, String> {
+    pub fn resolve_with_preload_dependencies(args: Vec<OsString>) -> Result<String, String> {
         let secure = matches!(args.first().and_then(|arg| arg.to_str()), Some("--secure"));
         if secure {
             return run(args);
