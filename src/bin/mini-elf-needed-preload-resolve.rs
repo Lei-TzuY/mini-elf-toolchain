@@ -2,6 +2,8 @@ use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::ErrorKind;
+#[cfg(unix)]
+use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
@@ -257,7 +259,7 @@ fn run(mut args: Vec<OsString>) -> Result<String, String> {
             }
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let preload_paths = deduplicate_preload_paths(preload_paths);
+    let preload_paths = deduplicate_preload_paths(preload_paths)?;
 
     let root_output = dynamic_resolve::resolve(symbol, std::slice::from_ref(root))?;
     let root_found = found(&root_output);
@@ -295,14 +297,43 @@ fn found(output: &str) -> bool {
     !output.contains(" not-found\n")
 }
 
-fn deduplicate_preload_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+fn deduplicate_preload_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
     let mut unique = Vec::new();
+    #[cfg(unix)]
+    let mut identities = Vec::new();
+    #[cfg(not(unix))]
+    let mut identities = Vec::new();
+
     for path in paths {
-        if !unique.contains(&path) {
+        let metadata = fs::metadata(&path).map_err(|error| {
+            format!(
+                "cannot inspect resolved LD_PRELOAD entry '{}' for file identity: {error}",
+                path.display()
+            )
+        })?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "resolved LD_PRELOAD entry '{}' is not a regular file",
+                path.display()
+            ));
+        }
+
+        #[cfg(unix)]
+        let identity = (metadata.dev(), metadata.ino());
+        #[cfg(not(unix))]
+        let identity = fs::canonicalize(&path).map_err(|error| {
+            format!(
+                "cannot canonicalize resolved LD_PRELOAD entry '{}' for file identity: {error}",
+                path.display()
+            )
+        })?;
+
+        if !identities.contains(&identity) {
+            identities.push(identity);
             unique.push(path);
         }
     }
-    unique
+    Ok(unique)
 }
 
 fn parse_preload_entries(value: &OsStr) -> Result<Vec<PreloadEntry>, String> {
