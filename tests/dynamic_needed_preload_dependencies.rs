@@ -77,6 +77,37 @@ fn build_shared(
     image
 }
 
+fn build_shared_with_system_dependency(
+    work: &Path,
+    output_dir: &Path,
+    stem: &str,
+    symbol: &str,
+    library: &str,
+) -> (PathBuf, String) {
+    fs::create_dir_all(output_dir).unwrap();
+    let object = assemble(work, stem, symbol);
+    let query = format!("-print-file-name={library}");
+    let located = run(Command::new("cc").arg(query));
+    let located = String::from_utf8(located.stdout).unwrap();
+    let located = located.trim();
+    assert_ne!(located, library, "compiler could not locate {library}");
+    let system_library = PathBuf::from(located);
+    assert!(system_library.is_file(), "missing system library {located}");
+
+    let image = output_dir.join(format!("lib{stem}.so"));
+    run(Command::new("ld")
+        .arg("-shared")
+        .arg("--hash-style=both")
+        .arg("-soname")
+        .arg(format!("lib{stem}.so"))
+        .arg("-o")
+        .arg(&image)
+        .arg(&object)
+        .arg("--no-as-needed")
+        .arg(&system_library));
+    (image, library.to_owned())
+}
+
 fn tool() -> &'static str {
     env!("CARGO_BIN_EXE_mini-elf-needed-preload-deps-resolve")
 }
@@ -114,7 +145,7 @@ fn preload_dependency_precedes_root_dependency() {
 
     let output = run(Command::new(tool())
         .env("LD_PRELOAD", &preload)
-        .env_remove("LD_LIBRARY_PATH")
+        .env("LD_LIBRARY_PATH", &fallback)
         .arg("target")
         .arg(&root)
         .arg(&fallback));
@@ -148,7 +179,7 @@ fn later_preload_image_precedes_earlier_preload_dependency() {
 
     let output = run(Command::new(tool())
         .env("LD_PRELOAD", &preload_value)
-        .env_remove("LD_LIBRARY_PATH")
+        .env("LD_LIBRARY_PATH", &fallback)
         .arg("target")
         .arg(&root)
         .arg(&fallback));
@@ -165,18 +196,23 @@ fn malformed_preload_dependency_fails_before_stdout() {
     let root_dir = dir.join("root");
     let preload_dir = dir.join("preload");
     let fallback = dir.join("fallback");
+    fs::create_dir_all(&fallback).unwrap();
 
-    let dependency = build_shared(&dir, &fallback, "predep", "dep_marker", &[], &[]);
-    let preload = build_shared(
+    let (preload, needed_name) = build_shared_with_system_dependency(
         &dir,
         &preload_dir,
         "preload",
         "preload_marker",
-        &["predep"],
-        &[&fallback],
+        "libm.so.6",
     );
     let root = build_shared(&dir, &root_dir, "root", "target", &[], &[]);
-    fs::write(&dependency, b"not an ELF image").unwrap();
+    let malformed_dependency = fallback.join(&needed_name);
+    fs::write(&malformed_dependency, b"not an ELF image").unwrap();
+
+    let dynamic = run(Command::new("readelf").arg("-dW").arg(&preload));
+    let dynamic = String::from_utf8(dynamic.stdout).unwrap();
+    assert!(dynamic.contains("(NEEDED)"));
+    assert!(dynamic.contains(&needed_name));
 
     let output = Command::new(tool())
         .env("LD_PRELOAD", &preload)
@@ -189,6 +225,7 @@ fn malformed_preload_dependency_fails_before_stdout() {
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     assert!(!output.stderr.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).starts_with("error: "));
 
     fs::remove_dir_all(dir).unwrap();
 }
