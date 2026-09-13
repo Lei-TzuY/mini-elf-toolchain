@@ -243,7 +243,9 @@ fn malformed_tokenized_preload_fails_before_stdout() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).starts_with("error: "));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("error: "));
+    assert!(stderr.contains("LD_PRELOAD entry '$ORIGIN/../bad.so' escapes or is not a safe relative path"));
 
     fs::remove_dir_all(dir).unwrap();
 }
