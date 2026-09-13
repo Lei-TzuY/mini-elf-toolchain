@@ -299,9 +299,6 @@ fn found(output: &str) -> bool {
 
 fn deduplicate_preload_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, String> {
     let mut unique = Vec::new();
-    #[cfg(unix)]
-    let mut identities = Vec::new();
-    #[cfg(not(unix))]
     let mut identities = Vec::new();
 
     for path in paths {
@@ -318,22 +315,28 @@ fn deduplicate_preload_paths(paths: Vec<PathBuf>) -> Result<Vec<PathBuf>, String
             ));
         }
 
-        #[cfg(unix)]
-        let identity = (metadata.dev(), metadata.ino());
-        #[cfg(not(unix))]
-        let identity = fs::canonicalize(&path).map_err(|error| {
-            format!(
-                "cannot canonicalize resolved LD_PRELOAD entry '{}' for file identity: {error}",
-                path.display()
-            )
-        })?;
-
+        let identity = preload_file_identity(&path, &metadata)?;
         if !identities.contains(&identity) {
             identities.push(identity);
             unique.push(path);
         }
     }
     Ok(unique)
+}
+
+#[cfg(unix)]
+fn preload_file_identity(_path: &Path, metadata: &fs::Metadata) -> Result<(u64, u64), String> {
+    Ok((metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(unix))]
+fn preload_file_identity(path: &Path, _metadata: &fs::Metadata) -> Result<PathBuf, String> {
+    fs::canonicalize(path).map_err(|error| {
+        format!(
+            "cannot canonicalize resolved LD_PRELOAD entry '{}' for file identity: {error}",
+            path.display()
+        )
+    })
 }
 
 fn parse_preload_entries(value: &OsStr) -> Result<Vec<PreloadEntry>, String> {
