@@ -153,10 +153,10 @@ mod preload_search {
                     if entry.contains('$') {
                         return expand_dynamic_path_entry(parent, origin, tag, entry);
                     }
-                    if entry.split('/').any(|component| {
+                    let invalid_relative = entry.split('/').any(|component| {
                         component.is_empty() || component == "." || component == ".."
-                    }) || !safe_relative_path(path)
-                    {
+                    }) || !safe_relative_path(path);
+                    if invalid_relative {
                         return Err(format!(
                             "{}: relative {tag} entry '{entry}' is not a normalized relative path",
                             parent.display()
