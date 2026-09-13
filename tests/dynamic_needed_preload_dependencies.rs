@@ -158,6 +158,42 @@ fn preload_dependency_precedes_root_dependency() {
 }
 
 #[test]
+fn tokenized_preload_dependency_participates_in_scope() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let preload_dir = root_dir.join("preloads");
+    let fallback = dir.join("fallback");
+
+    let preload_dependency = build_shared(&dir, &fallback, "predep", "target", &[], &[]);
+    let preload = build_shared(
+        &dir,
+        &preload_dir,
+        "preload",
+        "preload_marker",
+        &["predep"],
+        &[&fallback],
+    );
+    let root = build_shared(&dir, &root_dir, "root", "root_marker", &[], &[]);
+
+    let dynamic = run(Command::new("readelf").arg("-dW").arg(&preload));
+    let dynamic = String::from_utf8(dynamic.stdout).unwrap();
+    assert!(dynamic.contains("(NEEDED)"));
+    assert!(dynamic.contains("libpredep.so"));
+
+    let output = run(Command::new(tool())
+        .env("LD_PRELOAD", "$ORIGIN/preloads/libpreload.so")
+        .env("LD_LIBRARY_PATH", &fallback)
+        .arg("target")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("LD_PRELOAD dependency scope: root-first preloads=1"));
+    assert!(stdout.contains(&format!("file={}", preload_dependency.to_string_lossy())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn later_preload_image_precedes_earlier_preload_dependency() {
     let dir = temp_dir();
     let root_dir = dir.join("root");
@@ -186,6 +222,28 @@ fn later_preload_image_precedes_earlier_preload_dependency() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains(&format!("file={}", second.to_string_lossy())));
     assert!(!stdout.contains(&format!("file={}", preload_dependency.to_string_lossy())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn malformed_tokenized_preload_fails_before_stdout() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let fallback = dir.join("fallback");
+    fs::create_dir_all(&fallback).unwrap();
+    let root = build_shared(&dir, &root_dir, "root", "root_marker", &[], &[]);
+
+    let output = Command::new(tool())
+        .env("LD_PRELOAD", "$ORIGIN/../bad.so")
+        .arg("root_marker")
+        .arg(&root)
+        .arg(&fallback)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).starts_with("error: "));
 
     fs::remove_dir_all(dir).unwrap();
 }
