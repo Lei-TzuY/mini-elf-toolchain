@@ -109,20 +109,20 @@ mod preload_search {
 
         let metadata = needed::metadata(root)?;
         let root_path = std::path::Path::new(root);
-        let (before_loader_dirs, after_loader_dirs) = if let Some(runpath) = metadata.runpath.as_deref()
-        {
-            (
-                Vec::new(),
-                preload_dynamic_path_directories(root_path, "DT_RUNPATH", runpath)?,
-            )
-        } else if let Some(rpath) = metadata.rpath.as_deref() {
-            (
-                preload_dynamic_path_directories(root_path, "DT_RPATH", rpath)?,
-                Vec::new(),
-            )
-        } else {
-            (Vec::new(), Vec::new())
-        };
+        let (before_loader_dirs, after_loader_dirs) =
+            if let Some(runpath) = metadata.runpath.as_deref() {
+                (
+                    Vec::new(),
+                    preload_dynamic_path_directories(root_path, "DT_RUNPATH", runpath)?,
+                )
+            } else if let Some(rpath) = metadata.rpath.as_deref() {
+                (
+                    preload_dynamic_path_directories(root_path, "DT_RPATH", rpath)?,
+                    Vec::new(),
+                )
+            } else {
+                (Vec::new(), Vec::new())
+            };
 
         resolve_dependency(
             name,
