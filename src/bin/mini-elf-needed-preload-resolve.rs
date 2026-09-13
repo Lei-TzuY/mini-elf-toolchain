@@ -28,14 +28,11 @@ mod dynamic_resolve {
 mod loader_path_model {
     include!("mini-elf-needed-loader-token-resolve.rs");
 
-    pub fn directories(
-        value: &std::ffi::OsString,
-        root: &std::path::Path,
-    ) -> Result<Vec<std::path::PathBuf>, String> {
+    pub fn directories(value: &OsString, root: &Path) -> Result<Vec<PathBuf>, String> {
         let value = value
             .to_str()
             .ok_or_else(|| "LD_LIBRARY_PATH value is not UTF-8".to_owned())?;
-        let cwd = std::env::current_dir()
+        let cwd = env::current_dir()
             .map_err(|error| format!("cannot determine current working directory: {error}"))?;
         let cwd = cwd.to_str().ok_or_else(|| {
             "current working directory is not UTF-8 and cannot be used as an empty LD_LIBRARY_PATH component"
@@ -44,7 +41,7 @@ mod loader_path_model {
         if cwd.contains(':') {
             return Err(format!(
                 "current working directory '{}' contains ':' and cannot be represented in LD_LIBRARY_PATH",
-                std::path::Path::new(cwd).display()
+                Path::new(cwd).display()
             ));
         }
 
@@ -53,14 +50,14 @@ mod loader_path_model {
             .map(|entry| if entry.is_empty() { cwd } else { entry })
             .collect::<Vec<_>>()
             .join(":");
-        let expanded = expand_loader_path(&std::ffi::OsString::from(with_cwd), root)?;
+        let expanded = expand_loader_path(&OsString::from(with_cwd), root)?;
         let expanded = expanded
             .to_str()
             .ok_or_else(|| "expanded LD_LIBRARY_PATH value is not UTF-8".to_owned())?;
 
         let mut directories = Vec::new();
         for entry in expanded.split(':') {
-            let path = std::path::PathBuf::from(entry);
+            let path = PathBuf::from(entry);
             let metadata = std::fs::metadata(&path).map_err(|error| {
                 format!(
                     "cannot inspect LD_LIBRARY_PATH directory '{}': {error}",
@@ -86,15 +83,15 @@ mod preload_search {
     include!("mini-elf-needed-runpath-resolve.rs");
 
     pub fn resolve_bare(
-        root: &std::ffi::OsStr,
+        root: &OsStr,
         name: &str,
-        loader_dirs: &[std::path::PathBuf],
-        fallback: &std::path::Path,
-    ) -> Result<std::path::PathBuf, String> {
+        loader_dirs: &[PathBuf],
+        fallback: &Path,
+    ) -> Result<PathBuf, String> {
         validate_dependency_name(name)
             .map_err(|_| format!("LD_PRELOAD entry '{name}' is not a plain library basename"))?;
 
-        let fallback_metadata = std::fs::metadata(fallback).map_err(|error| {
+        let fallback_metadata = fs::metadata(fallback).map_err(|error| {
             format!(
                 "cannot inspect fallback library directory '{}': {error}",
                 fallback.display()
@@ -108,7 +105,7 @@ mod preload_search {
         }
 
         let metadata = needed::metadata(root)?;
-        let root_path = std::path::Path::new(root);
+        let root_path = Path::new(root);
         let (before_loader_dirs, after_loader_dirs) =
             if let Some(runpath) = metadata.runpath.as_deref() {
                 (
@@ -135,12 +132,12 @@ mod preload_search {
     }
 
     fn preload_dynamic_path_directories(
-        parent: &std::path::Path,
+        parent: &Path,
         tag: &str,
         path_value: &str,
-    ) -> Result<Vec<std::path::PathBuf>, String> {
-        let origin = parent.parent().unwrap_or_else(|| std::path::Path::new("."));
-        let cwd = std::env::current_dir()
+    ) -> Result<Vec<PathBuf>, String> {
+        let origin = parent.parent().unwrap_or_else(|| Path::new("."));
+        let cwd = env::current_dir()
             .map_err(|error| format!("cannot determine process current directory: {error}"))?;
         path_value
             .split(':')
@@ -148,7 +145,7 @@ mod preload_search {
                 if entry.is_empty() {
                     return Ok(cwd.clone());
                 }
-                let path = std::path::Path::new(entry);
+                let path = Path::new(entry);
                 if !path.is_absolute() {
                     if entry.contains('$') {
                         return expand_dynamic_path_entry(parent, origin, tag, entry);
@@ -173,8 +170,8 @@ mod preload_search {
                 let mut saw_component = false;
                 for component in path.components() {
                     match component {
-                        std::path::Component::RootDir => {}
-                        std::path::Component::Normal(_) => saw_component = true,
+                        Component::RootDir => {}
+                        Component::Normal(_) => saw_component = true,
                         _ => {
                             return Err(format!(
                                 "{}: absolute {tag} entry '{entry}' is not a normalized absolute path",
