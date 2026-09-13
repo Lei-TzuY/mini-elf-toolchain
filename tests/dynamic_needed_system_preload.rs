@@ -115,6 +115,62 @@ fn ambient_preload_precedes_system_preload_file() {
 }
 
 #[test]
+fn secure_mode_suppresses_ambient_preload_but_keeps_system_file() {
+    let dir = temp_dir();
+    let fallback = dir.join("fallback");
+    fs::create_dir_all(&fallback).unwrap();
+    let root = build_shared(&dir, "root", "root_marker");
+    let ambient = build_shared(&dir, "ambient_secure", "target");
+    let system = build_shared(&dir, "system_secure", "target");
+    let preload_file = dir.join("ld.so.preload");
+    fs::write(&preload_file, format!("{}\n", system.display())).unwrap();
+
+    let output = run(Command::new(tool())
+        .env("LD_PRELOAD", &ambient)
+        .arg("--secure")
+        .arg(&preload_file)
+        .arg("target")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("system preload file: entries=1 secure=true"));
+    assert!(stdout.contains("LD_PRELOAD dependency scope: root-first preloads=1"));
+    assert!(stdout.contains(&format!("file={}", system.to_string_lossy())));
+    assert!(!stdout.contains(&format!("file={}", ambient.to_string_lossy())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn secure_mode_ignores_ld_library_path_for_bare_system_preload() {
+    let dir = temp_dir();
+    let fallback = dir.join("fallback");
+    let loader_path = dir.join("loader-path");
+    fs::create_dir_all(&fallback).unwrap();
+    fs::create_dir_all(&loader_path).unwrap();
+    let root = build_shared(&dir, "root", "root_marker");
+    let fallback_preload = build_shared(&fallback, "candidate", "target");
+    let loader_preload = build_shared(&loader_path, "candidate", "target");
+    let preload_file = dir.join("ld.so.preload");
+    fs::write(&preload_file, "libcandidate.so\n").unwrap();
+
+    let output = run(Command::new(tool())
+        .env_remove("LD_PRELOAD")
+        .env("LD_LIBRARY_PATH", &loader_path)
+        .arg("--secure")
+        .arg(&preload_file)
+        .arg("target")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("system preload file: entries=1 secure=true"));
+    assert!(stdout.contains(&format!("file={}", fallback_preload.to_string_lossy())));
+    assert!(!stdout.contains(&format!("file={}", loader_preload.to_string_lossy())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn unreadable_system_preload_file_fails_before_stdout_commit() {
     let dir = temp_dir();
     let fallback = dir.join("fallback");
