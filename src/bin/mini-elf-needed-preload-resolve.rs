@@ -257,6 +257,7 @@ fn run(mut args: Vec<OsString>) -> Result<String, String> {
             }
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let preload_paths = deduplicate_preload_paths(preload_paths);
 
     let root_output = dynamic_resolve::resolve(symbol, std::slice::from_ref(root))?;
     let root_found = found(&root_output);
@@ -292,6 +293,16 @@ fn run(mut args: Vec<OsString>) -> Result<String, String> {
 
 fn found(output: &str) -> bool {
     !output.contains(" not-found\n")
+}
+
+fn deduplicate_preload_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut unique = Vec::new();
+    for path in paths {
+        if !unique.contains(&path) {
+            unique.push(path);
+        }
+    }
+    unique
 }
 
 fn parse_preload_entries(value: &OsStr) -> Result<Vec<PreloadEntry>, String> {
