@@ -43,6 +43,7 @@ mod base {
                 }
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let preload_paths = deduplicate_preload_paths(preload_paths);
 
         let root_output = dynamic_resolve::resolve(symbol, std::slice::from_ref(root))?;
         let root_found = found(&root_output);
