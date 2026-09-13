@@ -77,6 +77,30 @@ fn build_shared(
     image
 }
 
+fn build_shared_with_runpath(
+    work: &Path,
+    output_dir: &Path,
+    stem: &str,
+    symbol: &str,
+    runpath: &Path,
+) -> PathBuf {
+    fs::create_dir_all(output_dir).unwrap();
+    let object = assemble(work, stem, symbol);
+    let image = output_dir.join(format!("lib{stem}.so"));
+    run(Command::new("ld")
+        .arg("-shared")
+        .arg("--hash-style=both")
+        .arg("--enable-new-dtags")
+        .arg("-rpath")
+        .arg(runpath)
+        .arg("-soname")
+        .arg(format!("lib{stem}.so"))
+        .arg("-o")
+        .arg(&image)
+        .arg(&object));
+    image
+}
+
 fn tool() -> &'static str {
     env!("CARGO_BIN_EXE_mini-elf-needed-preload-resolve")
 }
@@ -164,6 +188,75 @@ fn root_symbol_precedes_preload_and_preloads_keep_declared_order() {
 }
 
 #[test]
+fn bare_preload_uses_loader_path_before_root_runpath() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let loader_dir = dir.join("loader");
+    let runpath_dir = dir.join("runpath");
+    let fallback = dir.join("fallback");
+    fs::create_dir_all(&fallback).unwrap();
+
+    let loader_preload = build_shared(&dir, &loader_dir, "preload", "target", &[], &[]);
+    let runpath_preload = build_shared(&dir, &runpath_dir, "preload", "target", &[], &[]);
+    let root = build_shared_with_runpath(&dir, &root_dir, "root", "root_marker", &runpath_dir);
+
+    let dynamic = run(Command::new("readelf").arg("-dW").arg(&root));
+    let dynamic = String::from_utf8(dynamic.stdout).unwrap();
+    assert!(dynamic.contains("(RUNPATH)"));
+    assert!(dynamic.contains(&runpath_dir.to_string_lossy().to_string()));
+
+    let output = run(Command::new(tool())
+        .env("LD_PRELOAD", "libpreload.so")
+        .env("LD_LIBRARY_PATH", &loader_dir)
+        .arg("target")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("LD_PRELOAD scope: root-first preloads=1"));
+    assert!(stdout.contains(&format!("file={}", loader_preload.to_string_lossy())));
+    assert!(!stdout.contains(&format!("file={}", runpath_preload.to_string_lossy())));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn bare_preload_uses_root_runpath_then_fallback() {
+    let dir = temp_dir();
+    let root_dir = dir.join("root");
+    let runpath_dir = dir.join("runpath");
+    let fallback = dir.join("fallback");
+
+    let runpath_preload = build_shared(&dir, &runpath_dir, "preload", "target", &[], &[]);
+    let fallback_preload = build_shared(&dir, &fallback, "fallbackpreload", "target", &[], &[]);
+    fs::copy(&fallback_preload, fallback.join("libpreload.so")).unwrap();
+    let root = build_shared_with_runpath(&dir, &root_dir, "root", "root_marker", &runpath_dir);
+
+    let output = run(Command::new(tool())
+        .env("LD_PRELOAD", "libpreload.so")
+        .env_remove("LD_LIBRARY_PATH")
+        .arg("target")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(&format!("file={}", runpath_preload.to_string_lossy())));
+
+    fs::remove_file(&runpath_preload).unwrap();
+    let output = run(Command::new(tool())
+        .env("LD_PRELOAD", "libpreload.so")
+        .env_remove("LD_LIBRARY_PATH")
+        .arg("target")
+        .arg(&root)
+        .arg(&fallback));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(&format!(
+        "file={}",
+        fallback.join("libpreload.so").to_string_lossy()
+    )));
+
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn secure_mode_suppresses_preload_namespace() {
     let dir = temp_dir();
     let root_dir = dir.join("root");
@@ -227,7 +320,7 @@ fn malformed_later_preload_fails_before_stdout() {
 }
 
 #[test]
-fn bare_and_non_normalized_preload_entries_fail_closed() {
+fn unresolved_bare_and_non_normalized_preload_entries_fail_closed() {
     let dir = temp_dir();
     let root_dir = dir.join("root");
     let fallback = dir.join("fallback");
@@ -235,7 +328,8 @@ fn bare_and_non_normalized_preload_entries_fail_closed() {
     let root = build_shared(&dir, &root_dir, "root", "root_marker", &[], &[]);
 
     let bare = Command::new(tool())
-        .env("LD_PRELOAD", "libpreload.so")
+        .env("LD_PRELOAD", "libmissing.so")
+        .env_remove("LD_LIBRARY_PATH")
         .arg("root_marker")
         .arg(&root)
         .arg(&fallback)
@@ -243,7 +337,7 @@ fn bare_and_non_normalized_preload_entries_fail_closed() {
         .unwrap();
     assert!(!bare.status.success());
     assert!(bare.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&bare.stderr).contains("bare library name"));
+    assert!(String::from_utf8_lossy(&bare.stderr).contains("cannot resolve LD_PRELOAD entry"));
 
     let traversal = Command::new(tool())
         .current_dir(&dir)
