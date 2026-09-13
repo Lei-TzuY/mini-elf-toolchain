@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 #[allow(dead_code)]
-mod base {
+mod preload_deps {
     include!("mini-elf-needed-preload-deps-resolve.rs");
 
     pub fn resolve(args: Vec<OsString>) -> Result<String, String> {
@@ -70,7 +70,7 @@ fn run(args: Vec<OsString>) -> Result<String, String> {
         env::set_var("LD_PRELOAD", &combined);
     }
 
-    let result = base::resolve(vec![symbol.clone(), root.clone(), fallback.clone()]);
+    let result = preload_deps::resolve(vec![symbol.clone(), root.clone(), fallback.clone()]);
     match previous {
         Some(value) => env::set_var("LD_PRELOAD", value),
         None => env::remove_var("LD_PRELOAD"),
