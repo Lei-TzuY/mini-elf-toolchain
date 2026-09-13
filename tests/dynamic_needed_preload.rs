@@ -198,8 +198,7 @@ fn bare_preload_uses_loader_path_before_root_runpath() {
 
     let loader_preload = build_shared(&dir, &loader_dir, "preload", "target", &[], &[]);
     let runpath_preload = build_shared(&dir, &runpath_dir, "preload", "target", &[], &[]);
-    let root =
-        build_shared_with_runpath(&dir, &root_dir, "root", "root_marker", &runpath_dir);
+    let root = build_shared_with_runpath(&dir, &root_dir, "root", "root_marker", &runpath_dir);
 
     let dynamic = run(Command::new("readelf").arg("-dW").arg(&root));
     let dynamic = String::from_utf8(dynamic.stdout).unwrap();
@@ -228,11 +227,9 @@ fn bare_preload_uses_root_runpath_then_fallback() {
     let fallback = dir.join("fallback");
 
     let runpath_preload = build_shared(&dir, &runpath_dir, "preload", "target", &[], &[]);
-    let fallback_preload =
-        build_shared(&dir, &fallback, "fallbackpreload", "target", &[], &[]);
+    let fallback_preload = build_shared(&dir, &fallback, "fallbackpreload", "target", &[], &[]);
     fs::copy(&fallback_preload, fallback.join("libpreload.so")).unwrap();
-    let root =
-        build_shared_with_runpath(&dir, &root_dir, "root", "root_marker", &runpath_dir);
+    let root = build_shared_with_runpath(&dir, &root_dir, "root", "root_marker", &runpath_dir);
 
     let output = run(Command::new(tool())
         .env("LD_PRELOAD", "libpreload.so")
