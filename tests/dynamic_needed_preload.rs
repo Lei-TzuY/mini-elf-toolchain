@@ -88,8 +88,7 @@ fn preload_symbol_precedes_needed_dependency() {
     let preload_dir = dir.join("preload");
     let fallback = dir.join("fallback");
 
-    let fallback_dependency =
-        build_shared(&dir, &fallback, "dep", "target", &[], &[]);
+    let fallback_dependency = build_shared(&dir, &fallback, "dep", "target", &[], &[]);
     let preload = build_shared(&dir, &preload_dir, "preload", "target", &[], &[]);
     let root = build_shared(
         &dir,
@@ -112,10 +111,7 @@ fn preload_symbol_precedes_needed_dependency() {
         .arg(&root)
         .arg(&fallback));
     let baseline = String::from_utf8(baseline.stdout).unwrap();
-    assert!(baseline.contains(&format!(
-        "file={}",
-        fallback_dependency.to_string_lossy()
-    )));
+    assert!(baseline.contains(&format!("file={}", fallback_dependency.to_string_lossy())));
 
     let output = run(Command::new(tool())
         .env("LD_PRELOAD", &preload)
@@ -126,10 +122,7 @@ fn preload_symbol_precedes_needed_dependency() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("LD_PRELOAD scope: root-first preloads=1"));
     assert!(stdout.contains(&format!("file={}", preload.to_string_lossy())));
-    assert!(!stdout.contains(&format!(
-        "file={}",
-        fallback_dependency.to_string_lossy()
-    )));
+    assert!(!stdout.contains(&format!("file={}", fallback_dependency.to_string_lossy())));
 
     fs::remove_dir_all(dir).unwrap();
 }
@@ -144,8 +137,7 @@ fn root_symbol_precedes_preload_and_preloads_keep_declared_order() {
 
     let first = build_shared(&dir, &preload_dir, "first", "target", &[], &[]);
     let second = build_shared(&dir, &preload_dir, "second", "target", &[], &[]);
-    let root_without_target =
-        build_shared(&dir, &root_dir, "plain", "root_marker", &[], &[]);
+    let root_without_target = build_shared(&dir, &root_dir, "plain", "root_marker", &[], &[]);
     let preload_value = format!("{}:{}", first.display(), second.display());
 
     let output = run(Command::new(tool())
@@ -165,10 +157,7 @@ fn root_symbol_precedes_preload_and_preloads_keep_declared_order() {
         .arg(&root_with_target)
         .arg(&fallback));
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains(&format!(
-        "file={}",
-        root_with_target.to_string_lossy()
-    )));
+    assert!(stdout.contains(&format!("file={}", root_with_target.to_string_lossy())));
     assert!(!stdout.contains(&format!("file={}", first.to_string_lossy())));
 
     fs::remove_dir_all(dir).unwrap();
@@ -181,8 +170,7 @@ fn secure_mode_suppresses_preload_namespace() {
     let preload_dir = dir.join("preload");
     let fallback = dir.join("fallback");
 
-    let fallback_dependency =
-        build_shared(&dir, &fallback, "dep", "target", &[], &[]);
+    let fallback_dependency = build_shared(&dir, &fallback, "dep", "target", &[], &[]);
     let preload = build_shared(&dir, &preload_dir, "preload", "target", &[], &[]);
     let root = build_shared(
         &dir,
@@ -202,10 +190,7 @@ fn secure_mode_suppresses_preload_namespace() {
         .arg(&fallback));
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(!stdout.contains("LD_PRELOAD scope"));
-    assert!(stdout.contains(&format!(
-        "file={}",
-        fallback_dependency.to_string_lossy()
-    )));
+    assert!(stdout.contains(&format!("file={}", fallback_dependency.to_string_lossy())));
 
     fs::remove_dir_all(dir).unwrap();
 }
