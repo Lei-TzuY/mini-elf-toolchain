@@ -58,10 +58,19 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(args: Vec<OsString>) -> Result<String, String> {
+fn run(mut args: Vec<OsString>) -> Result<String, String> {
+    let secure = matches!(args.first().and_then(|arg| arg.to_str()), Some("--secure"));
+    if secure {
+        args.remove(0);
+    }
+
     let [symbol, root, fallback] = args.as_slice() else {
         return Err(usage());
     };
+
+    if secure {
+        return latest::run_with_args(args);
+    }
 
     match env::var_os("LD_LIBRARY_PATH") {
         Some(loader_path) => {
@@ -79,5 +88,6 @@ fn run(args: Vec<OsString>) -> Result<String, String> {
 }
 
 fn usage() -> String {
-    "usage: mini-elf-needed-env-resolve <symbol> <root-et-dyn> <fallback-library-dir>".to_owned()
+    "usage: mini-elf-needed-env-resolve [--secure] <symbol> <root-et-dyn> <fallback-library-dir>"
+        .to_owned()
 }
