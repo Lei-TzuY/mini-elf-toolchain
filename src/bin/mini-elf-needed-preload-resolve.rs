@@ -1,7 +1,6 @@
 use std::env;
-use std::ffi::{OsStr, OsString};
-use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::ffi::OsString;
+use std::path::Path;
 use std::process::ExitCode;
 
 use mini_elf_toolchain::preload::{deduplicate_preload_paths, parse_preload_entries, PreloadEntry};
