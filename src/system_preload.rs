@@ -21,9 +21,7 @@ impl SystemPreloadRequest {
             [flag, preload_file, symbol, root, fallback] if flag == "--secure" => {
                 (true, preload_file, symbol, root, fallback)
             }
-            [preload_file, symbol, root, fallback] => {
-                (false, preload_file, symbol, root, fallback)
-            }
+            [preload_file, symbol, root, fallback] => (false, preload_file, symbol, root, fallback),
             _ => return Ok(None),
         };
 
