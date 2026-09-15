@@ -4,9 +4,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
-use mini_elf_toolchain::preload::{
-    deduplicate_preload_paths, parse_preload_entries, PreloadEntry,
-};
+use mini_elf_toolchain::preload::{deduplicate_preload_paths, parse_preload_entries, PreloadEntry};
 
 #[allow(dead_code)]
 mod env_resolve {
