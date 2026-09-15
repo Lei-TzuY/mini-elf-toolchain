@@ -21,6 +21,7 @@ pub mod object_symbols;
 pub mod ordered_inputs;
 pub mod output_image;
 pub mod permission_layout;
+pub mod preload;
 mod program_headers;
 pub mod rela_apply;
 pub mod relocated_sections;
