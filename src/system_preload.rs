@@ -1,7 +1,10 @@
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::io::Read;
 use std::path::Path;
+
+const MAX_SYSTEM_PRELOAD_BYTES: u64 = 1024 * 1024;
 
 /// Parsed, owned system-preload request independent of any command wrapper.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,6 +34,33 @@ fn parse_entries(contents: &str) -> Result<Vec<String>, String> {
     Ok(entries)
 }
 
+fn read_preload_file(path: &Path) -> Result<Vec<u8>, String> {
+    let mut file = fs::File::open(path).map_err(|error| {
+        format!(
+            "cannot read system preload file '{}': {error}",
+            path.display()
+        )
+    })?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(MAX_SYSTEM_PRELOAD_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            format!(
+                "cannot read system preload file '{}': {error}",
+                path.display()
+            )
+        })?;
+    if bytes.len() as u64 > MAX_SYSTEM_PRELOAD_BYTES {
+        return Err(format!(
+            "system preload file '{}' exceeds {} byte limit",
+            path.display(),
+            MAX_SYSTEM_PRELOAD_BYTES
+        ));
+    }
+    Ok(bytes)
+}
+
 impl SystemPreloadRequest {
     /// Parse the bounded system-preload CLI shape and read its explicit file.
     ///
@@ -46,12 +76,7 @@ impl SystemPreloadRequest {
         };
 
         let preload_file = Path::new(preload_file);
-        let bytes = fs::read(preload_file).map_err(|error| {
-            format!(
-                "cannot read system preload file '{}': {error}",
-                preload_file.display()
-            )
-        })?;
+        let bytes = read_preload_file(preload_file)?;
         let contents = String::from_utf8(bytes).map_err(|_| {
             format!(
                 "system preload file '{}' is not UTF-8",
@@ -156,6 +181,8 @@ impl Drop for EnvironmentRestore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn invalid_argument_shape_is_not_a_loader_error() {
@@ -184,5 +211,22 @@ mod tests {
             parse_entries("libfirst.so # ignored\0suffix\n").unwrap_err(),
             "system preload file contains NUL byte"
         );
+    }
+
+    #[test]
+    fn file_reader_rejects_oversized_input_without_reading_unbounded_data() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!("mini-elf-system-preload-{nonce}"));
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(&vec![b'x'; (MAX_SYSTEM_PRELOAD_BYTES + 1) as usize])
+            .unwrap();
+        drop(file);
+
+        let error = read_preload_file(&path).unwrap_err();
+        fs::remove_file(&path).unwrap();
+        assert!(error.contains("exceeds 1048576 byte limit"), "{error}");
     }
 }
