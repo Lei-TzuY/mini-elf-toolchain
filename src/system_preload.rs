@@ -41,6 +41,19 @@ fn read_preload_file(path: &Path) -> Result<Vec<u8>, String> {
             path.display()
         )
     })?;
+    let metadata = file.metadata().map_err(|error| {
+        format!(
+            "cannot inspect system preload file '{}': {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "system preload file '{}' is not a regular file",
+            path.display()
+        ));
+    }
+
     let mut bytes = Vec::new();
     file.by_ref()
         .take(MAX_SYSTEM_PRELOAD_BYTES + 1)
@@ -211,6 +224,20 @@ mod tests {
             parse_entries("libfirst.so # ignored\0suffix\n").unwrap_err(),
             "system preload file contains NUL byte"
         );
+    }
+
+    #[test]
+    fn file_reader_rejects_non_regular_input_before_reading() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = env::temp_dir().join(format!("mini-elf-system-preload-dir-{nonce}"));
+        fs::create_dir(&path).unwrap();
+
+        let error = read_preload_file(&path).unwrap_err();
+        fs::remove_dir(&path).unwrap();
+        assert!(error.contains("is not a regular file"), "{error}");
     }
 
     #[test]
