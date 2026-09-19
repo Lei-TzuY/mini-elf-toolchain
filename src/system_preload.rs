@@ -12,6 +12,10 @@ pub struct SystemPreloadRequest {
 }
 
 fn parse_entries(contents: &str) -> Result<Vec<String>, String> {
+    if contents.contains('\0') {
+        return Err("system preload file contains NUL byte".to_owned());
+    }
+
     let mut entries = Vec::new();
     for line in contents.lines() {
         let uncommented = line.split('#').next().unwrap_or_default();
@@ -22,9 +26,6 @@ fn parse_entries(contents: &str) -> Result<Vec<String>, String> {
             return Err(format!(
                 "system preload entry '{entry}' contains ':'; this bounded file model accepts whitespace-separated entries only"
             ));
-        }
-        if entry.contains('\0') {
-            return Err("system preload entry contains NUL byte".to_owned());
         }
     }
     Ok(entries)
@@ -173,7 +174,15 @@ mod tests {
     fn parser_rejects_nul_before_environment_or_path_resolution() {
         assert_eq!(
             parse_entries("libfirst.so\0libsecond.so").unwrap_err(),
-            "system preload entry contains NUL byte"
+            "system preload file contains NUL byte"
+        );
+    }
+
+    #[test]
+    fn parser_rejects_nul_hidden_in_comment() {
+        assert_eq!(
+            parse_entries("libfirst.so # ignored\0suffix\n").unwrap_err(),
+            "system preload file contains NUL byte"
         );
     }
 }
