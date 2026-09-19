@@ -11,6 +11,25 @@ pub struct SystemPreloadRequest {
     resolver_args: Vec<OsString>,
 }
 
+fn parse_entries(contents: &str) -> Result<Vec<String>, String> {
+    let mut entries = Vec::new();
+    for line in contents.lines() {
+        let uncommented = line.split('#').next().unwrap_or_default();
+        entries.extend(uncommented.split_ascii_whitespace().map(str::to_owned));
+    }
+    for entry in &entries {
+        if entry.contains(':') {
+            return Err(format!(
+                "system preload entry '{entry}' contains ':'; this bounded file model accepts whitespace-separated entries only"
+            ));
+        }
+        if entry.contains('\0') {
+            return Err("system preload entry contains NUL byte".to_owned());
+        }
+    }
+    Ok(entries)
+}
+
 impl SystemPreloadRequest {
     /// Parse the bounded system-preload CLI shape and read its explicit file.
     ///
@@ -38,19 +57,7 @@ impl SystemPreloadRequest {
                 preload_file.display()
             )
         })?;
-
-        let mut entries = Vec::new();
-        for line in contents.lines() {
-            let uncommented = line.split('#').next().unwrap_or_default();
-            entries.extend(uncommented.split_ascii_whitespace().map(str::to_owned));
-        }
-        for entry in &entries {
-            if entry.contains(':') {
-                return Err(format!(
-                    "system preload entry '{entry}' contains ':'; this bounded file model accepts whitespace-separated entries only"
-                ));
-            }
-        }
+        let entries = parse_entries(&contents)?;
 
         Ok(Some(Self {
             secure,
@@ -152,5 +159,21 @@ mod tests {
     #[test]
     fn invalid_argument_shape_is_not_a_loader_error() {
         assert_eq!(SystemPreloadRequest::parse(&[]).unwrap(), None);
+    }
+
+    #[test]
+    fn parser_preserves_comment_and_whitespace_semantics() {
+        assert_eq!(
+            parse_entries("# leading\nlibfirst.so  libsecond.so # trailing\n").unwrap(),
+            vec!["libfirst.so", "libsecond.so"]
+        );
+    }
+
+    #[test]
+    fn parser_rejects_nul_before_environment_or_path_resolution() {
+        assert_eq!(
+            parse_entries("libfirst.so\0libsecond.so").unwrap_err(),
+            "system preload entry contains NUL byte"
+        );
     }
 }
