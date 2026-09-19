@@ -40,7 +40,11 @@ impl SystemPreloadRequest {
         })?;
 
         let entries = contents
-            .split_ascii_whitespace()
+            .lines()
+            .flat_map(|line| {
+                let uncommented = line.split_once('#').map_or(line, |(prefix, _)| prefix);
+                uncommented.split_ascii_whitespace()
+            })
             .map(str::to_owned)
             .collect::<Vec<_>>();
         for entry in &entries {
