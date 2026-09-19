@@ -39,14 +39,11 @@ impl SystemPreloadRequest {
             )
         })?;
 
-        let entries = contents
-            .lines()
-            .flat_map(|line| {
-                let uncommented = line.split_once('#').map_or(line, |(prefix, _)| prefix);
-                uncommented.split_ascii_whitespace()
-            })
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
+        let mut entries = Vec::new();
+        for line in contents.lines() {
+            let uncommented = line.split_once('#').map_or(line, |(prefix, _)| prefix);
+            entries.extend(uncommented.split_ascii_whitespace().map(str::to_owned));
+        }
         for entry in &entries {
             if entry.contains(':') {
                 return Err(format!(
