@@ -4,7 +4,10 @@ use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn temp_dir() -> PathBuf {
-    let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
     let path = std::env::temp_dir().join(format!(
         "mini-elf-system-preload-comments-{}-{stamp}",
         std::process::id()
@@ -36,7 +39,11 @@ fn build_shared(work: &Path, stem: &str, symbol: &str) -> PathBuf {
         ),
     )
     .unwrap();
-    run(Command::new("as").arg("--64").arg("-o").arg(&object).arg(&source));
+    run(Command::new("as")
+        .arg("--64")
+        .arg("-o")
+        .arg(&object)
+        .arg(&source));
     run(Command::new("ld")
         .arg("-shared")
         .arg("--hash-style=both")
