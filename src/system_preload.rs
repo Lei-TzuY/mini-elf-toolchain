@@ -41,7 +41,7 @@ impl SystemPreloadRequest {
 
         let mut entries = Vec::new();
         for line in contents.lines() {
-            let uncommented = line.split_once('#').map_or(line, |(prefix, _)| prefix);
+            let uncommented = line.split('#').next().unwrap_or_default();
             entries.extend(uncommented.split_ascii_whitespace().map(str::to_owned));
         }
         for entry in &entries {
