@@ -97,6 +97,8 @@ fn radix_keeps_malformed_input_failure_atomic() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "stdout must remain atomic");
-    assert!(String::from_utf8_lossy(&output.stderr).contains("ELF64 header is truncated"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("ELF64 header is truncated")
+    );
     let _ = fs::remove_dir_all(dir);
 }
