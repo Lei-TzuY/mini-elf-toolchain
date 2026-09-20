@@ -7,7 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] [-A|--print-file-name] <input>...";
+const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] [-A|--print-file-name] [-j|--just-symbols] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -27,6 +27,7 @@ struct Filters {
     sort_mode: SortMode,
     reverse_sort: bool,
     print_file_name: bool,
+    just_symbols: bool,
 }
 
 fn main() -> ExitCode {
@@ -68,6 +69,7 @@ where
             "-p" | "--no-sort" => filters.sort_mode = SortMode::None,
             "-r" | "--reverse-sort" => filters.reverse_sort = true,
             "-A" | "--print-file-name" => filters.print_file_name = true,
+            "-j" | "--just-symbols" => filters.just_symbols = true,
             _ => break,
         }
         inputs.remove(0);
@@ -92,10 +94,10 @@ where
 
     let mut output = String::new();
     for (index, (display, symbols)) in inspected.into_iter().enumerate() {
-        if index != 0 {
+        if index != 0 && !filters.just_symbols {
             output.push('\n');
         }
-        if multiple_inputs && !filters.print_file_name {
+        if multiple_inputs && !filters.print_file_name && !filters.just_symbols {
             output.push_str(&format!("{display}:\n"));
         }
         output.push_str(&symbols);
@@ -115,10 +117,10 @@ fn inspect_archive(file: &[u8], display: &str, filters: Filters) -> Result<Strin
 
     let mut output = String::new();
     for (index, (member_name, symbols)) in members.into_iter().enumerate() {
-        if index != 0 {
+        if index != 0 && !filters.just_symbols {
             output.push('\n');
         }
-        if !filters.print_file_name {
+        if !filters.print_file_name && !filters.just_symbols {
             output.push_str(&format!("{member_name}:\n"));
         }
         output.push_str(&symbols);
@@ -152,15 +154,19 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
             let symbol_type = type_name(symbol.info & 0x0f);
             let section = section_name(symbol.section_index);
             let name = String::from_utf8_lossy(name).into_owned();
-            let prefix = if filters.print_file_name {
+            let prefix = if filters.print_file_name && !filters.just_symbols {
                 format!("{display}:")
             } else {
                 String::new()
             };
-            let row = format!(
-                "{}{:<016x} {:>4} {:<6} {:<7} {:>5} {}\n",
-                prefix, symbol.value, symbol.size, binding, symbol_type, section, name
-            );
+            let row = if filters.just_symbols {
+                format!("{name}\n")
+            } else {
+                format!(
+                    "{}{:<016x} {:>4} {:<6} {:<7} {:>5} {}\n",
+                    prefix, symbol.value, symbol.size, binding, symbol_type, section, name
+                )
+            };
             rows.push((symbol.value, symbol.size, name, row));
         }
     }
@@ -179,7 +185,11 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
         rows.reverse();
     }
 
-    let mut output = String::from(TABLE_HEADER);
+    let mut output = if filters.just_symbols {
+        String::new()
+    } else {
+        String::from(TABLE_HEADER)
+    };
     for (_, _, _, row) in rows {
         output.push_str(&row);
     }
