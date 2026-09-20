@@ -154,13 +154,13 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
             let symbol_type = type_name(symbol.info & 0x0f);
             let section = section_name(symbol.section_index);
             let name = String::from_utf8_lossy(name).into_owned();
-            let prefix = if filters.print_file_name {
+            let prefix = if filters.print_file_name && !filters.just_symbols {
                 format!("{display}:")
             } else {
                 String::new()
             };
             let row = if filters.just_symbols {
-                format!("{prefix}{name}\n")
+                format!("{name}\n")
             } else {
                 format!(
                     "{}{:<016x} {:>4} {:<6} {:<7} {:>5} {}\n",
