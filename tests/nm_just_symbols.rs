@@ -17,8 +17,18 @@ fn just_symbols_matches_gnu_nm_for_real_object() {
 
     let source = temp_path("just-symbols.s");
     let object = temp_path("just-symbols.o");
-    fs::write(&source, ".globl beta\n.globl alpha\n.text\nalpha:\n  nop\nbeta:\n  ret\n").unwrap();
-    assert!(Command::new("as").arg("-o").arg(&object).arg(&source).status().unwrap().success());
+    fs::write(
+        &source,
+        ".globl beta\n.globl alpha\n.text\nalpha:\n  nop\nbeta:\n  ret\n",
+    )
+    .unwrap();
+    assert!(Command::new("as")
+        .arg("-o")
+        .arg(&object)
+        .arg(&source)
+        .status()
+        .unwrap()
+        .success());
 
     let gnu = Command::new("nm").arg("-j").arg(&object).output().unwrap();
     assert!(gnu.status.success());
@@ -27,7 +37,11 @@ fn just_symbols_matches_gnu_nm_for_real_object() {
         .arg(&object)
         .output()
         .unwrap();
-    assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
     assert_eq!(ours.stdout, gnu.stdout);
 
     let long = Command::new(env!("CARGO_BIN_EXE_mini-elf-nm"))
@@ -51,7 +65,13 @@ fn just_symbols_keeps_stdout_atomic_for_malformed_input() {
         return;
     }
     fs::write(&good_source, ".globl alpha\n.text\nalpha:\n  ret\n").unwrap();
-    assert!(Command::new("as").arg("-o").arg(&good_object).arg(&good_source).status().unwrap().success());
+    assert!(Command::new("as")
+        .arg("-o")
+        .arg(&good_object)
+        .arg(&good_source)
+        .status()
+        .unwrap()
+        .success());
     fs::write(&bad, b"\x7fELF").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-nm"))
