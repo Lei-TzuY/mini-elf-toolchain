@@ -9,7 +9,7 @@ fn temp_dir(label: &str) -> std::path::PathBuf {
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
         "mini-elf-toolchain-{label}-{}-{nonce}",
-        std::process::id()
+        std::process::id(),
     ));
     fs::create_dir_all(&path).unwrap();
     path
