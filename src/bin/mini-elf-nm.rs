@@ -220,7 +220,7 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
                     binding,
                     symbol_type,
                     section,
-                    name
+                    name,
                 )
             };
             rows.push((symbol.value, symbol.size, name, row));
