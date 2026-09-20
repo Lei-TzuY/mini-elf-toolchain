@@ -53,10 +53,7 @@ fn print_file_name_matches_gnu_nm_provenance_for_real_et_rel() {
         .lines()
         .find(|line| line.ends_with(" alpha"))
         .unwrap();
-    assert!(
-        ours_alpha.starts_with(&expected_prefix),
-        "{ours_stdout}"
-    );
+    assert!(ours_alpha.starts_with(&expected_prefix), "{ours_stdout}");
 
     let gnu = Command::new("nm").arg("-A").arg(&object).output().unwrap();
     assert!(gnu.status.success());
