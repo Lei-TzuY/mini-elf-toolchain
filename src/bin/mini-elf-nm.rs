@@ -7,7 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] <input>...";
+const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] [-A|--print-file-name] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -26,6 +26,7 @@ struct Filters {
     extern_only: bool,
     sort_mode: SortMode,
     reverse_sort: bool,
+    print_file_name: bool,
 }
 
 fn main() -> ExitCode {
@@ -66,6 +67,7 @@ where
             "--size-sort" => filters.sort_mode = SortMode::Size,
             "-p" | "--no-sort" => filters.sort_mode = SortMode::None,
             "-r" | "--reverse-sort" => filters.reverse_sort = true,
+            "-A" | "--print-file-name" => filters.print_file_name = true,
             _ => break,
         }
         inputs.remove(0);
@@ -93,7 +95,7 @@ where
         if index != 0 {
             output.push('\n');
         }
-        if multiple_inputs {
+        if multiple_inputs && !filters.print_file_name {
             output.push_str(&format!("{display}:\n"));
         }
         output.push_str(&symbols);
@@ -116,7 +118,9 @@ fn inspect_archive(file: &[u8], display: &str, filters: Filters) -> Result<Strin
         if index != 0 {
             output.push('\n');
         }
-        output.push_str(&format!("{member_name}:\n"));
+        if !filters.print_file_name {
+            output.push_str(&format!("{member_name}:\n"));
+        }
         output.push_str(&symbols);
     }
     Ok(output)
@@ -148,9 +152,14 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
             let symbol_type = type_name(symbol.info & 0x0f);
             let section = section_name(symbol.section_index);
             let name = String::from_utf8_lossy(name).into_owned();
+            let prefix = if filters.print_file_name {
+                format!("{display}:")
+            } else {
+                String::new()
+            };
             let row = format!(
-                "{:<016x} {:>4} {:<6} {:<7} {:>5} {}\n",
-                symbol.value, symbol.size, binding, symbol_type, section, name
+                "{}{:<016x} {:>4} {:<6} {:<7} {:>5} {}\n",
+                prefix, symbol.value, symbol.size, binding, symbol_type, section, name
             );
             rows.push((symbol.value, symbol.size, name, row));
         }
