@@ -42,16 +42,29 @@ fn print_file_name_matches_gnu_nm_provenance_for_real_et_rel() {
         .arg(&object)
         .output()
         .unwrap();
-    assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
     let ours_stdout = String::from_utf8_lossy(&ours.stdout);
     let expected_prefix = format!("{}:", object.to_string_lossy());
-    let ours_alpha = ours_stdout.lines().find(|line| line.ends_with(" alpha")).unwrap();
-    assert!(ours_alpha.starts_with(&expected_prefix), "{ours_stdout}");
+    let ours_alpha = ours_stdout
+        .lines()
+        .find(|line| line.ends_with(" alpha"))
+        .unwrap();
+    assert!(
+        ours_alpha.starts_with(&expected_prefix),
+        "{ours_stdout}"
+    );
 
     let gnu = Command::new("nm").arg("-A").arg(&object).output().unwrap();
     assert!(gnu.status.success());
     let gnu_stdout = String::from_utf8_lossy(&gnu.stdout);
-    let gnu_alpha = gnu_stdout.lines().find(|line| line.ends_with(" alpha")).unwrap();
+    let gnu_alpha = gnu_stdout
+        .lines()
+        .find(|line| line.ends_with(" alpha"))
+        .unwrap();
     assert!(gnu_alpha.starts_with(&expected_prefix), "{gnu_stdout}");
 
     let long = Command::new(env!("CARGO_BIN_EXE_mini-elf-nm"))
