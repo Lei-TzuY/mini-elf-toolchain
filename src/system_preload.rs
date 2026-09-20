@@ -3,8 +3,10 @@ use std::ffi::OsString;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+use std::sync::Mutex;
 
 const MAX_SYSTEM_PRELOAD_BYTES: u64 = 1024 * 1024;
+static ENVIRONMENT_LOCK: Mutex<()> = Mutex::new(());
 
 /// Parsed, owned system-preload request independent of any command wrapper.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,11 +119,15 @@ impl SystemPreloadRequest {
 
     /// Apply the request as a scoped process environment and invoke the loader model.
     ///
-    /// The original environment is restored on success, error, or panic unwind.
+    /// The original environment is restored on success, error, or panic unwind. Calls
+    /// are serialized because the process environment is shared by all threads.
     pub fn resolve<T>(
         self,
         resolver: impl FnOnce(Vec<OsString>) -> Result<T, String>,
     ) -> Result<SystemPreloadResolution<T>, String> {
+        let _environment_guard = ENVIRONMENT_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let restore = EnvironmentRestore::capture(self.secure);
         let system_value = self.entries.join(" ");
         let combined = if self.secure {
@@ -195,7 +201,9 @@ impl Drop for EnvironmentRestore {
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     #[test]
     fn invalid_argument_shape_is_not_a_loader_error() {
@@ -255,5 +263,47 @@ mod tests {
         let error = read_preload_file(&path).unwrap_err();
         fs::remove_file(&path).unwrap();
         assert!(error.contains("exceeds 1048576 byte limit"), "{error}");
+    }
+
+    #[test]
+    fn concurrent_resolutions_do_not_overlap_environment_scopes() {
+        fn request() -> SystemPreloadRequest {
+            SystemPreloadRequest {
+                secure: false,
+                entries: vec!["libexample.so".to_owned()],
+                resolver_args: Vec::new(),
+            }
+        }
+
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let first = thread::spawn({
+            let entered_tx = entered_tx.clone();
+            move || {
+                request()
+                    .resolve(|_| {
+                        entered_tx.send(1).unwrap();
+                        release_rx.recv().unwrap();
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+        });
+        assert_eq!(entered_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 1);
+
+        let second = thread::spawn(move || {
+            request()
+                .resolve(|_| {
+                    entered_tx.send(2).unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        });
+        assert!(entered_rx.recv_timeout(Duration::from_millis(100)).is_err());
+
+        release_tx.send(()).unwrap();
+        first.join().unwrap();
+        assert_eq!(entered_rx.recv_timeout(Duration::from_secs(1)).unwrap(), 2);
+        second.join().unwrap();
     }
 }
