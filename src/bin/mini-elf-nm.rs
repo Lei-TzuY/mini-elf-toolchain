@@ -1,5 +1,5 @@
 use mini_elf_toolchain::archive::Archive;
-use mini_elf_toolchain::elf64::Elf64Header;
+use mini_elf_toolchain::elf64::{Elf64Header, SHT_DYNSYM};
 use mini_elf_toolchain::symbol_names::symbol_name;
 use std::env;
 use std::ffi::OsString;
@@ -7,7 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] [-A|--print-file-name] [-j|--just-symbols] [-t d|o|x|--radix=d|o|x] <input>...";
+const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-D|--dynamic] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] [-A|--print-file-name] [-j|--just-symbols] [-t d|o|x|--radix=d|o|x] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -32,6 +32,7 @@ struct Filters {
     undefined_only: bool,
     defined_only: bool,
     extern_only: bool,
+    dynamic_only: bool,
     sort_mode: SortMode,
     reverse_sort: bool,
     print_file_name: bool,
@@ -104,6 +105,7 @@ where
             "-u" | "--undefined-only" => filters.undefined_only = true,
             "--defined-only" => filters.defined_only = true,
             "-g" | "--extern-only" => filters.extern_only = true,
+            "-D" | "--dynamic" => filters.dynamic_only = true,
             "-n" | "--numeric-sort" => filters.sort_mode = SortMode::Numeric,
             "--size-sort" => filters.sort_mode = SortMode::Size,
             "-p" | "--no-sort" => filters.sort_mode = SortMode::None,
@@ -187,6 +189,11 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
 
     let mut rows = Vec::new();
     for table in &tables {
+        if filters.dynamic_only
+            && sections[usize::from(table.section_index)].section_type != SHT_DYNSYM
+        {
+            continue;
+        }
         for (symbol_index, symbol) in table.symbols.iter().enumerate() {
             let name = symbol_name(file, &sections, table, symbol_index)
                 .map_err(|error| format!("{display}: {error}"))?;
