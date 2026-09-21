@@ -28,15 +28,13 @@ fn radix_forms_render_real_symbol_values() {
     let assembly = dir.join("sample.s");
     let object = dir.join("sample.o");
     fs::write(&assembly, ".globl marker\n.set marker,0x2a\n").unwrap();
-    assert!(
-        Command::new("as")
-            .arg("-o")
-            .arg(&object)
-            .arg(&assembly)
-            .status()
-            .unwrap()
-            .success()
-    );
+    assert!(Command::new("as")
+        .arg("-o")
+        .arg(&object)
+        .arg(&assembly)
+        .status()
+        .unwrap()
+        .success());
 
     for (args, expected) in [
         (vec!["-t", "d"], "0000000000000042"),
@@ -97,8 +95,6 @@ fn radix_keeps_malformed_input_failure_atomic() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "stdout must remain atomic");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("ELF64 header is truncated")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("ELF64 header is truncated"));
     let _ = fs::remove_dir_all(dir);
 }
