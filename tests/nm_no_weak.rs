@@ -32,13 +32,15 @@ fn no_weak_matches_gnu_nm_on_real_object() {
         ".text\n.globl strong_symbol\nstrong_symbol:\n ret\n.weak weak_symbol\nweak_symbol:\n ret\n.local local_symbol\nlocal_symbol:\n ret\n",
     )
     .unwrap();
-    assert!(Command::new("as")
-        .arg("-o")
-        .arg(&object)
-        .arg(&assembly)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("as")
+            .arg("-o")
+            .arg(&object)
+            .arg(&assembly)
+            .status()
+            .unwrap()
+            .success()
+    );
 
     for flag in ["-W", "--no-weak"] {
         let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-nm"))
@@ -86,13 +88,15 @@ fn no_weak_composes_with_extern_only() {
         ".text\n.globl strong_symbol\nstrong_symbol:\n ret\n.weak weak_symbol\nweak_symbol:\n ret\n.local local_symbol\nlocal_symbol:\n ret\n",
     )
     .unwrap();
-    assert!(Command::new("as")
-        .arg("-o")
-        .arg(&object)
-        .arg(&assembly)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("as")
+            .arg("-o")
+            .arg(&object)
+            .arg(&assembly)
+            .status()
+            .unwrap()
+            .success()
+    );
 
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-nm"))
         .args(["-W", "-g", "--just-symbols"])
