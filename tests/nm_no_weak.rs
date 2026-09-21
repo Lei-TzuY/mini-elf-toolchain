@@ -43,7 +43,11 @@ fn no_weak_matches_gnu_nm_on_real_object() {
             .arg(&object)
             .output()
             .unwrap();
-        assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+        assert!(
+            ours.status.success(),
+            "{}",
+            String::from_utf8_lossy(&ours.stderr)
+        );
         let output = String::from_utf8_lossy(&ours.stdout);
         assert!(output.contains("strong_symbol\n"));
         assert!(output.contains("local_symbol\n"));
@@ -93,7 +97,10 @@ fn no_weak_composes_with_extern_only() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "strong_symbol\n");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "strong_symbol\n"
+    );
     let _ = fs::remove_dir_all(dir);
 }
 
