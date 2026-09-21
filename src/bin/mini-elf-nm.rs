@@ -7,7 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-D|--dynamic] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] [-A|--print-file-name] [-j|--just-symbols] [-t d|o|x|--radix=d|o|x] <input>...";
+const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-W|--no-weak] [-D|--dynamic] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] [-A|--print-file-name] [-j|--just-symbols] [-t d|o|x|--radix=d|o|x] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -32,6 +32,7 @@ struct Filters {
     undefined_only: bool,
     defined_only: bool,
     extern_only: bool,
+    no_weak: bool,
     dynamic_only: bool,
     sort_mode: SortMode,
     reverse_sort: bool,
@@ -105,6 +106,7 @@ where
             "-u" | "--undefined-only" => filters.undefined_only = true,
             "--defined-only" => filters.defined_only = true,
             "-g" | "--extern-only" => filters.extern_only = true,
+            "-W" | "--no-weak" => filters.no_weak = true,
             "-D" | "--dynamic" => filters.dynamic_only = true,
             "-n" | "--numeric-sort" => filters.sort_mode = SortMode::Numeric,
             "--size-sort" => filters.sort_mode = SortMode::Size,
@@ -202,6 +204,7 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
                 || (filters.undefined_only && symbol.section_index != 0)
                 || (filters.defined_only && symbol.section_index == 0)
                 || (filters.extern_only && binding == 0)
+                || (filters.no_weak && binding == 2)
             {
                 continue;
             }
