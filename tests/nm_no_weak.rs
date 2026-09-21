@@ -104,10 +104,7 @@ fn no_weak_composes_with_extern_only() {
         .output()
         .unwrap();
     assert!(output.status.success());
-    assert_eq!(
-        String::from_utf8_lossy(&output.stdout),
-        "strong_symbol\n"
-    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "strong_symbol\n");
     let _ = fs::remove_dir_all(dir);
 }
 
