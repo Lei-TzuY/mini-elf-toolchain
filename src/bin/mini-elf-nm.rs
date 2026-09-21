@@ -7,7 +7,7 @@ use std::fs;
 use std::process::ExitCode;
 
 const ARCHIVE_MAGIC: &[u8; 8] = b"!<arch>\n";
-const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] [-A|--print-file-name] [-j|--just-symbols] <input>...";
+const USAGE: &str = "usage: mini-elf-nm [-u|--undefined-only] [--defined-only] [-g|--extern-only] [-n|--numeric-sort] [--size-sort] [-p|--no-sort] [-r|--reverse-sort] [-A|--print-file-name] [-j|--just-symbols] [-t d|o|x|--radix=d|o|x] <input>...";
 const TABLE_HEADER: &str = "VALUE             SIZE BIND   TYPE    SHNDX NAME\n";
 
 #[derive(Clone, Copy, Default, Eq, PartialEq)]
@@ -20,6 +20,14 @@ enum SortMode {
 }
 
 #[derive(Clone, Copy, Default)]
+enum Radix {
+    Decimal,
+    Octal,
+    #[default]
+    Hexadecimal,
+}
+
+#[derive(Clone, Copy, Default)]
 struct Filters {
     undefined_only: bool,
     defined_only: bool,
@@ -28,6 +36,7 @@ struct Filters {
     reverse_sort: bool,
     print_file_name: bool,
     just_symbols: bool,
+    radix: Radix,
 }
 
 fn main() -> ExitCode {
@@ -40,6 +49,15 @@ fn main() -> ExitCode {
             eprintln!("error: {message}");
             ExitCode::FAILURE
         }
+    }
+}
+
+fn parse_radix(value: &str) -> Result<Radix, String> {
+    match value {
+        "d" | "10" => Ok(Radix::Decimal),
+        "o" | "8" => Ok(Radix::Octal),
+        "x" | "16" => Ok(Radix::Hexadecimal),
+        _ => Err(format!("invalid radix '{value}'; expected d, o, or x")),
     }
 }
 
@@ -60,6 +78,28 @@ where
 
     let mut filters = Filters::default();
     while let Some(first) = inputs.first().and_then(|value| value.to_str()) {
+        if first == "-t" || first == "--radix" {
+            if inputs.len() < 2 {
+                return Err(format!("{first} requires a radix argument"));
+            }
+            let value = inputs[1]
+                .to_str()
+                .ok_or_else(|| "radix argument must be valid UTF-8".to_owned())?;
+            filters.radix = parse_radix(value)?;
+            inputs.remove(0);
+            inputs.remove(0);
+            continue;
+        }
+        if let Some(value) = first.strip_prefix("--radix=") {
+            filters.radix = parse_radix(value)?;
+            inputs.remove(0);
+            continue;
+        }
+        if let Some(value) = first.strip_prefix("-t").filter(|value| !value.is_empty()) {
+            filters.radix = parse_radix(value)?;
+            inputs.remove(0);
+            continue;
+        }
         match first {
             "-u" | "--undefined-only" => filters.undefined_only = true,
             "--defined-only" => filters.defined_only = true,
@@ -128,6 +168,14 @@ fn inspect_archive(file: &[u8], display: &str, filters: Filters) -> Result<Strin
     Ok(output)
 }
 
+fn format_value(value: u64, radix: Radix) -> String {
+    match radix {
+        Radix::Decimal => format!("{value:016}"),
+        Radix::Octal => format!("{value:016o}"),
+        Radix::Hexadecimal => format!("{value:016x}"),
+    }
+}
+
 fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, String> {
     let header = Elf64Header::parse(file).map_err(|error| format!("{display}: {error}"))?;
     let sections = header
@@ -163,8 +211,14 @@ fn inspect_elf(file: &[u8], display: &str, filters: Filters) -> Result<String, S
                 format!("{name}\n")
             } else {
                 format!(
-                    "{}{:<016x} {:>4} {:<6} {:<7} {:>5} {}\n",
-                    prefix, symbol.value, symbol.size, binding, symbol_type, section, name
+                    "{}{:<16} {:>4} {:<6} {:<7} {:>5} {}\n",
+                    prefix,
+                    format_value(symbol.value, filters.radix),
+                    symbol.size,
+                    binding,
+                    symbol_type,
+                    section,
+                    name,
                 )
             };
             rows.push((symbol.value, symbol.size, name, row));
