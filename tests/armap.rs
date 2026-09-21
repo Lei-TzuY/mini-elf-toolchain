@@ -33,24 +33,20 @@ fn armap_matches_gnu_nm_index_for_real_archive() {
         ".text\n.globl exported\n.type exported,@function\nexported:\n  ret\n.size exported,.-exported\n",
     )
     .unwrap();
-    assert!(
-        Command::new("as")
-            .arg("-o")
-            .arg(&object)
-            .arg(&assembly)
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert!(
-        Command::new("ar")
-            .args(["rcs"])
-            .arg(&archive)
-            .arg(&object)
-            .status()
-            .unwrap()
-            .success()
-    );
+    assert!(Command::new("as")
+        .arg("-o")
+        .arg(&object)
+        .arg(&assembly)
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("ar")
+        .args(["rcs"])
+        .arg(&archive)
+        .arg(&object)
+        .status()
+        .unwrap()
+        .success());
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-armap"))
         .arg(&archive)
@@ -69,10 +65,7 @@ fn armap_matches_gnu_nm_index_for_real_archive() {
         .split("\n\n")
         .next()
         .expect("GNU nm should print an archive index");
-    assert_eq!(
-        String::from_utf8_lossy(&ours.stdout).trim_end(),
-        gnu_index
-    );
+    assert_eq!(String::from_utf8_lossy(&ours.stdout).trim_end(), gnu_index);
     let _ = fs::remove_dir_all(dir);
 }
 
