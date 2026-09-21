@@ -89,7 +89,8 @@ where
                 .to_str()
                 .ok_or_else(|| "radix argument must be valid UTF-8".to_owned())?;
             filters.radix = parse_radix(value)?;
-            inputs.drain(..2);
+            inputs.remove(0);
+            inputs.remove(0);
             continue;
         }
         if let Some(value) = first.strip_prefix("--radix=") {
