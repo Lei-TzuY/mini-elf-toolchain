@@ -77,10 +77,7 @@ where
     }
 
     let mut filters = Filters::default();
-    loop {
-        let Some(first) = inputs.first().and_then(|value| value.to_str()) else {
-            break;
-        };
+    while let Some(first) = inputs.first().and_then(|value| value.to_str()) {
         if first == "-t" || first == "--radix" {
             if inputs.len() < 2 {
                 return Err(format!("{first} requires a radix argument"));
