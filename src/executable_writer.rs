@@ -258,6 +258,7 @@ pub fn write_elf64_x86_64_executable_segments(
         entry_address,
         segment_alignment,
         ExecutableFileType::Executable,
+        true,
     )
 }
 
@@ -271,6 +272,20 @@ pub fn write_elf64_x86_64_position_independent_segments(
         entry_address,
         segment_alignment,
         ExecutableFileType::PositionIndependent,
+        true,
+    )
+}
+
+pub fn write_elf64_x86_64_shared_segments(
+    segments: &[LoadSegmentInput<'_>],
+    segment_alignment: u64,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    write_elf64_x86_64_segments(
+        segments,
+        0,
+        segment_alignment,
+        ExecutableFileType::PositionIndependent,
+        false,
     )
 }
 
@@ -279,6 +294,7 @@ fn write_elf64_x86_64_segments(
     entry_address: u64,
     segment_alignment: u64,
     file_type: ExecutableFileType,
+    require_executable_entry: bool,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
     if segments.is_empty() {
         return Err(ExecutableWriteError::NoLoadSegments);
@@ -341,7 +357,7 @@ fn write_elf64_x86_64_segments(
         validated.push((segment, file_size));
     }
 
-    if !entry_is_executable {
+    if require_executable_entry && !entry_is_executable {
         return Err(ExecutableWriteError::EntryOutsideExecutableSegment { entry_address });
     }
 
