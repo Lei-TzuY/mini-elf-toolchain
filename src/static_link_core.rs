@@ -23,7 +23,9 @@ pub enum StaticLinkError {
     Relocation(RelocatedSectionError),
     TlsRelocation(StaticTlsRelocationError),
     Symbols(LinkSymbolError),
-    MissingEntrySymbol { name: Vec<u8> },
+    MissingEntrySymbol {
+        name: Vec<u8>,
+    },
     EntryAddress(FinalSymbolAddressError),
     LinkMap(FinalSymbolAddressError),
     LoadSegments(LoadSegmentBuildError),
@@ -118,13 +120,7 @@ pub fn link_static_executable_with_map(
     page_alignment: u64,
     entry_symbol: &[u8],
 ) -> Result<StaticLinkOutput, StaticLinkError> {
-    link_static_image_with_map(
-        inputs,
-        start_address,
-        page_alignment,
-        entry_symbol,
-        false,
-    )
+    link_static_image_with_map(inputs, start_address, page_alignment, entry_symbol, false)
 }
 
 pub fn link_static_position_independent_executable_with_map(
@@ -225,11 +221,7 @@ fn link_static_image_with_map(
             page_alignment,
         )
     } else {
-        write_elf64_x86_64_executable_segments(
-            &writer_segments,
-            entry_address,
-            page_alignment,
-        )
+        write_elf64_x86_64_executable_segments(&writer_segments, entry_address, page_alignment)
     }
     .map_err(StaticLinkError::Write)?;
     if let Some(tls) = relocated_output.tls_layout {
