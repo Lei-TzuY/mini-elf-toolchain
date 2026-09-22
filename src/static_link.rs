@@ -24,12 +24,11 @@ pub fn link_static_position_independent_executable_with_map(
     page_alignment: u64,
     entry_symbol: &[u8],
 ) -> Result<StaticLinkOutput, StaticLinkError> {
-    let mut output =
-        crate::static_link_core::link_static_position_independent_executable_with_map(
-            inputs,
-            page_alignment,
-            entry_symbol,
-        )?;
+    let mut output = crate::static_link_core::link_static_position_independent_executable_with_map(
+        inputs,
+        page_alignment,
+        entry_symbol,
+    )?;
     output.image = map_runtime_program_headers(output.image).map_err(StaticLinkError::Write)?;
     synchronize_link_map_segments(&mut output);
     Ok(output)
