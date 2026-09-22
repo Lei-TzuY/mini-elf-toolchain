@@ -275,7 +275,6 @@ fn malformed_later_input_fails_without_writing_partial_output() {
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 fn grouped_alloc_section_is_rejected_without_output() {
     if !command_reports("as", "GNU assembler") {
