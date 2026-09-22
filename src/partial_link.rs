@@ -88,6 +88,11 @@ pub enum PartialLinkError {
         symbol_index: usize,
         section_index: u16,
     },
+    UnsupportedNondefaultSymbolVisibility {
+        input_index: usize,
+        symbol_index: usize,
+        other: u8,
+    },
     UnsupportedExtendedSymbolSectionIndex {
         input_index: usize,
         symbol_index: usize,
@@ -247,6 +252,14 @@ impl fmt::Display for PartialLinkError {
                 f,
                 "partial-link input {input_index} symbol {symbol_index} refers to non-allocatable section {section_index}, which is not preserved by the bounded partial-link output"
             ),
+            Self::UnsupportedNondefaultSymbolVisibility {
+                input_index,
+                symbol_index,
+                other,
+            } => write!(
+                f,
+                "partial-link input {input_index} nonlocal symbol {symbol_index} has unsupported st_other/visibility value {other:#x}; bounded canonicalization currently requires default visibility"
+            ),
             Self::UnsupportedExtendedSymbolSectionIndex {
                 input_index,
                 symbol_index,
@@ -373,6 +386,7 @@ impl PartialLinkError {
             | Self::InvalidSymbolName { input_index, .. }
             | Self::UnsupportedSymbolBinding { input_index, .. }
             | Self::UnsupportedSymbolSection { input_index, .. }
+            | Self::UnsupportedNondefaultSymbolVisibility { input_index, .. }
             | Self::UnsupportedExtendedSymbolSectionIndex { input_index, .. }
             | Self::UnsupportedRelocationTarget { input_index, .. }
             | Self::UnsupportedRelocationSymbolTable { input_index, .. }
@@ -644,6 +658,13 @@ pub fn link_relocatable_objects(
                     source,
                 })?
                 .to_vec();
+            if binding != STB_LOCAL && symbol.other != 0 {
+                return Err(PartialLinkError::UnsupportedNondefaultSymbolVisibility {
+                    input_index,
+                    symbol_index,
+                    other: symbol.other,
+                });
+            }
             if symbol.section_index == SHN_XINDEX {
                 return Err(PartialLinkError::UnsupportedExtendedSymbolSectionIndex {
                     input_index,
