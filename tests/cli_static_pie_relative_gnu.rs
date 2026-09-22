@@ -145,7 +145,7 @@ _start:
     assert!(dynamic.contains("(RELACOUNT)"));
 
     let relocations = Command::new("readelf")
-        .args(["-rW"])
+        .args(["-rW", "--use-dynamic"])
         .arg(&ours)
         .output()
         .unwrap();
@@ -169,7 +169,7 @@ _start:
         String::from_utf8_lossy(&gnu_link.stderr)
     );
     let gnu_relocations = Command::new("readelf")
-        .args(["-rW"])
+        .args(["-rW", "--use-dynamic"])
         .arg(&gnu)
         .output()
         .unwrap();
@@ -242,7 +242,7 @@ _start:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(stderr.contains("SHN_ABS"));
-    assert!(stderr.contains("relative"));
+    assert!(stderr.contains("R_X86_64_RELATIVE"));
     assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
@@ -294,7 +294,7 @@ _start:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(stderr.contains("undefined weak"));
-    assert!(stderr.contains("relative"));
+    assert!(stderr.contains("R_X86_64_RELATIVE"));
     assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
