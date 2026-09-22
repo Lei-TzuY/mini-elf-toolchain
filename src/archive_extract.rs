@@ -11,16 +11,9 @@ pub struct PlannedArchiveExtraction<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArchiveExtractionPlanError {
-    NonUtf8MemberName {
-        offset: usize,
-    },
-    UnsafeMemberName {
-        offset: usize,
-        name: String,
-    },
-    DuplicateOutputName {
-        name: String,
-    },
+    NonUtf8MemberName { offset: usize },
+    UnsafeMemberName { offset: usize, name: String },
+    DuplicateOutputName { name: String },
 }
 
 impl fmt::Display for ArchiveExtractionPlanError {
