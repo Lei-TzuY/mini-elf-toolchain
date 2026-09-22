@@ -8,12 +8,28 @@ const ELF64_PROGRAM_HEADER_BYTES: usize = 56;
 const ELF64_PROGRAM_HEADER_OFFSET: u64 = ELF64_EHDR_SIZE;
 
 const ET_EXEC: u16 = 2;
+const ET_DYN: u16 = 3;
 const EM_X86_64: u16 = 62;
 const EV_CURRENT: u32 = 1;
 const PT_LOAD: u32 = 1;
 const PF_X: u32 = 1;
 const PF_W: u32 = 2;
 const PF_R: u32 = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutableFileType {
+    Executable,
+    PositionIndependent,
+}
+
+impl ExecutableFileType {
+    fn elf_type(self) -> u16 {
+        match self {
+            Self::Executable => ET_EXEC,
+            Self::PositionIndependent => ET_DYN,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LoadSegmentPermissions {
@@ -229,6 +245,33 @@ pub fn write_elf64_x86_64_executable_segments(
     entry_address: u64,
     segment_alignment: u64,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
+    write_elf64_x86_64_segments(
+        segments,
+        entry_address,
+        segment_alignment,
+        ExecutableFileType::Executable,
+    )
+}
+
+pub fn write_elf64_x86_64_position_independent_segments(
+    segments: &[LoadSegmentInput<'_>],
+    entry_address: u64,
+    segment_alignment: u64,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    write_elf64_x86_64_segments(
+        segments,
+        entry_address,
+        segment_alignment,
+        ExecutableFileType::PositionIndependent,
+    )
+}
+
+fn write_elf64_x86_64_segments(
+    segments: &[LoadSegmentInput<'_>],
+    entry_address: u64,
+    segment_alignment: u64,
+    file_type: ExecutableFileType,
+) -> Result<ExecutableImage, ExecutableWriteError> {
     if segments.is_empty() {
         return Err(ExecutableWriteError::NoLoadSegments);
     }
@@ -338,6 +381,7 @@ pub fn write_elf64_x86_64_executable_segments(
         &mut bytes[..ELF64_HEADER_BYTES],
         entry_address,
         program_header_count,
+        file_type,
     );
 
     for (index, emitted) in emitted_segments.iter().enumerate() {
@@ -403,13 +447,18 @@ fn first_congruent_offset_at_or_after(
         })
 }
 
-fn write_elf_header(out: &mut [u8], entry_address: u64, program_header_count: u16) {
+fn write_elf_header(
+    out: &mut [u8],
+    entry_address: u64,
+    program_header_count: u16,
+    file_type: ExecutableFileType,
+) {
     out[0..4].copy_from_slice(b"\x7fELF");
     out[4] = 2;
     out[5] = 1;
     out[6] = 1;
     out[7] = 0;
-    put_u16(out, 16, ET_EXEC);
+    put_u16(out, 16, file_type.elf_type());
     put_u16(out, 18, EM_X86_64);
     put_u32(out, 20, EV_CURRENT);
     put_u64(out, 24, entry_address);
