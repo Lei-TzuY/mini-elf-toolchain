@@ -10,7 +10,6 @@ use crate::link_symbols::{resolve_validated_objects, LinkSymbolError};
 use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
 use crate::object_symbols::named_symbols_from_table;
-use crate::permission_layout::SHF_TLS;
 use crate::pie_runtime::{add_runtime_relative_relocations, PieDynamicSegment, PieRuntimeError};
 use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
 use crate::resolve::{SHN_UNDEF, STB_LOCAL, STB_WEAK};
@@ -42,10 +41,6 @@ pub enum StaticLinkError {
         rela_section_index: u16,
         relocation_index: usize,
         relocation_type: u32,
-    },
-    PositionIndependentTlsSection {
-        object_index: usize,
-        section_index: u16,
     },
     PositionIndependentAbsoluteSymbol {
         object_index: usize,
@@ -94,13 +89,6 @@ impl fmt::Display for StaticLinkError {
                 f,
                 "object {object_index} RELA section {rela_section_index} relocation {relocation_index} uses relocation type {relocation_type}, which is not load-bias invariant for bounded position-independent static linking"
             ),
-            Self::PositionIndependentTlsSection {
-                object_index,
-                section_index,
-            } => write!(
-                f,
-                "object {object_index} section {section_index} uses SHF_TLS; bounded position-independent static linking does not provide runtime TLS initialization"
-            ),
             Self::PositionIndependentAbsoluteSymbol {
                 object_index,
                 rela_section_index,
@@ -141,7 +129,6 @@ impl std::error::Error for StaticLinkError {
             Self::PieRuntime(source) => Some(source),
             Self::MissingEntrySymbol { .. }
             | Self::PositionIndependentRelocation { .. }
-            | Self::PositionIndependentTlsSection { .. }
             | Self::PositionIndependentAbsoluteSymbol { .. }
             | Self::PositionIndependentUndefinedWeakSymbol { .. }
             | Self::PositionIndependentAbsoluteEntrySymbol { .. } => None,
@@ -201,14 +188,6 @@ fn validate_position_independent_inputs(
         resolve_validated_objects(&validated_objects).map_err(StaticLinkError::Symbols)?;
 
     for input in inputs {
-        for (section_index, section) in input.object.sections.iter().enumerate() {
-            if section.flags & SHF_TLS != 0 {
-                return Err(StaticLinkError::PositionIndependentTlsSection {
-                    object_index: input.object_index,
-                    section_index: section_index as u16,
-                });
-            }
-        }
         for table in &input.object.rela_tables {
             let symbol_table = input
                 .object
