@@ -158,11 +158,12 @@ fn map_runtime_program_headers_impl(
         let segment = new_segments
             .iter()
             .find(|segment| {
-                let file_end = segment
+                segment
                     .virtual_address
                     .checked_add(segment.file_size)
-                    .unwrap_or(u64::MAX);
-                dynamic.address >= segment.virtual_address && dynamic_end <= file_end
+                    .is_some_and(|file_end| {
+                        dynamic.address >= segment.virtual_address && dynamic_end <= file_end
+                    })
             })
             .ok_or(ExecutableWriteError::MetadataRangeOutsideLoadSegments {
                 address: dynamic.address,
