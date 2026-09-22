@@ -23,16 +23,18 @@ fn temp_dir(label: &str) -> std::path::PathBuf {
 
 fn append_member(bytes: &mut Vec<u8>, name: &str, data: &[u8]) {
     assert!(name.len() <= 16);
-    let header = format!(
-        "{name:<16}{:<12}{:<6}{:<6}{:<8}{:<10}\`\n",
+    let mut header = format!(
+        "{name:<16}{:<12}{:<6}{:<6}{:<8}{:<10}",
         "0",
         "0",
         "0",
         "100644",
         data.len()
-    );
+    )
+    .into_bytes();
+    header.extend_from_slice(&[0x60, b'\n']);
     assert_eq!(header.len(), 60);
-    bytes.extend_from_slice(header.as_bytes());
+    bytes.extend_from_slice(&header);
     bytes.extend_from_slice(data);
     if data.len() % 2 != 0 {
         bytes.push(b'\n');
