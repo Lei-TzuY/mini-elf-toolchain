@@ -127,7 +127,9 @@ exported_value:
         .output()
         .unwrap();
     assert!(header.status.success());
-    assert!(String::from_utf8_lossy(&header.stdout).contains("Type:                              DYN"));
+    assert!(
+        String::from_utf8_lossy(&header.stdout).contains("Type:                              DYN")
+    );
 
     assert_eq!(program_header_count(&shared, PT_DYNAMIC), 1);
     assert_eq!(program_header_count(&shared, PT_INTERP), 0);
