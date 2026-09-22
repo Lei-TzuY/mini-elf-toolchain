@@ -97,11 +97,7 @@ fn creates_indexed_archive_recognized_by_gnu_tools() {
     );
     assert!(create.stdout.is_empty());
 
-    let listing = Command::new("ar")
-        .arg("t")
-        .arg(&archive)
-        .output()
-        .unwrap();
+    let listing = Command::new("ar").arg("t").arg(&archive).output().unwrap();
     assert!(listing.status.success());
     assert_eq!(
         listing.stdout,
@@ -112,17 +108,17 @@ fn creates_indexed_archive_recognized_by_gnu_tools() {
         .arg(&archive)
         .output()
         .unwrap();
-    let gnu = Command::new("nm")
-        .arg("-s")
-        .arg(&archive)
-        .output()
-        .unwrap();
+    let gnu = Command::new("nm").arg("-s").arg(&archive).output().unwrap();
     assert!(
         ours.status.success(),
         "{}",
         String::from_utf8_lossy(&ours.stderr)
     );
-    assert!(gnu.status.success(), "{}", String::from_utf8_lossy(&gnu.stderr));
+    assert!(
+        gnu.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu.stderr)
+    );
     let gnu_stdout = String::from_utf8_lossy(&gnu.stdout);
     let gnu_index = gnu_stdout
         .split("\n\n")
@@ -188,12 +184,16 @@ fn created_archive_lazy_links_through_toolchain() {
         .output()
         .unwrap();
     assert!(readelf.status.success());
-    assert!(String::from_utf8_lossy(&readelf.stdout).contains("Type:                              EXEC"));
+    assert!(String::from_utf8_lossy(&readelf.stdout)
+        .contains("Type:                              EXEC"));
 
     #[cfg(target_os = "linux")]
     {
         let status = Command::new(&executable).status().unwrap();
-        assert!(status.success(), "created-archive executable returned {status}");
+        assert!(
+            status.success(),
+            "created-archive executable returned {status}"
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
