@@ -386,8 +386,14 @@ fn link_static_image_artifact(
         image = inject_static_tls_program_header(image, tls, page_alignment)
             .map_err(StaticLinkError::TlsProgramHeader)?;
     }
-    let link_map = build_link_map(&relocated, &definitions, &image, entry_symbol)
-        .map_err(StaticLinkError::LinkMap)?;
+    let link_map = build_link_map(
+        &relocated,
+        &definitions,
+        &image,
+        entry_symbol,
+        user_entry_address,
+    )
+    .map_err(StaticLinkError::LinkMap)?;
 
     Ok(StaticPositionIndependentArtifact {
         output: StaticLinkOutput { image, link_map },
