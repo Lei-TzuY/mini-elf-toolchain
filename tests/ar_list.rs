@@ -97,9 +97,7 @@ fn malformed_archive_fails_without_stdout() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("truncated archive member header")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("truncated archive member header"));
 
     let _ = fs::remove_dir_all(dir);
 }
