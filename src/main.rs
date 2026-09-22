@@ -7,7 +7,8 @@ use mini_elf_toolchain::image_base::{extract_image_base_argument, ImageBaseArgum
 use mini_elf_toolchain::input_object::RelocatableObject;
 use mini_elf_toolchain::library_search::{resolve_static_library_arguments, LibrarySearchError};
 use mini_elf_toolchain::ordered_inputs::{
-    prepare_ordered_link_inputs_with_forced_undefined, OrderedLinkInput, OrderedLinkInputError,
+    prepare_ordered_link_inputs_with_forced_undefined, LinkObjectOrigin, OrderedLinkInput,
+    OrderedLinkInputError,
 };
 use mini_elf_toolchain::partial_link::{link_relocatable_objects, PartialLinkInput};
 use mini_elf_toolchain::static_link::link_static_executable_with_map;
@@ -290,19 +291,25 @@ fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliErr
     for path in paths {
         files.push(read_file(path)?);
     }
-    let inputs = files
+    let ordered_inputs = files
         .iter()
-        .map(|file| PartialLinkInput { file })
+        .map(|file| {
+            if file.starts_with(ARCHIVE_MAGIC) {
+                OrderedLinkInput::Archive(file)
+            } else {
+                OrderedLinkInput::Object(file)
+            }
+        })
         .collect::<Vec<_>>();
-    let bytes = link_relocatable_objects(&inputs).map_err(|error| {
-        match error
-            .input_index()
-            .and_then(|input_index| paths.get(input_index))
-        {
-            Some(path) => CliError::Failure(format!("{}: {error}", path.to_string_lossy())),
-            None => CliError::Failure(format!("partial link failed: {error}")),
-        }
-    })?;
+    let prepared = prepare_ordered_link_inputs_with_forced_undefined(&ordered_inputs, &[])
+        .map_err(|error| ordered_input_failure(paths, error))?;
+    let inputs = prepared
+        .objects
+        .iter()
+        .map(|object| PartialLinkInput { file: object.file })
+        .collect::<Vec<_>>();
+    let bytes = link_relocatable_objects(&inputs)
+        .map_err(|error| partial_input_failure(paths, &prepared.origins, error))?;
 
     fs::write(output, &bytes)
         .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
@@ -310,9 +317,38 @@ fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliErr
     Ok(format!(
         "partial ELF64 x86-64: output={}, objects={}, bytes={}",
         output.to_string_lossy(),
-        paths.len(),
+        prepared.objects.len(),
         bytes.len()
     ))
+}
+
+fn partial_input_failure(
+    paths: &[OsString],
+    origins: &[LinkObjectOrigin],
+    error: mini_elf_toolchain::partial_link::PartialLinkError,
+) -> CliError {
+    let Some(object_index) = error.input_index() else {
+        return CliError::Failure(format!("partial link failed: {error}"));
+    };
+    match origins.get(object_index) {
+        Some(LinkObjectOrigin::Regular { input_index }) => match paths.get(*input_index) {
+            Some(path) => CliError::Failure(format!("{}: {error}", path.to_string_lossy())),
+            None => CliError::Failure(format!("partial link input {object_index}: {error}")),
+        },
+        Some(LinkObjectOrigin::ArchiveMember {
+            input_index,
+            member_name,
+            ..
+        }) => match paths.get(*input_index) {
+            Some(path) => CliError::Failure(format!(
+                "{}({}): {error}",
+                path.to_string_lossy(),
+                String::from_utf8_lossy(member_name)
+            )),
+            None => CliError::Failure(format!("partial link input {object_index}: {error}")),
+        },
+        None => CliError::Failure(format!("partial link input {object_index}: {error}")),
+    }
 }
 
 #[derive(Clone, Copy)]
