@@ -164,12 +164,13 @@ pub fn write_indexed_archive(
         let mut tables = object.symbol_tables.iter().collect::<Vec<_>>();
         tables.sort_by_key(|table| table.section_index);
         for table in tables {
-            let named = named_symbols_from_table(member.data, &object.sections, table, member_index)
-                .map_err(|source| ArchiveWriteError::ObjectSymbols {
-                    member_index,
-                    name: member.name.to_vec(),
-                    source,
-                })?;
+            let named =
+                named_symbols_from_table(member.data, &object.sections, table, member_index)
+                    .map_err(|source| ArchiveWriteError::ObjectSymbols {
+                        member_index,
+                        name: member.name.to_vec(),
+                        source,
+                    })?;
             for candidate in named {
                 let binding = candidate.symbol.info >> 4;
                 if binding == STB_LOCAL {
