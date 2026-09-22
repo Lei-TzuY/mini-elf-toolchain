@@ -187,7 +187,7 @@ _start:
 }
 
 #[test]
-fn static_pie_rejects_absolute_relocation_before_output() {
+fn static_pie_rejects_unsupported_32bit_absolute_relocation_before_output() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
@@ -199,7 +199,7 @@ fn static_pie_rejects_absolute_relocation_before_output() {
         r#".section .data
 .globl absolute_pointer
 absolute_pointer:
-    .quad absolute_target
+    .long absolute_target
 
 .section .text
 .globl absolute_target
@@ -220,7 +220,7 @@ _start:
         .output()
         .unwrap();
     assert!(relocations.status.success());
-    assert!(String::from_utf8_lossy(&relocations.stdout).contains("R_X86_64_64"));
+    assert!(String::from_utf8_lossy(&relocations.stdout).contains("R_X86_64_32"));
 
     let output = dir.join("must-not-exist");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
@@ -234,7 +234,7 @@ _start:
     assert!(!mini.status.success());
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
-    assert!(stderr.contains("R_X86_64_64") || stderr.contains("relocation type 1"));
+    assert!(stderr.contains("R_X86_64_32") || stderr.contains("relocation type 10"));
     assert!(stderr.contains("position-independent"));
     assert!(!output.exists());
 
