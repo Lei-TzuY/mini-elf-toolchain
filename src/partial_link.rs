@@ -1178,8 +1178,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 .unwrap_or_else(|| {
                     format!(".rela.partial.{input_index}.{}", table.section_index).into_bytes()
                 });
-            let input_rela_section =
-                &input.object.sections[usize::from(table.section_index)];
+            let input_rela_section = &input.object.sections[usize::from(table.section_index)];
             let key = (
                 target.output_section_index,
                 name.clone(),
