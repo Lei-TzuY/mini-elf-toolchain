@@ -149,13 +149,12 @@ fn map_runtime_program_headers_impl(
     new_segments[last_index].memory_size = new_last_size;
 
     let dynamic_file_offset = if let Some(dynamic) = dynamic {
-        let dynamic_end = dynamic
-            .address
-            .checked_add(dynamic.size)
-            .ok_or(ExecutableWriteError::MetadataRangeOutsideLoadSegments {
+        let dynamic_end = dynamic.address.checked_add(dynamic.size).ok_or(
+            ExecutableWriteError::MetadataRangeOutsideLoadSegments {
                 address: dynamic.address,
                 size: dynamic.size,
-            })?;
+            },
+        )?;
         let segment = new_segments
             .iter()
             .find(|segment| {
