@@ -290,6 +290,7 @@ fn link_static_image_artifact(
                 StaticTlsRelocationError::Regular(source) => StaticLinkError::Relocation(source),
                 source => StaticLinkError::TlsRelocation(source),
             })?;
+    let got_entries = relocated_output.got_entries;
     let tls_layout = relocated_output.tls_layout;
     let relocated = relocated_output.sections;
 
@@ -319,6 +320,7 @@ fn link_static_image_artifact(
             inputs,
             relocated,
             &definitions,
+            &got_entries,
             user_entry_address,
             page_alignment,
         )
