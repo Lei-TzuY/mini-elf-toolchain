@@ -11,6 +11,7 @@ use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
 use crate::permission_layout::SHF_TLS;
 use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
+use crate::resolve::{SHN_UNDEF, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
 use crate::tls::{
     inject_static_tls_program_header, relocate_allocatable_sections_with_static_tls,
@@ -44,6 +45,12 @@ pub enum StaticLinkError {
         section_index: u16,
     },
     PositionIndependentAbsoluteSymbol {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        symbol_index: u32,
+    },
+    PositionIndependentUndefinedWeakSymbol {
         object_index: usize,
         rela_section_index: u16,
         relocation_index: usize,
@@ -94,6 +101,15 @@ impl fmt::Display for StaticLinkError {
                 f,
                 "object {object_index} RELA section {rela_section_index} relocation {relocation_index} references SHN_ABS symbol {symbol_index} with a PC-relative relocation; the result is not load-bias invariant"
             ),
+            Self::PositionIndependentUndefinedWeakSymbol {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                symbol_index,
+            } => write!(
+                f,
+                "object {object_index} RELA section {rela_section_index} relocation {relocation_index} references undefined weak symbol {symbol_index} with a PC-relative relocation; the zero-valued weak reference is not load-bias invariant"
+            ),
         }
     }
 }
@@ -111,7 +127,8 @@ impl std::error::Error for StaticLinkError {
             Self::MissingEntrySymbol { .. }
             | Self::PositionIndependentRelocation { .. }
             | Self::PositionIndependentTlsSection { .. }
-            | Self::PositionIndependentAbsoluteSymbol { .. } => None,
+            | Self::PositionIndependentAbsoluteSymbol { .. }
+            | Self::PositionIndependentUndefinedWeakSymbol { .. } => None,
         }
     }
 }
@@ -178,15 +195,24 @@ fn validate_position_independent_inputs(
                         relocation_type: relocation.relocation_type,
                     });
                 }
-                if is_static_pie_pc_relative_relocation_type(relocation.relocation_type)
-                    && symbol_table.symbols[relocation.symbol_index as usize].section_index == SHN_ABS
-                {
-                    return Err(StaticLinkError::PositionIndependentAbsoluteSymbol {
-                        object_index: input.object_index,
-                        rela_section_index: table.section_index,
-                        relocation_index,
-                        symbol_index: relocation.symbol_index,
-                    });
+                if is_static_pie_pc_relative_relocation_type(relocation.relocation_type) {
+                    let symbol = symbol_table.symbols[relocation.symbol_index as usize];
+                    if symbol.section_index == SHN_ABS {
+                        return Err(StaticLinkError::PositionIndependentAbsoluteSymbol {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                            symbol_index: relocation.symbol_index,
+                        });
+                    }
+                    if symbol.section_index == SHN_UNDEF && symbol.info >> 4 == STB_WEAK {
+                        return Err(StaticLinkError::PositionIndependentUndefinedWeakSymbol {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                            symbol_index: relocation.symbol_index,
+                        });
+                    }
                 }
             }
         }
