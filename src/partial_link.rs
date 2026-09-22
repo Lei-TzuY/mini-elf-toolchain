@@ -2,12 +2,12 @@ use core::fmt;
 use std::collections::BTreeMap;
 
 use crate::elf64::{
-    Elf64SectionHeader, Elf64Symbol, Elf64SymbolTable, SHT_DYNSYM, SHT_NOBITS, SHT_STRTAB,
-    SHT_SYMTAB, SHN_LORESERVE,
+    Elf64SectionHeader, Elf64Symbol, Elf64SymbolTable, SHN_LORESERVE, SHT_DYNSYM, SHT_NOBITS,
+    SHT_STRTAB, SHT_SYMTAB,
 };
 use crate::input_object::{RelocatableObject, RelocatableObjectError};
 use crate::load_segments::SHF_ALLOC;
-use crate::relocations::{Elf64Rela, SHT_RELA, ELF64_RELA_SIZE};
+use crate::relocations::{Elf64Rela, ELF64_RELA_SIZE, SHT_RELA};
 use crate::resolve::{STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_names::{symbol_name, SymbolNameError};
 
@@ -311,11 +311,12 @@ pub fn link_relocatable_objects(
         .iter()
         .enumerate()
         .map(|(input_index, input)| {
-            let object =
-                RelocatableObject::parse(input.file).map_err(|source| PartialLinkError::InvalidObject {
+            let object = RelocatableObject::parse(input.file).map_err(|source| {
+                PartialLinkError::InvalidObject {
                     input_index,
                     source,
-                })?;
+                }
+            })?;
             Ok(ParsedInput {
                 file: input.file,
                 object,
@@ -334,11 +335,10 @@ pub fn link_relocatable_objects(
             if section.flags & SHF_ALLOC == 0 {
                 continue;
             }
-            let section_index_u16 = u16::try_from(section_index).map_err(|_| {
-                PartialLinkError::TooManySections {
+            let section_index_u16 =
+                u16::try_from(section_index).map_err(|_| PartialLinkError::TooManySections {
                     count: input.object.sections.len(),
-                }
-            })?;
+                })?;
             if section.link != 0 || section.info != 0 {
                 return Err(PartialLinkError::UnsupportedAllocSectionMetadata {
                     input_index,
@@ -479,7 +479,9 @@ pub fn link_relocatable_objects(
         .checked_add(1)
         .ok_or(PartialLinkError::SizeOverflow("symbol count"))?;
     if symbol_count > u32::MAX as usize {
-        return Err(PartialLinkError::TooManySymbols { count: symbol_count });
+        return Err(PartialLinkError::TooManySymbols {
+            count: symbol_count,
+        });
     }
 
     let mut strtab = vec![0_u8];
@@ -509,8 +511,10 @@ pub fn link_relocatable_objects(
         };
         let mut symbol = pending.symbol;
         symbol.name_offset = name_offset;
-        let output_index = u32::try_from(output_symbols.len())
-            .map_err(|_| PartialLinkError::TooManySymbols { count: symbol_count })?;
+        let output_index =
+            u32::try_from(output_symbols.len()).map_err(|_| PartialLinkError::TooManySymbols {
+                count: symbol_count,
+            })?;
         symbol_maps.insert(pending.source, output_index);
         output_symbols.push(symbol);
     }
@@ -536,8 +540,9 @@ pub fn link_relocatable_objects(
         flags: 0,
         size: symtab_data.len() as u64,
         link: u32::from(strtab_index),
-        info: u32::try_from(first_nonlocal)
-            .map_err(|_| PartialLinkError::TooManySymbols { count: symbol_count })?,
+        info: u32::try_from(first_nonlocal).map_err(|_| PartialLinkError::TooManySymbols {
+            count: symbol_count,
+        })?,
         alignment: 8,
         entry_size: ELF64_SYMBOL_SIZE as u64,
         data: symtab_data,
@@ -546,7 +551,9 @@ pub fn link_relocatable_objects(
 
     for (input_index, input) in parsed.iter().enumerate() {
         let names = section_names(input_index, input)?;
-        let selected_table = static_tables[input_index].as_ref().map(|table| table.section_index);
+        let selected_table = static_tables[input_index]
+            .as_ref()
+            .map(|table| table.section_index);
 
         for table in &input.object.rela_tables {
             let target = section_maps[input_index]
@@ -754,8 +761,8 @@ fn serialize_relocations(relocations: &[Elf64Rela]) -> Result<Vec<u8>, PartialLi
     let mut bytes = Vec::with_capacity(capacity);
     for relocation in relocations {
         bytes.extend_from_slice(&relocation.offset.to_le_bytes());
-        let info = (u64::from(relocation.symbol_index) << 32)
-            | u64::from(relocation.relocation_type);
+        let info =
+            (u64::from(relocation.symbol_index) << 32) | u64::from(relocation.relocation_type);
         bytes.extend_from_slice(&info.to_le_bytes());
         bytes.extend_from_slice(&relocation.addend.to_le_bytes());
     }
@@ -827,7 +834,12 @@ fn serialize_object(
         bytes.resize(shoff_usize, 0);
     }
 
-    write_elf_header(&mut bytes[..ELF64_HEADER_SIZE], shoff, section_count, shstrtab_index);
+    write_elf_header(
+        &mut bytes[..ELF64_HEADER_SIZE],
+        shoff,
+        section_count,
+        shstrtab_index,
+    );
     bytes.extend_from_slice(&[0_u8; ELF64_SECTION_HEADER_SIZE]);
 
     if name_offsets.len() != sections.len() {
