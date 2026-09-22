@@ -100,7 +100,7 @@ _start:
 .size _start, .-_start
 "#,
     );
-    let foo = assemble(
+    let foo_member = assemble(
         dir,
         "foo",
         r#".section .text
@@ -113,7 +113,7 @@ foo:
 .size foo, .-foo
 "#,
     );
-    let baz = assemble(
+    let baz_member = assemble(
         dir,
         "baz",
         r#".section .text
@@ -140,7 +140,7 @@ bar:
 
     Fixture {
         start,
-        first: archive(dir, "libfirst.a", &[&foo, &baz]),
+        first: archive(dir, "libfirst.a", &[&foo_member, &baz_member]),
         second: archive(dir, "libsecond.a", &[&bar]),
     }
 }
