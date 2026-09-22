@@ -253,12 +253,11 @@ pub fn relocate_allocatable_sections_with_metadata(
         .common_section;
     let got_symbols = collect_static_got_symbols(inputs)?;
     let tls_got_symbols = collect_static_tls_got_symbols(inputs)?;
-    let got_symbol_count = got_symbols
-        .len()
-        .checked_add(tls_got_symbols.len())
-        .ok_or(RelocatedSectionError::GotSizeOverflow {
+    let got_symbol_count = got_symbols.len().checked_add(tls_got_symbols.len()).ok_or(
+        RelocatedSectionError::GotSizeOverflow {
             symbol_count: usize::MAX,
-        })?;
+        },
+    )?;
     let got_size = got_size(got_symbol_count)?;
 
     let mut layout_inputs = sections
@@ -503,9 +502,7 @@ fn collect_static_tls_got_symbols(
                     symbol_index: table
                         .relocations
                         .iter()
-                        .find(|relocation| {
-                            is_static_tls_gotpcrel_type(relocation.relocation_type)
-                        })
+                        .find(|relocation| is_static_tls_gotpcrel_type(relocation.relocation_type))
                         .map(|relocation| relocation.symbol_index)
                         .unwrap_or(0),
                 })?;
@@ -591,11 +588,11 @@ fn got_entry_addresses(
     )?;
     let mut entries = BTreeMap::new();
     for (local_index, name) in symbols.iter().enumerate() {
-        let entry_index = start_index
-            .checked_add(local_index)
-            .ok_or(RelocatedSectionError::GotAddressOverflow {
+        let entry_index = start_index.checked_add(local_index).ok_or(
+            RelocatedSectionError::GotAddressOverflow {
                 entry_index: usize::MAX,
-            })?;
+            },
+        )?;
         let offset = u64::try_from(entry_index)
             .ok()
             .and_then(|index| index.checked_mul(GOT_ENTRY_SIZE))
