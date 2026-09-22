@@ -561,3 +561,58 @@ weak_target:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn static_pie_rejects_absolute_entry_symbol_before_output() {
+    if !have_gnu_tools() {
+        return;
+    }
+
+    let dir = temp_dir("absolute-entry");
+    let object = assemble(
+        &dir,
+        "absolute-entry",
+        r#".globl _start
+.set _start, 0
+
+.section .text
+.globl actual_code
+.type actual_code,@function
+actual_code:
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+.size actual_code, .-actual_code
+"#,
+    );
+
+    let symbols = Command::new("readelf")
+        .args(["-sW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(symbols.status.success());
+    let symbols = String::from_utf8_lossy(&symbols.stdout);
+    assert!(
+        symbols.contains("ABS") && symbols.contains("_start"),
+        "fixture must define _start as SHN_ABS: {symbols}"
+    );
+
+    let output = dir.join("must-not-exist");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--pie")
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(stderr.contains("entry symbol"));
+    assert!(stderr.contains("SHN_ABS"));
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
