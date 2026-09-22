@@ -201,8 +201,9 @@ fn option_terminator_requires_archive_operand() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("usage: mini-elf-ar <t|x> [--] <archive>"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("usage: mini-elf-ar <t|x> [--] <archive>")
+    );
 }
 
 #[test]
