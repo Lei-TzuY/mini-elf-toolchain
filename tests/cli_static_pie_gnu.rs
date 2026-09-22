@@ -435,8 +435,7 @@ _start:
         .unwrap();
     assert!(reference_relocations.status.success());
     assert!(
-        String::from_utf8_lossy(&reference_relocations.stdout)
-            .contains("R_X86_64_PC32"),
+        String::from_utf8_lossy(&reference_relocations.stdout).contains("R_X86_64_PC32"),
         "reference fixture must carry PC32"
     );
 
@@ -448,8 +447,7 @@ _start:
     assert!(definition_symbols.status.success());
     let definition_symbols = String::from_utf8_lossy(&definition_symbols.stdout);
     assert!(
-        definition_symbols.contains("ABS")
-            && definition_symbols.contains("cross_absolute_target"),
+        definition_symbols.contains("ABS") && definition_symbols.contains("cross_absolute_target"),
         "definition fixture must export SHN_ABS: {definition_symbols}"
     );
 
