@@ -104,8 +104,7 @@ _start:
     assert!(input_relocations.status.success());
     let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
     assert!(
-        input_relocations.contains("R_X86_64_64")
-            && input_relocations.contains("target_value"),
+        input_relocations.contains("R_X86_64_64") && input_relocations.contains("target_value"),
         "fixture must contain an absolute 64-bit relocation: {input_relocations}"
     );
 
