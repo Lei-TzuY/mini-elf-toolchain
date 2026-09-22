@@ -54,6 +54,7 @@ impl RelocatedSectionImage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelocatedSectionsOutput {
     pub sections: Vec<RelocatedSectionImage>,
+    pub got_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_got_entries: BTreeMap<Vec<u8>, u64>,
 }
 
@@ -287,6 +288,7 @@ pub fn relocate_allocatable_sections_with_metadata(
         .map_err(RelocatedSectionError::Layout)?;
     let got_entries = got_entry_addresses(&layout, &got_symbols, 0)?;
     let tls_got_entries = got_entry_addresses(&layout, &tls_got_symbols, got_symbols.len())?;
+    let got_entries_output = got_entries.clone();
     let tls_got_entries_output = tls_got_entries.clone();
 
     let context = build_link_context_with_got_entry_maps(
@@ -392,6 +394,7 @@ pub fn relocate_allocatable_sections_with_metadata(
 
     Ok(RelocatedSectionsOutput {
         sections: relocated,
+        got_entries: got_entries_output,
         tls_got_entries: tls_got_entries_output,
     })
 }

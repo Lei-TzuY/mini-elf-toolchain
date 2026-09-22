@@ -90,6 +90,21 @@ pub enum PieRuntimeError {
         symbol_index: u32,
         name: Vec<u8>,
     },
+    MissingGotDefinition {
+        name: Vec<u8>,
+    },
+    GotSymbolAddress {
+        name: Vec<u8>,
+        source: FinalSymbolAddressError,
+    },
+    MissingGotTarget {
+        name: Vec<u8>,
+        entry_address: u64,
+    },
+    GotRelativeAddendOutOfRange {
+        name: Vec<u8>,
+        value: i128,
+    },
     SymbolAddress {
         object_index: usize,
         rela_section_index: u16,
@@ -184,6 +199,29 @@ impl fmt::Display for PieRuntimeError {
                 "object {object_index} RELA section {rela_section_index} relocation {relocation_index} symbol {symbol_index} ({:?}) has no resolved definition for PIE relative relocation",
                 String::from_utf8_lossy(name)
             ),
+            Self::MissingGotDefinition { name } => write!(
+                f,
+                "PIE GOT entry for {:?} has no resolved global definition",
+                String::from_utf8_lossy(name)
+            ),
+            Self::GotSymbolAddress { name, source } => write!(
+                f,
+                "PIE GOT entry for {:?} has no usable image-relative symbol address: {source}",
+                String::from_utf8_lossy(name)
+            ),
+            Self::MissingGotTarget {
+                name,
+                entry_address,
+            } => write!(
+                f,
+                "PIE GOT entry for {:?} at {entry_address:#x} is not backed by writable file data",
+                String::from_utf8_lossy(name)
+            ),
+            Self::GotRelativeAddendOutOfRange { name, value } => write!(
+                f,
+                "PIE GOT entry for {:?} has relative addend {value} outside signed ELF64 Rela range",
+                String::from_utf8_lossy(name)
+            ),
             Self::SymbolAddress {
                 object_index,
                 rela_section_index,
@@ -230,6 +268,7 @@ impl std::error::Error for PieRuntimeError {
         match self {
             Self::Symbols(source) => Some(source),
             Self::SymbolAddress { source, .. } => Some(source),
+            Self::GotSymbolAddress { source, .. } => Some(source),
             _ => None,
         }
     }
@@ -239,6 +278,7 @@ pub fn add_runtime_relative_relocations(
     inputs: &[LinkerInputObject<'_>],
     mut sections: Vec<RelocatedSectionImage>,
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
+    got_entries: &BTreeMap<Vec<u8>, u64>,
     user_entry_address: u64,
     page_alignment: u64,
 ) -> Result<PieRuntimeOutput, PieRuntimeError> {
@@ -248,7 +288,7 @@ pub fn add_runtime_relative_relocations(
         });
     }
 
-    let relocations = collect_relative_relocations(inputs, &sections, definitions)?;
+    let relocations = collect_relative_relocations(inputs, &sections, definitions, got_entries)?;
     if relocations.is_empty() {
         return Ok(PieRuntimeOutput {
             sections,
@@ -322,6 +362,7 @@ fn collect_relative_relocations(
     inputs: &[LinkerInputObject<'_>],
     sections: &[RelocatedSectionImage],
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
+    got_entries: &BTreeMap<Vec<u8>, u64>,
 ) -> Result<Vec<RelativeRelocation>, PieRuntimeError> {
     let layout = sections
         .iter()
@@ -491,6 +532,49 @@ fn collect_relative_relocations(
                 runtime.push(RelativeRelocation { offset, addend });
             }
         }
+    }
+
+    for (name, entry_address) in got_entries {
+        let definition = definitions
+            .get(name)
+            .ok_or_else(|| PieRuntimeError::MissingGotDefinition { name: name.clone() })?;
+        if definition.symbol.section_index == SHN_ABS {
+            continue;
+        }
+
+        let address = final_symbol_address(definition, &layout).map_err(|source| {
+            PieRuntimeError::GotSymbolAddress {
+                name: name.clone(),
+                source,
+            }
+        })?;
+        let target_is_writable_file_data = sections.iter().any(|section| {
+            if section.flags & SHF_WRITE == 0 {
+                return false;
+            }
+            let Some(offset) = entry_address.checked_sub(section.address) else {
+                return false;
+            };
+            offset
+                .checked_add(8)
+                .is_some_and(|end| end <= section.bytes.len() as u64)
+        });
+        if !target_is_writable_file_data {
+            return Err(PieRuntimeError::MissingGotTarget {
+                name: name.clone(),
+                entry_address: *entry_address,
+            });
+        }
+        let value = i128::from(address);
+        let addend =
+            i64::try_from(value).map_err(|_| PieRuntimeError::GotRelativeAddendOutOfRange {
+                name: name.clone(),
+                value,
+            })?;
+        runtime.push(RelativeRelocation {
+            offset: *entry_address,
+            addend,
+        });
     }
 
     Ok(runtime)

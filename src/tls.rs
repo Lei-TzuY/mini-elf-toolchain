@@ -602,6 +602,7 @@ impl std::error::Error for StaticTlsRelocationError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StaticTlsRelocationOutput {
     pub sections: Vec<RelocatedSectionImage>,
+    pub got_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_layout: Option<StaticTlsLayout>,
 }
 
@@ -633,6 +634,7 @@ pub fn relocate_allocatable_sections_with_static_tls(
         page_alignment,
     )
     .map_err(StaticTlsRelocationError::Regular)?;
+    let got_entries = relocated_output.got_entries;
     let tls_got_entries = relocated_output.tls_got_entries;
     let mut relocated = relocated_output.sections;
     let layout = relocated
@@ -667,6 +669,7 @@ pub fn relocate_allocatable_sections_with_static_tls(
     if !has_tpoff32 && !has_gottpoff {
         return Ok(StaticTlsRelocationOutput {
             sections: relocated,
+            got_entries,
             tls_layout,
         });
     }
@@ -736,6 +739,7 @@ pub fn relocate_allocatable_sections_with_static_tls(
 
     Ok(StaticTlsRelocationOutput {
         sections: relocated,
+        got_entries,
         tls_layout: Some(tls),
     })
 }

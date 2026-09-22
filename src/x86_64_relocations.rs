@@ -36,6 +36,7 @@ pub fn is_static_pie_pc_relative_relocation_type(relocation_type: u32) -> bool {
 
 pub fn is_static_pie_relocation_type(relocation_type: u32) -> bool {
     is_static_pie_pc_relative_relocation_type(relocation_type)
+        || is_static_gotpcrel_type(relocation_type)
         || matches!(
             relocation_type,
             R_X86_64_64 | R_X86_64_SIZE32 | R_X86_64_SIZE64
