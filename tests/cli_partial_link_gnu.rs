@@ -557,7 +557,11 @@ helper:
         .get("helper")
         .copied()
         .unwrap();
-    assert_eq!(helper_value % 16, 0, "helper contribution lost 16-byte alignment");
+    assert_eq!(
+        helper_value % 16,
+        0,
+        "helper contribution lost 16-byte alignment"
+    );
 
     let mini_exe = dir.join("mini-coalesced");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
