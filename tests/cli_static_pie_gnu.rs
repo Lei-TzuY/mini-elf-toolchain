@@ -396,3 +396,170 @@ _start:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn static_pie_rejects_cross_object_absolute_definition() {
+    if !have_gnu_tools() {
+        return;
+    }
+
+    let dir = temp_dir("cross-absolute");
+    let reference = assemble(
+        &dir,
+        "cross-absolute-ref",
+        r#".extern cross_absolute_target
+
+.section .text
+.globl _start
+.type _start,@function
+_start:
+    lea cross_absolute_target(%rip), %rax
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+.size _start, .-_start
+"#,
+    );
+    let definition = assemble(
+        &dir,
+        "cross-absolute-def",
+        r#".globl cross_absolute_target
+.set cross_absolute_target, 0x4321
+"#,
+    );
+
+    let reference_relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&reference)
+        .output()
+        .unwrap();
+    assert!(reference_relocations.status.success());
+    assert!(
+        String::from_utf8_lossy(&reference_relocations.stdout)
+            .contains("R_X86_64_PC32"),
+        "reference fixture must carry PC32"
+    );
+
+    let definition_symbols = Command::new("readelf")
+        .args(["-sW"])
+        .arg(&definition)
+        .output()
+        .unwrap();
+    assert!(definition_symbols.status.success());
+    let definition_symbols = String::from_utf8_lossy(&definition_symbols.stdout);
+    assert!(
+        definition_symbols.contains("ABS")
+            && definition_symbols.contains("cross_absolute_target"),
+        "definition fixture must export SHN_ABS: {definition_symbols}"
+    );
+
+    let output = dir.join("must-not-exist");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--pie")
+        .arg(&reference)
+        .arg(&definition)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(stderr.contains("SHN_ABS"));
+    assert!(stderr.contains("load-bias invariant"));
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn static_pie_allows_weak_undefined_reference_resolved_by_regular_definition() {
+    if !have_gnu_tools() {
+        return;
+    }
+
+    let dir = temp_dir("weak-resolved");
+    let reference = assemble(
+        &dir,
+        "weak-resolved-ref",
+        r#".weak weak_target
+
+.section .text
+.globl _start
+.type _start,@function
+_start:
+    lea weak_target(%rip), %rbx
+    mov (%rbx), %rcx
+    movabs $0x8877665544332211, %rdx
+    cmp %rdx, %rcx
+    jne .Lfail
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+.Lfail:
+    mov $60, %rax
+    mov $1, %rdi
+    syscall
+.size _start, .-_start
+"#,
+    );
+    let definition = assemble(
+        &dir,
+        "weak-resolved-def",
+        r#".section .rodata
+.align 8
+.globl weak_target
+.type weak_target,@object
+weak_target:
+    .quad 0x8877665544332211
+.size weak_target, .-weak_target
+"#,
+    );
+
+    let symbols = Command::new("readelf")
+        .args(["-sW"])
+        .arg(&reference)
+        .output()
+        .unwrap();
+    assert!(symbols.status.success());
+    let symbols = String::from_utf8_lossy(&symbols.stdout);
+    assert!(
+        symbols.contains("WEAK") && symbols.contains("UND") && symbols.contains("weak_target"),
+        "reference fixture must contain a weak undefined symbol: {symbols}"
+    );
+
+    let relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&reference)
+        .output()
+        .unwrap();
+    assert!(relocations.status.success());
+    assert!(
+        String::from_utf8_lossy(&relocations.stdout).contains("R_X86_64_PC32"),
+        "reference fixture must carry PC32"
+    );
+
+    let output = dir.join("weak-resolved-pie");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--pie")
+        .arg(&reference)
+        .arg(&definition)
+        .output()
+        .unwrap();
+    assert!(
+        mini.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let status = Command::new(&output).status().unwrap();
+        assert!(status.success(), "{} returned {status}", output.display());
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
