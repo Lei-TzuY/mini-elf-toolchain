@@ -1,4 +1,5 @@
 use core::fmt;
+use std::collections::BTreeMap;
 
 use crate::elf64::SHT_NOBITS;
 use crate::executable_writer::{ExecutableImage, ExecutableLoadSegment, LoadSegmentPermissions};
@@ -8,11 +9,12 @@ use crate::linker_input::{LinkerInputError, LinkerInputObject, LinkerInputSectio
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
 use crate::permission_layout::SHF_TLS;
 use crate::relocated_sections::{
-    relocate_allocatable_sections, RelocatedSectionError, RelocatedSectionImage,
+    relocate_allocatable_sections_with_metadata, RelocatedSectionError, RelocatedSectionImage,
 };
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{SymbolDefinition, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
+use crate::x86_64_relocations::R_X86_64_GOTTPOFF;
 
 pub const R_X86_64_TPOFF32: u32 = 23;
 const STT_TLS: u8 = 6;
@@ -431,12 +433,107 @@ pub fn apply_tpoff32_relocations(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TlsGotApplyError {
+    MissingGlobalAddress { name: Vec<u8> },
+    SymbolOutsideTlsImage { name: Vec<u8>, address: u64 },
+    OffsetOutOfRange { name: Vec<u8>, value: i128 },
+    MissingGotEntryTarget { name: Vec<u8>, entry_address: u64 },
+}
+
+impl fmt::Display for TlsGotApplyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingGlobalAddress { name } => write!(
+                f,
+                "TLS GOT symbol {:?} has no resolved global address",
+                String::from_utf8_lossy(name)
+            ),
+            Self::SymbolOutsideTlsImage { name, address } => write!(
+                f,
+                "TLS GOT symbol {:?} resolves to {address:#x}, outside the static TLS image",
+                String::from_utf8_lossy(name)
+            ),
+            Self::OffsetOutOfRange { name, value } => write!(
+                f,
+                "TLS GOT symbol {:?} thread-pointer offset {value} is outside signed 64-bit range",
+                String::from_utf8_lossy(name)
+            ),
+            Self::MissingGotEntryTarget {
+                name,
+                entry_address,
+            } => write!(
+                f,
+                "TLS GOT entry for {:?} at {entry_address:#x} is not backed by writable output bytes",
+                String::from_utf8_lossy(name)
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TlsGotApplyError {}
+
+fn apply_tls_got_offsets(
+    sections: &mut [RelocatedSectionImage],
+    tls_got_entries: &BTreeMap<Vec<u8>, u64>,
+    context: &LinkContext<'_>,
+    tls: StaticTlsLayout,
+) -> Result<(), TlsGotApplyError> {
+    let tls_end = tls.base_address + tls.memory_size;
+
+    for (name, entry_address) in tls_got_entries {
+        let symbol_address = context
+            .global_addresses()
+            .get(name)
+            .copied()
+            .ok_or_else(|| TlsGotApplyError::MissingGlobalAddress { name: name.clone() })?;
+        if symbol_address < tls.base_address || symbol_address >= tls_end {
+            return Err(TlsGotApplyError::SymbolOutsideTlsImage {
+                name: name.clone(),
+                address: symbol_address,
+            });
+        }
+
+        let value =
+            i128::from(symbol_address) - i128::from(tls.base_address) - i128::from(tls.block_size);
+        let value = i64::try_from(value).map_err(|_| TlsGotApplyError::OffsetOutOfRange {
+            name: name.clone(),
+            value,
+        })?;
+
+        let mut written = false;
+        for section in sections.iter_mut() {
+            let Some(offset) = entry_address.checked_sub(section.address) else {
+                continue;
+            };
+            let Some(end) = offset.checked_add(8) else {
+                continue;
+            };
+            if end > section.bytes.len() as u64 {
+                continue;
+            }
+            section.bytes[offset as usize..end as usize].copy_from_slice(&value.to_le_bytes());
+            written = true;
+            break;
+        }
+        if !written {
+            return Err(TlsGotApplyError::MissingGotEntryTarget {
+                name: name.clone(),
+                entry_address: *entry_address,
+            });
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum StaticTlsRelocationError {
     Regular(RelocatedSectionError),
     Input(LinkerInputError),
     Layout(StaticTlsLayoutError),
     Context(LinkContextBuildError),
+    TlsGot(TlsGotApplyError),
     MissingTlsLayout {
         object_index: usize,
         rela_section_index: u16,
@@ -460,12 +557,13 @@ impl fmt::Display for StaticTlsRelocationError {
             Self::Input(source) => write!(f, "cannot read TLS input sections: {source}"),
             Self::Layout(source) => write!(f, "cannot compute static TLS layout: {source}"),
             Self::Context(source) => write!(f, "cannot build TLS symbol context: {source}"),
+            Self::TlsGot(source) => write!(f, "cannot materialize TLS GOT entries: {source}"),
             Self::MissingTlsLayout {
                 object_index,
                 rela_section_index,
             } => write!(
                 f,
-                "object {object_index} RELA section {rela_section_index} contains TPOFF32 but no static TLS image exists"
+                "object {object_index} RELA section {rela_section_index} contains a static TLS relocation but no static TLS image exists"
             ),
             Self::MissingRelocatedTarget {
                 object_index,
@@ -494,6 +592,7 @@ impl std::error::Error for StaticTlsRelocationError {
             Self::Input(source) => Some(source),
             Self::Layout(source) => Some(source),
             Self::Context(source) => Some(source),
+            Self::TlsGot(source) => Some(source),
             Self::Tpoff32 { source, .. } => Some(source),
             Self::MissingTlsLayout { .. } | Self::MissingRelocatedTarget { .. } => None,
         }
@@ -528,9 +627,14 @@ pub fn relocate_allocatable_sections_with_static_tls(
         })
         .collect::<Vec<_>>();
 
-    let mut relocated =
-        relocate_allocatable_sections(&stripped_inputs, start_address, page_alignment)
-            .map_err(StaticTlsRelocationError::Regular)?;
+    let relocated_output = relocate_allocatable_sections_with_metadata(
+        &stripped_inputs,
+        start_address,
+        page_alignment,
+    )
+    .map_err(StaticTlsRelocationError::Regular)?;
+    let tls_got_entries = relocated_output.tls_got_entries;
+    let mut relocated = relocated_output.sections;
     let layout = relocated
         .iter()
         .map(|section| LaidOutSection {
@@ -559,7 +663,8 @@ pub fn relocate_allocatable_sections_with_static_tls(
                 .any(|relocation| relocation.relocation_type == R_X86_64_TPOFF32)
         })
     });
-    if !has_tpoff32 {
+    let has_gottpoff = !tls_got_entries.is_empty();
+    if !has_tpoff32 && !has_gottpoff {
         return Ok(StaticTlsRelocationOutput {
             sections: relocated,
             tls_layout,
@@ -575,10 +680,10 @@ pub fn relocate_allocatable_sections_with_static_tls(
                     .rela_tables
                     .iter()
                     .filter(|table| {
-                        table
-                            .relocations
-                            .iter()
-                            .any(|relocation| relocation.relocation_type == R_X86_64_TPOFF32)
+                        table.relocations.iter().any(|relocation| {
+                            relocation.relocation_type == R_X86_64_TPOFF32
+                                || relocation.relocation_type == R_X86_64_GOTTPOFF
+                        })
                     })
                     .map(move |table| (input.object_index, table.section_index))
             })
@@ -595,6 +700,9 @@ pub fn relocate_allocatable_sections_with_static_tls(
         .collect::<Vec<_>>();
     let context = build_link_context(&validated_objects, &layout)
         .map_err(StaticTlsRelocationError::Context)?;
+
+    apply_tls_got_offsets(&mut relocated, &tls_got_entries, &context, tls)
+        .map_err(StaticTlsRelocationError::TlsGot)?;
 
     for input in inputs {
         for table in &input.object.rela_tables {

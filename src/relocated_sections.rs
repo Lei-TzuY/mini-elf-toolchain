@@ -5,7 +5,7 @@ use crate::elf64::SHT_NOBITS;
 use crate::executable_pipeline::ExecutableSectionInput;
 use crate::layout::LaidOutSection;
 use crate::link_context::{
-    build_link_context_with_got_entries, LinkContextBuildError, LinkContextRelocationError,
+    build_link_context_with_got_entry_maps, LinkContextBuildError, LinkContextRelocationError,
 };
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
 use crate::linker_input::{LinkerInputError, LinkerInputObject};
@@ -16,13 +16,14 @@ use crate::permission_layout::{
 };
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, STB_GLOBAL, STB_WEAK};
-use crate::x86_64_relocations::is_static_got_entry_type;
+use crate::x86_64_relocations::{is_static_got_entry_type, is_static_tls_gotpcrel_type};
 
 const SHT_PROGBITS: u32 = 1;
 const GOT_OBJECT_INDEX: usize = usize::MAX - 1;
 const GOT_SECTION_INDEX: u16 = 1;
 const GOT_ENTRY_SIZE: u64 = 8;
 const GOT_ALIGNMENT: u64 = 8;
+const STT_TLS: u8 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelocatedSectionImage {
@@ -50,6 +51,12 @@ impl RelocatedSectionImage {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelocatedSectionsOutput {
+    pub sections: Vec<RelocatedSectionImage>,
+    pub tls_got_entries: BTreeMap<Vec<u8>, u64>,
+}
+
 #[derive(Debug)]
 pub enum RelocatedSectionError {
     NonCanonicalObjectIndex {
@@ -74,6 +81,12 @@ pub enum RelocatedSectionError {
         rela_section_index: u16,
         symbol_index: u32,
         binding: u8,
+    },
+    NonTlsGotSymbol {
+        object_index: usize,
+        rela_section_index: u16,
+        symbol_index: u32,
+        symbol_type: u8,
     },
     GotSizeOverflow {
         symbol_count: usize,
@@ -135,6 +148,15 @@ impl fmt::Display for RelocatedSectionError {
                 f,
                 "static GOT relocation in object {object_index} RELA section {rela_section_index} symbol {symbol_index} uses unsupported binding {binding}; bounded static GOT entries require global/weak symbols"
             ),
+            Self::NonTlsGotSymbol {
+                object_index,
+                rela_section_index,
+                symbol_index,
+                symbol_type,
+            } => write!(
+                f,
+                "TLS GOT relocation in object {object_index} RELA section {rela_section_index} symbol {symbol_index} has ELF symbol type {symbol_type}, expected STT_TLS"
+            ),
             Self::GotSizeOverflow { symbol_count } => write!(
                 f,
                 "synthetic GOT size overflows u64 for {symbol_count} unique symbols"
@@ -181,6 +203,7 @@ impl std::error::Error for RelocatedSectionError {
             | Self::MissingLayout { .. }
             | Self::MissingGotSymbolMetadata { .. }
             | Self::UnsupportedGotBinding { .. }
+            | Self::NonTlsGotSymbol { .. }
             | Self::GotSizeOverflow { .. }
             | Self::GotAddressOverflow { .. }
             | Self::MissingGotSymbolAddress { .. }
@@ -194,6 +217,15 @@ pub fn relocate_allocatable_sections(
     start_address: u64,
     page_alignment: u64,
 ) -> Result<Vec<RelocatedSectionImage>, RelocatedSectionError> {
+    relocate_allocatable_sections_with_metadata(inputs, start_address, page_alignment)
+        .map(|output| output.sections)
+}
+
+pub fn relocate_allocatable_sections_with_metadata(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     for (position, input) in inputs.iter().enumerate() {
         if input.object_index != position {
             return Err(RelocatedSectionError::NonCanonicalObjectIndex {
@@ -220,7 +252,13 @@ pub fn relocate_allocatable_sections(
         .map_err(RelocatedSectionError::Symbols)?
         .common_section;
     let got_symbols = collect_static_got_symbols(inputs)?;
-    let got_size = got_size(got_symbols.len())?;
+    let tls_got_symbols = collect_static_tls_got_symbols(inputs)?;
+    let got_symbol_count = got_symbols.len().checked_add(tls_got_symbols.len()).ok_or(
+        RelocatedSectionError::GotSizeOverflow {
+            symbol_count: usize::MAX,
+        },
+    )?;
+    let got_size = got_size(got_symbol_count)?;
 
     let mut layout_inputs = sections
         .iter()
@@ -247,10 +285,17 @@ pub fn relocate_allocatable_sections(
 
     let layout = layout_sections_by_permissions(start_address, page_alignment, layout_inputs)
         .map_err(RelocatedSectionError::Layout)?;
-    let got_entries = got_entry_addresses(&layout, &got_symbols)?;
+    let got_entries = got_entry_addresses(&layout, &got_symbols, 0)?;
+    let tls_got_entries = got_entry_addresses(&layout, &tls_got_symbols, got_symbols.len())?;
+    let tls_got_entries_output = tls_got_entries.clone();
 
-    let context = build_link_context_with_got_entries(&validated_objects, &layout, got_entries)
-        .map_err(RelocatedSectionError::LinkContext)?;
+    let context = build_link_context_with_got_entry_maps(
+        &validated_objects,
+        &layout,
+        got_entries,
+        tls_got_entries,
+    )
+    .map_err(RelocatedSectionError::LinkContext)?;
 
     let mut relocated = sections
         .into_iter()
@@ -330,6 +375,9 @@ pub fn relocate_allocatable_sections(
                 })?;
             bytes.extend_from_slice(&address.to_le_bytes());
         }
+        for _ in &tls_got_symbols {
+            bytes.extend_from_slice(&0_u64.to_le_bytes());
+        }
         relocated.push(RelocatedSectionImage {
             object_index: GOT_OBJECT_INDEX,
             section_index: GOT_SECTION_INDEX,
@@ -342,7 +390,10 @@ pub fn relocate_allocatable_sections(
         });
     }
 
-    Ok(relocated)
+    Ok(RelocatedSectionsOutput {
+        sections: relocated,
+        tls_got_entries: tls_got_entries_output,
+    })
 }
 
 fn collect_static_got_symbols(
@@ -425,6 +476,95 @@ fn collect_static_got_symbols(
     Ok(names.into_iter().collect())
 }
 
+fn collect_static_tls_got_symbols(
+    inputs: &[LinkerInputObject<'_>],
+) -> Result<Vec<Vec<u8>>, RelocatedSectionError> {
+    let mut names = BTreeSet::new();
+
+    for input in inputs {
+        for table in &input.object.rela_tables {
+            if !table
+                .relocations
+                .iter()
+                .any(|relocation| is_static_tls_gotpcrel_type(relocation.relocation_type))
+            {
+                continue;
+            }
+
+            let symbol_table = input
+                .object
+                .symbol_tables
+                .iter()
+                .find(|candidate| candidate.section_index == table.symbol_table_index)
+                .ok_or(RelocatedSectionError::MissingGotSymbolMetadata {
+                    object_index: input.object_index,
+                    rela_section_index: table.section_index,
+                    symbol_index: table
+                        .relocations
+                        .iter()
+                        .find(|relocation| is_static_tls_gotpcrel_type(relocation.relocation_type))
+                        .map(|relocation| relocation.symbol_index)
+                        .unwrap_or(0),
+                })?;
+            let symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                symbol_table,
+                input.object_index,
+            )
+            .map_err(|source| {
+                RelocatedSectionError::Symbols(LinkSymbolError::ObjectSymbols {
+                    object_index: input.object_index,
+                    source,
+                })
+            })?;
+
+            for relocation in table
+                .relocations
+                .iter()
+                .filter(|relocation| is_static_tls_gotpcrel_type(relocation.relocation_type))
+            {
+                let symbol = symbols
+                    .iter()
+                    .find(|symbol| symbol.symbol_index == relocation.symbol_index as usize)
+                    .ok_or(RelocatedSectionError::MissingGotSymbolMetadata {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                    })?;
+                let binding = symbol.symbol.info >> 4;
+                if binding != STB_GLOBAL && binding != STB_WEAK {
+                    return Err(RelocatedSectionError::UnsupportedGotBinding {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                        binding,
+                    });
+                }
+                let symbol_type = symbol.symbol.info & 0x0f;
+                if symbol_type != STT_TLS {
+                    return Err(RelocatedSectionError::NonTlsGotSymbol {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                        symbol_type,
+                    });
+                }
+                if symbol.name.is_empty() {
+                    return Err(RelocatedSectionError::MissingGotSymbolMetadata {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                    });
+                }
+                names.insert(symbol.name.to_vec());
+            }
+        }
+    }
+
+    Ok(names.into_iter().collect())
+}
+
 fn got_size(symbol_count: usize) -> Result<u64, RelocatedSectionError> {
     u64::try_from(symbol_count)
         .ok()
@@ -435,6 +575,7 @@ fn got_size(symbol_count: usize) -> Result<u64, RelocatedSectionError> {
 fn got_entry_addresses(
     layout: &[LaidOutSection],
     symbols: &[Vec<u8>],
+    start_index: usize,
 ) -> Result<BTreeMap<Vec<u8>, u64>, RelocatedSectionError> {
     if symbols.is_empty() {
         return Ok(BTreeMap::new());
@@ -446,7 +587,12 @@ fn got_entry_addresses(
         },
     )?;
     let mut entries = BTreeMap::new();
-    for (entry_index, name) in symbols.iter().enumerate() {
+    for (local_index, name) in symbols.iter().enumerate() {
+        let entry_index = start_index.checked_add(local_index).ok_or(
+            RelocatedSectionError::GotAddressOverflow {
+                entry_index: usize::MAX,
+            },
+        )?;
         let offset = u64::try_from(entry_index)
             .ok()
             .and_then(|index| index.checked_mul(GOT_ENTRY_SIZE))

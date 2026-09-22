@@ -18,6 +18,7 @@ pub struct LinkContext<'a> {
     definitions: BTreeMap<Vec<u8>, SymbolDefinition>,
     global_addresses: BTreeMap<Vec<u8>, u64>,
     got_entries: BTreeMap<Vec<u8>, u64>,
+    tls_got_entries: BTreeMap<Vec<u8>, u64>,
     layout: Vec<LaidOutSection>,
 }
 
@@ -96,13 +97,22 @@ pub fn build_link_context<'a>(
     objects: &[ValidatedObject<'a>],
     layout: &[LaidOutSection],
 ) -> Result<LinkContext<'a>, LinkContextBuildError> {
-    build_link_context_with_got_entries(objects, layout, BTreeMap::new())
+    build_link_context_with_got_entry_maps(objects, layout, BTreeMap::new(), BTreeMap::new())
 }
 
 pub fn build_link_context_with_got_entries<'a>(
     objects: &[ValidatedObject<'a>],
     layout: &[LaidOutSection],
     got_entries: BTreeMap<Vec<u8>, u64>,
+) -> Result<LinkContext<'a>, LinkContextBuildError> {
+    build_link_context_with_got_entry_maps(objects, layout, got_entries, BTreeMap::new())
+}
+
+pub fn build_link_context_with_got_entry_maps<'a>(
+    objects: &[ValidatedObject<'a>],
+    layout: &[LaidOutSection],
+    got_entries: BTreeMap<Vec<u8>, u64>,
+    tls_got_entries: BTreeMap<Vec<u8>, u64>,
 ) -> Result<LinkContext<'a>, LinkContextBuildError> {
     let mut symbols_by_object = Vec::with_capacity(objects.len());
 
@@ -133,6 +143,7 @@ pub fn build_link_context_with_got_entries<'a>(
         definitions,
         global_addresses,
         got_entries,
+        tls_got_entries,
         layout: layout.to_vec(),
     })
 }
@@ -148,6 +159,10 @@ impl LinkContext<'_> {
 
     pub fn got_entries(&self) -> &BTreeMap<Vec<u8>, u64> {
         &self.got_entries
+    }
+
+    pub fn tls_got_entries(&self) -> &BTreeMap<Vec<u8>, u64> {
+        &self.tls_got_entries
     }
 
     pub fn layout(&self) -> &[LaidOutSection] {
@@ -178,6 +193,7 @@ impl LinkContext<'_> {
                 addresses: &self.global_addresses,
                 definitions: &self.definitions,
                 got_entries: &self.got_entries,
+                tls_got_entries: &self.tls_got_entries,
             },
             &self.layout,
         )
