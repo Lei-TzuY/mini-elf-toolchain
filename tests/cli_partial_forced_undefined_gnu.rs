@@ -133,14 +133,16 @@ unused_symbol:
 .size unused_symbol, .-unused_symbol
 "#,
     );
-    let library = archive(&dir, &[&hook, &leaf, &unused]);
+    let _library = archive(&dir, &[&hook, &leaf, &unused]);
 
     let ordinary = dir.join("ordinary.o");
     let ordinary_output = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["partial", "-o"])
         .arg(&ordinary)
         .arg(&start)
-        .arg(&library)
+        .arg("-L")
+        .arg(&dir)
+        .arg("-lhooks")
         .output()
         .unwrap();
     assert!(
@@ -158,7 +160,9 @@ unused_symbol:
         .arg(&ours)
         .args(["-u", "hook"])
         .arg(&start)
-        .arg(&library)
+        .arg("-L")
+        .arg(&dir)
+        .arg("-lhooks")
         .output()
         .unwrap();
     assert!(
@@ -173,7 +177,9 @@ unused_symbol:
         .args(["-r", "-u", "hook", "-o"])
         .arg(&gnu)
         .arg(&start)
-        .arg(&library)
+        .arg("-L")
+        .arg(&dir)
+        .arg("-lhooks")
         .output()
         .unwrap();
     assert!(
@@ -304,6 +310,64 @@ fn empty_forced_root_is_rejected_before_input_io() {
     assert!(String::from_utf8_lossy(&result.stderr)
         .contains("forced undefined symbol cannot be empty"));
     assert!(!output_path.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn forced_root_promotes_same_name_weak_undefined_like_gnu_ld_r() {
+    if !have_gnu_tools() {
+        return;
+    }
+
+    let dir = temp_dir("weak-promotion");
+    let object = assemble(
+        &dir,
+        "weak",
+        r#".section .text
+.globl _start
+.weak optional_hook
+.type _start,@function
+_start:
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+    .quad optional_hook
+.size _start, .-_start
+"#,
+    );
+    let ours = dir.join("ours.o");
+    let gnu = dir.join("gnu.o");
+
+    let ours_output = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours)
+        .arg("-uoptional_hook")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        ours_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours_output.stderr)
+    );
+
+    let gnu_output = Command::new("ld")
+        .args(["-r", "-uoptional_hook", "-o"])
+        .arg(&gnu)
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_output.stderr)
+    );
+
+    assert_eq!(globals(&ours), globals(&gnu));
+    let records = globals(&ours);
+    assert!(records.iter().any(|line| line == "U optional_hook"));
+    assert!(!records.iter().any(|line| line.ends_with(" w optional_hook")));
 
     let _ = fs::remove_dir_all(dir);
 }
