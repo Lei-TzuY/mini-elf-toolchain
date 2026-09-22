@@ -249,6 +249,34 @@ impl std::error::Error for PartialLinkError {
     }
 }
 
+impl PartialLinkError {
+    pub fn input_index(&self) -> Option<usize> {
+        match self {
+            Self::InvalidObject { input_index, .. }
+            | Self::MissingSectionNameTable { input_index }
+            | Self::SectionNameTableNotStringTable { input_index, .. }
+            | Self::SectionNameTableRangeOverflow { input_index }
+            | Self::SectionNameTableOutOfBounds { input_index, .. }
+            | Self::InvalidSectionNameOffset { input_index, .. }
+            | Self::UnterminatedSectionName { input_index, .. }
+            | Self::UnsupportedAllocSectionMetadata { input_index, .. }
+            | Self::TooManyStaticSymbolTables { input_index, .. }
+            | Self::UnsupportedDynamicSymbolTable { input_index, .. }
+            | Self::InvalidSymbolName { input_index, .. }
+            | Self::UnsupportedSymbolBinding { input_index, .. }
+            | Self::UnsupportedSymbolSection { input_index, .. }
+            | Self::UnsupportedRelocationTarget { input_index, .. }
+            | Self::UnsupportedRelocationSymbolTable { input_index, .. }
+            | Self::MissingRelocationSymbol { input_index, .. } => Some(*input_index),
+            Self::TooManySections { .. }
+            | Self::TooManySymbols { .. }
+            | Self::StringTableTooLarge
+            | Self::SizeOverflow(_)
+            | Self::FileOffsetOverflow => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct ParsedInput<'a> {
     file: &'a [u8],
