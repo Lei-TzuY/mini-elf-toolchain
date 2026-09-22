@@ -10,7 +10,9 @@ use mini_elf_toolchain::ordered_inputs::{
     prepare_ordered_link_inputs_with_forced_undefined, LinkObjectOrigin, OrderedLinkInput,
     OrderedLinkInputError,
 };
-use mini_elf_toolchain::partial_link::{link_relocatable_objects, PartialLinkInput};
+use mini_elf_toolchain::partial_link::{
+    link_relocatable_objects_with_forced_undefined, PartialLinkInput,
+};
 use mini_elf_toolchain::static_link::link_static_executable_with_map;
 use std::env;
 use std::ffi::OsString;
@@ -27,7 +29,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -102,13 +104,16 @@ where
                 "expected -o <output> after partial".to_owned(),
             ));
         };
-        let inputs = args.collect::<Vec<_>>();
-        validate_partial_group_nesting(&inputs)?;
-        let inputs = resolve_static_library_arguments(&inputs).map_err(library_search_error)?;
+        let raw_inputs = args.collect::<Vec<_>>();
+        let forced =
+            extract_forced_undefined_arguments(&raw_inputs).map_err(forced_undefined_error)?;
+        validate_partial_group_nesting(&forced.arguments)?;
+        let inputs =
+            resolve_static_library_arguments(&forced.arguments).map_err(library_search_error)?;
         if inputs.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
-        return partial_files(&output, &inputs);
+        return partial_files(&output, &forced.symbols, &inputs);
     }
 
     if command == "link" {
@@ -305,7 +310,11 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
     ))
 }
 
-fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError> {
+fn partial_files(
+    output: &OsString,
+    forced_undefined: &[Vec<u8>],
+    paths: &[OsString],
+) -> Result<String, CliError> {
     for argument in paths {
         if argument == PUSH_STATE || argument == POP_STATE {
             return Err(CliError::Usage(format!(
@@ -337,14 +346,15 @@ fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliErr
         .iter()
         .map(|input| loaded.paths[input.file_index].clone())
         .collect::<Vec<_>>();
-    let prepared = prepare_ordered_link_inputs_with_forced_undefined(&ordered_inputs, &[])
-        .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
+    let prepared =
+        prepare_ordered_link_inputs_with_forced_undefined(&ordered_inputs, forced_undefined)
+            .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     let inputs = prepared
         .objects
         .iter()
         .map(|object| PartialLinkInput { file: object.file })
         .collect::<Vec<_>>();
-    let bytes = link_relocatable_objects(&inputs)
+    let bytes = link_relocatable_objects_with_forced_undefined(&inputs, forced_undefined)
         .map_err(|error| partial_input_failure(&expanded_paths, &prepared.origins, error))?;
 
     fs::write(output, &bytes)
