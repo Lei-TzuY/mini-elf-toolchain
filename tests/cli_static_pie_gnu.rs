@@ -329,3 +329,70 @@ _start:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn static_pie_rejects_pc_relative_undefined_weak_symbol() {
+    if !have_gnu_tools() {
+        return;
+    }
+
+    let dir = temp_dir("weak-pcrel");
+    let object = assemble(
+        &dir,
+        "weak-pcrel",
+        r#".weak weak_target
+
+.section .text
+.globl _start
+.type _start,@function
+_start:
+    lea weak_target(%rip), %rax
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+.size _start, .-_start
+"#,
+    );
+
+    let symbols = Command::new("readelf")
+        .args(["-sW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(symbols.status.success());
+    let symbols = String::from_utf8_lossy(&symbols.stdout);
+    assert!(
+        symbols.contains("WEAK") && symbols.contains("UND") && symbols.contains("weak_target"),
+        "fixture must contain an undefined weak symbol: {symbols}"
+    );
+
+    let relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(relocations.status.success());
+    let relocations = String::from_utf8_lossy(&relocations.stdout);
+    assert!(
+        relocations.contains("R_X86_64_PC32") && relocations.contains("weak_target"),
+        "fixture must carry a PC-relative relocation to the weak symbol: {relocations}"
+    );
+
+    let output = dir.join("must-not-exist");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--pie")
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(stderr.contains("undefined weak"));
+    assert!(stderr.contains("load-bias invariant"));
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
