@@ -950,6 +950,30 @@ pub fn link_relocatable_objects_with_forced_undefined(
         static_tables.push(tables.pop());
     }
 
+    let surviving_relocation_symbols = parsed
+        .iter()
+        .enumerate()
+        .flat_map(|(input_index, input)| {
+            input
+                .object
+                .rela_tables
+                .iter()
+                .filter(move |table| {
+                    !comdat_selection.discarded_sections[input_index]
+                        .contains(&table.section_index)
+                })
+                .flat_map(move |table| {
+                    table.relocations.iter().map(move |relocation| {
+                        (
+                            input_index,
+                            table.symbol_table_index,
+                            relocation.symbol_index as usize,
+                        )
+                    })
+                })
+        })
+        .collect::<BTreeSet<_>>();
+
     let mut locals = Vec::<PendingSymbol>::new();
     let mut nonlocals = Vec::<PendingSymbol>::new();
     let mut symbol_maps = BTreeMap::<(usize, u16, usize), u32>::new();
@@ -989,7 +1013,10 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 && symbol.section_index < SHN_LORESERVE
                 && comdat_selection.discarded_sections[input_index]
                     .contains(&symbol.section_index);
-            if discarded_definition && binding == STB_LOCAL {
+            let source = (input_index, table.section_index, symbol_index);
+            if discarded_definition
+                && (binding == STB_LOCAL || !surviving_relocation_symbols.contains(&source))
+            {
                 continue;
             }
             if binding != STB_LOCAL && symbol.other != 0 {
