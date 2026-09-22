@@ -105,6 +105,11 @@ pub enum PartialLinkError {
         signature_symbol_index: u32,
         symbol_count: usize,
     },
+    EmptyGroupSignatureName {
+        input_index: usize,
+        group_section_index: u16,
+        signature_symbol_index: usize,
+    },
     InvalidGroupMember {
         input_index: usize,
         group_section_index: u16,
@@ -371,6 +376,14 @@ impl fmt::Display for PartialLinkError {
                 f,
                 "partial-link input {input_index} SHT_GROUP section {group_section_index} signature symbol {signature_symbol_index} is invalid for symbol count {symbol_count}"
             ),
+            Self::EmptyGroupSignatureName {
+                input_index,
+                group_section_index,
+                signature_symbol_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} signature symbol {signature_symbol_index} has an empty name"
+            ),
             Self::InvalidGroupMember {
                 input_index,
                 group_section_index,
@@ -629,6 +642,7 @@ impl PartialLinkError {
             | Self::InvalidGroupSymbolTable { input_index, .. }
             | Self::MissingGroupSymbolTable { input_index, .. }
             | Self::InvalidGroupSignature { input_index, .. }
+            | Self::EmptyGroupSignatureName { input_index, .. }
             | Self::InvalidGroupMember { input_index, .. }
             | Self::GroupMemberMissingFlag { input_index, .. }
             | Self::UnsupportedNonAllocGroupMember { input_index, .. }
@@ -689,6 +703,12 @@ struct InputComdatGroup {
 struct ParsedComdatGroups {
     groups: Vec<InputComdatGroup>,
     member_sections: BTreeSet<u16>,
+}
+
+#[derive(Debug, Clone)]
+struct ComdatSelection {
+    selected_groups: BTreeSet<(usize, u16)>,
+    discarded_sections: Vec<BTreeSet<u16>>,
 }
 
 #[derive(Debug, Clone)]
@@ -770,6 +790,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
         .enumerate()
         .map(|(input_index, input)| parse_comdat_groups(input_index, input))
         .collect::<Result<Vec<_>, PartialLinkError>>()?;
+    let comdat_selection = select_comdat_groups(&parsed, &parsed_groups)?;
 
     let mut output_sections = Vec::<OutputSection>::new();
     let mut section_maps = Vec::with_capacity(parsed.len());
@@ -787,6 +808,9 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 u16::try_from(section_index).map_err(|_| PartialLinkError::TooManySections {
                     count: input.object.sections.len(),
                 })?;
+            if comdat_selection.discarded_sections[input_index].contains(&section_index_u16) {
+                continue;
+            }
             let grouped = parsed_groups[input_index]
                 .member_sections
                 .contains(&section_index_u16);
@@ -926,6 +950,22 @@ pub fn link_relocatable_objects_with_forced_undefined(
         static_tables.push(tables.pop());
     }
 
+    let mut surviving_relocation_symbols = BTreeSet::new();
+    for (input_index, input) in parsed.iter().enumerate() {
+        for table in &input.object.rela_tables {
+            if comdat_selection.discarded_sections[input_index].contains(&table.section_index) {
+                continue;
+            }
+            for relocation in &table.relocations {
+                surviving_relocation_symbols.insert((
+                    input_index,
+                    table.symbol_table_index,
+                    relocation.symbol_index as usize,
+                ));
+            }
+        }
+    }
+
     let mut locals = Vec::<PendingSymbol>::new();
     let mut nonlocals = Vec::<PendingSymbol>::new();
     let mut symbol_maps = BTreeMap::<(usize, u16, usize), u32>::new();
@@ -961,6 +1001,15 @@ pub fn link_relocatable_objects_with_forced_undefined(
                     source,
                 })?
                 .to_vec();
+            let discarded_definition = symbol.section_index != SHN_UNDEF
+                && symbol.section_index < SHN_LORESERVE
+                && comdat_selection.discarded_sections[input_index].contains(&symbol.section_index);
+            let source = (input_index, table.section_index, symbol_index);
+            if discarded_definition
+                && (binding == STB_LOCAL || !surviving_relocation_symbols.contains(&source))
+            {
+                continue;
+            }
             if binding != STB_LOCAL && symbol.other != 0 {
                 return Err(PartialLinkError::UnsupportedNondefaultSymbolVisibility {
                     input_index,
@@ -975,7 +1024,11 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 });
             }
             let mut remapped = symbol;
-            if symbol.section_index != 0 && symbol.section_index < SHN_LORESERVE {
+            if discarded_definition {
+                remapped.section_index = SHN_UNDEF;
+                remapped.value = 0;
+                remapped.size = 0;
+            } else if symbol.section_index != 0 && symbol.section_index < SHN_LORESERVE {
                 let placement = section_maps[input_index]
                     .get(usize::from(symbol.section_index))
                     .copied()
@@ -1136,6 +1189,9 @@ pub fn link_relocatable_objects_with_forced_undefined(
             .map(|table| table.section_index);
 
         for table in &input.object.rela_tables {
+            if comdat_selection.discarded_sections[input_index].contains(&table.section_index) {
+                continue;
+            }
             let target = section_maps[input_index]
                 .get(usize::from(table.target_section_index))
                 .copied()
@@ -1246,6 +1302,12 @@ pub fn link_relocatable_objects_with_forced_undefined(
 
     for (input_index, groups) in parsed_groups.iter().enumerate() {
         for group in &groups.groups {
+            if !comdat_selection
+                .selected_groups
+                .contains(&(input_index, group.group_section_index))
+            {
+                continue;
+            }
             let signature_symbol_index = symbol_maps
                 .get(&(
                     input_index,
@@ -1548,6 +1610,56 @@ fn intern_symbol_name(
     table.push(0);
     offsets.insert(name.to_vec(), offset);
     Ok(offset)
+}
+
+fn select_comdat_groups(
+    parsed: &[ParsedInput<'_>],
+    parsed_groups: &[ParsedComdatGroups],
+) -> Result<ComdatSelection, PartialLinkError> {
+    let mut selected_groups = BTreeSet::new();
+    let mut discarded_sections = vec![BTreeSet::new(); parsed.len()];
+    let mut seen_signatures = BTreeSet::<Vec<u8>>::new();
+
+    for (input_index, groups) in parsed_groups.iter().enumerate() {
+        let input = &parsed[input_index];
+        for group in &groups.groups {
+            let table = input
+                .object
+                .symbol_tables
+                .iter()
+                .find(|table| table.section_index == group.symbol_table_index)
+                .expect("validated COMDAT group symbol table");
+            let name = symbol_name(
+                input.file,
+                &input.object.sections,
+                table,
+                group.signature_symbol_index,
+            )
+            .map_err(|source| PartialLinkError::InvalidSymbolName {
+                input_index,
+                source,
+            })?;
+            if name.is_empty() {
+                return Err(PartialLinkError::EmptyGroupSignatureName {
+                    input_index,
+                    group_section_index: group.group_section_index,
+                    signature_symbol_index: group.signature_symbol_index,
+                });
+            }
+
+            if seen_signatures.insert(name.to_vec()) {
+                selected_groups.insert((input_index, group.group_section_index));
+            } else {
+                discarded_sections[input_index]
+                    .extend(group.member_section_indices.iter().copied());
+            }
+        }
+    }
+
+    Ok(ComdatSelection {
+        selected_groups,
+        discarded_sections,
+    })
 }
 
 fn parse_comdat_groups(

@@ -445,3 +445,301 @@ orphan_grouped:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn selects_first_duplicate_comdat_group_like_gnu_ld_r() {
+    if !have_gnu_toolchain() {
+        return;
+    }
+
+    let dir = temp_dir("duplicate-select");
+    let start = assemble(
+        &dir,
+        "start-duplicate",
+        r#".section .text
+.globl _start
+.type _start,@function
+.extern pick
+_start:
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+    .quad pick
+.size _start, .-_start
+"#,
+    );
+    let winner = assemble(
+        &dir,
+        "winner-comdat",
+        r#".section .text.pick,"axG",@progbits,pick,comdat
+.globl pick
+.globl winner_marker
+.type pick,@function
+.extern winner_target
+pick:
+winner_marker:
+    .quad winner_target
+    ret
+.size pick, .-pick
+"#,
+    );
+    let loser = assemble(
+        &dir,
+        "loser-comdat",
+        r#".section .text.pick,"axG",@progbits,pick,comdat
+.globl pick
+.globl loser_marker
+.type pick,@function
+.extern loser_target
+pick:
+loser_marker:
+    .quad loser_target
+    nop
+    ret
+.size pick, .-pick
+"#,
+    );
+    let targets = assemble(
+        &dir,
+        "duplicate-targets",
+        r#".section .data
+.globl winner_target
+winner_target:
+    .quad 0x1111111111111111
+.globl loser_target
+loser_target:
+    .quad 0x2222222222222222
+"#,
+    );
+
+    let ours = dir.join("ours-duplicate.o");
+    let gnu = dir.join("gnu-duplicate.o");
+
+    let partial = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours)
+        .arg(&start)
+        .arg(&winner)
+        .arg(&loser)
+        .arg(&targets)
+        .output()
+        .unwrap();
+    assert!(
+        partial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&partial.stderr)
+    );
+
+    let gnu_partial = Command::new("ld")
+        .args(["-r", "-o"])
+        .arg(&gnu)
+        .arg(&start)
+        .arg(&winner)
+        .arg(&loser)
+        .arg(&targets)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_partial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_partial.stderr)
+    );
+
+    assert_eq!(global_records(&ours), global_records(&gnu));
+    let records = global_records(&ours);
+    assert!(records.iter().any(|line| line.ends_with(" winner_marker")));
+    assert!(!records.iter().any(|line| line.ends_with(" loser_marker")));
+
+    let groups = section_groups(&ours);
+    assert_eq!(groups.matches("COMDAT group section").count(), 1);
+    assert!(groups.contains("[pick]"));
+
+    let relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(relocations.status.success());
+    let relocations = String::from_utf8_lossy(&relocations.stdout);
+    assert!(relocations.contains("winner_target"));
+    assert!(
+        !relocations.contains("loser_target"),
+        "discarded COMDAT RELA leaked into output: {relocations}"
+    );
+
+    let ours_reverse = dir.join("ours-duplicate-reverse.o");
+    let gnu_reverse = dir.join("gnu-duplicate-reverse.o");
+
+    let partial_reverse = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours_reverse)
+        .arg(&start)
+        .arg(&loser)
+        .arg(&winner)
+        .arg(&targets)
+        .output()
+        .unwrap();
+    assert!(
+        partial_reverse.status.success(),
+        "{}",
+        String::from_utf8_lossy(&partial_reverse.stderr)
+    );
+
+    let gnu_reverse_output = Command::new("ld")
+        .args(["-r", "-o"])
+        .arg(&gnu_reverse)
+        .arg(&start)
+        .arg(&loser)
+        .arg(&winner)
+        .arg(&targets)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_reverse_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_reverse_output.stderr)
+    );
+
+    assert_eq!(global_records(&ours_reverse), global_records(&gnu_reverse));
+    let reverse_records = global_records(&ours_reverse);
+    assert!(reverse_records
+        .iter()
+        .any(|line| line.ends_with(" loser_marker")));
+    assert!(!reverse_records
+        .iter()
+        .any(|line| line.ends_with(" winner_marker")));
+
+    let reverse_relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&ours_reverse)
+        .output()
+        .unwrap();
+    assert!(reverse_relocations.status.success());
+    let reverse_relocations = String::from_utf8_lossy(&reverse_relocations.stdout);
+    assert!(reverse_relocations.contains("loser_target"));
+    assert!(
+        !reverse_relocations.contains("winner_target"),
+        "reverse-order loser selection leaked winner RELA: {reverse_relocations}"
+    );
+
+    let mini_exe = dir.join("mini-duplicate-final");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&mini_exe)
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        mini.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
+    );
+
+    let gnu_exe = dir.join("gnu-duplicate-final");
+    let gnu_final = Command::new("ld")
+        .args(["-static", "-o"])
+        .arg(&gnu_exe)
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_final.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_final.stderr)
+    );
+
+    #[cfg(target_os = "linux")]
+    for executable in [&mini_exe, &gnu_exe] {
+        let status = Command::new(executable).status().unwrap();
+        assert!(
+            status.success(),
+            "{} returned {status}",
+            executable.display()
+        );
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn discarded_comdat_global_referenced_outside_group_becomes_undefined() {
+    if !have_gnu_toolchain() {
+        return;
+    }
+
+    let dir = temp_dir("discarded-global");
+    let winner = assemble(
+        &dir,
+        "winner-ref",
+        r#".section .text.pick,"axG",@progbits,pick,comdat
+.globl pick
+.type pick,@function
+pick:
+    ret
+.size pick, .-pick
+"#,
+    );
+    let loser = assemble(
+        &dir,
+        "loser-ref",
+        r#".section .text.pick,"axG",@progbits,pick,comdat
+.globl pick
+.globl discarded_global
+.type pick,@function
+pick:
+discarded_global:
+    nop
+    ret
+.size pick, .-pick
+
+.section .data
+.globl outside_ref
+outside_ref:
+    .quad discarded_global
+"#,
+    );
+
+    let ours = dir.join("ours-discarded-ref.o");
+    let gnu = dir.join("gnu-discarded-ref.o");
+
+    let partial = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours)
+        .arg(&winner)
+        .arg(&loser)
+        .output()
+        .unwrap();
+    assert!(
+        partial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&partial.stderr)
+    );
+
+    let gnu_partial = Command::new("ld")
+        .args(["-r", "-o"])
+        .arg(&gnu)
+        .arg(&winner)
+        .arg(&loser)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_partial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_partial.stderr)
+    );
+
+    assert_eq!(global_records(&ours), global_records(&gnu));
+    let records = global_records(&ours);
+    assert!(records.iter().any(|line| line == "U discarded_global"));
+    assert!(records.iter().any(|line| line.ends_with(" outside_ref")));
+
+    let relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(relocations.status.success());
+    assert!(String::from_utf8_lossy(&relocations.stdout).contains("discarded_global"));
+
+    let _ = fs::remove_dir_all(dir);
+}
