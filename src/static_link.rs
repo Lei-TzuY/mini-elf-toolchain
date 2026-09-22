@@ -19,6 +19,21 @@ pub fn link_static_executable(
     map_runtime_program_headers(image).map_err(StaticLinkError::Write)
 }
 
+pub fn link_static_position_independent_executable_with_map(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    entry_symbol: &[u8],
+) -> Result<StaticLinkOutput, StaticLinkError> {
+    let mut output = crate::static_link_core::link_static_position_independent_executable_with_map(
+        inputs,
+        page_alignment,
+        entry_symbol,
+    )?;
+    output.image = map_runtime_program_headers(output.image).map_err(StaticLinkError::Write)?;
+    synchronize_link_map_segments(&mut output);
+    Ok(output)
+}
+
 pub fn link_static_executable_with_map(
     inputs: &[LinkerInputObject<'_>],
     start_address: u64,
@@ -33,6 +48,11 @@ pub fn link_static_executable_with_map(
     )?;
     output.image = map_runtime_program_headers(output.image).map_err(StaticLinkError::Write)?;
 
+    synchronize_link_map_segments(&mut output);
+    Ok(output)
+}
+
+fn synchronize_link_map_segments(output: &mut StaticLinkOutput) {
     debug_assert_eq!(
         output.link_map.segments.len(),
         output.image.load_segments.len()
@@ -49,6 +69,4 @@ pub fn link_static_executable_with_map(
         map_segment.memory_size = image_segment.memory_size;
         map_segment.permissions = image_segment.permissions;
     }
-
-    Ok(output)
 }
