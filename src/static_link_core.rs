@@ -323,25 +323,18 @@ fn link_static_image_artifact(
     let layout = relocated_layout(&relocated);
     let user_entry_address =
         final_symbol_address(entry_definition, &layout).map_err(StaticLinkError::EntryAddress)?;
-    let runtime = if position_independent {
-        Some(
-            add_runtime_relative_relocations(
-                inputs,
-                relocated,
-                &definitions,
-                user_entry_address,
-                page_alignment,
-            )
-            .map_err(StaticLinkError::PieRuntime)?,
+    let (relocated, runtime_entry_address, dynamic) = if position_independent {
+        let runtime = add_runtime_relative_relocations(
+            inputs,
+            relocated,
+            &definitions,
+            user_entry_address,
+            page_alignment,
         )
+        .map_err(StaticLinkError::PieRuntime)?;
+        (runtime.sections, runtime.entry_address, runtime.dynamic)
     } else {
-        None
-    };
-    let (runtime_entry_address, dynamic) = if let Some(runtime) = runtime {
-        relocated = runtime.sections;
-        (runtime.entry_address, runtime.dynamic)
-    } else {
-        (user_entry_address, None)
+        (relocated, user_entry_address, None)
     };
 
     let load_segments = build_load_segments(relocated.iter().map(|section| LoadableSectionInput {
