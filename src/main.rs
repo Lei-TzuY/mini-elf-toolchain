@@ -27,7 +27,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> <input>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> <input|--start-group|--end-group>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -287,13 +287,25 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
 }
 
 fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError> {
-    let mut files = Vec::with_capacity(paths.len());
-    for path in paths {
-        files.push(read_file(path)?);
+    for argument in paths {
+        if argument == WHOLE_ARCHIVE
+            || argument == NO_WHOLE_ARCHIVE
+            || argument == PUSH_STATE
+            || argument == POP_STATE
+        {
+            return Err(CliError::Usage(format!(
+                "'{}' is not supported by partial linking",
+                argument.to_string_lossy()
+            )));
+        }
     }
-    let ordered_inputs = files
+
+    let loaded = load_link_input_sequence(paths)?;
+    let ordered_inputs = loaded
+        .sequence
         .iter()
-        .map(|file| {
+        .map(|input| {
+            let file = &loaded.files[input.file_index];
             if file.starts_with(ARCHIVE_MAGIC) {
                 OrderedLinkInput::Archive(file)
             } else {
@@ -301,15 +313,20 @@ fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliErr
             }
         })
         .collect::<Vec<_>>();
+    let expanded_paths = loaded
+        .sequence
+        .iter()
+        .map(|input| loaded.paths[input.file_index].clone())
+        .collect::<Vec<_>>();
     let prepared = prepare_ordered_link_inputs_with_forced_undefined(&ordered_inputs, &[])
-        .map_err(|error| ordered_input_failure(paths, error))?;
+        .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     let inputs = prepared
         .objects
         .iter()
         .map(|object| PartialLinkInput { file: object.file })
         .collect::<Vec<_>>();
     let bytes = link_relocatable_objects(&inputs)
-        .map_err(|error| partial_input_failure(paths, &prepared.origins, error))?;
+        .map_err(|error| partial_input_failure(&expanded_paths, &prepared.origins, error))?;
 
     fs::write(output, &bytes)
         .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
