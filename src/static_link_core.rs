@@ -57,6 +57,9 @@ pub enum StaticLinkError {
         relocation_index: usize,
         symbol_index: u32,
     },
+    PositionIndependentAbsoluteEntrySymbol {
+        name: Vec<u8>,
+    },
 }
 
 impl fmt::Display for StaticLinkError {
@@ -111,6 +114,11 @@ impl fmt::Display for StaticLinkError {
                 f,
                 "object {object_index} RELA section {rela_section_index} relocation {relocation_index} references undefined weak symbol {symbol_index} with a PC-relative relocation; the zero-valued weak reference is not load-bias invariant"
             ),
+            Self::PositionIndependentAbsoluteEntrySymbol { name } => write!(
+                f,
+                "entry symbol {:?} resolves to SHN_ABS; bounded ET_DYN entry addresses must be load-bias relative",
+                String::from_utf8_lossy(name)
+            ),
         }
     }
 }
@@ -129,7 +137,8 @@ impl std::error::Error for StaticLinkError {
             | Self::PositionIndependentRelocation { .. }
             | Self::PositionIndependentTlsSection { .. }
             | Self::PositionIndependentAbsoluteSymbol { .. }
-            | Self::PositionIndependentUndefinedWeakSymbol { .. } => None,
+            | Self::PositionIndependentUndefinedWeakSymbol { .. }
+            | Self::PositionIndependentAbsoluteEntrySymbol { .. } => None,
         }
     }
 }
@@ -282,6 +291,11 @@ fn link_static_image_with_map(
             .ok_or_else(|| StaticLinkError::MissingEntrySymbol {
                 name: entry_symbol.to_vec(),
             })?;
+    if position_independent && entry_definition.symbol.section_index == SHN_ABS {
+        return Err(StaticLinkError::PositionIndependentAbsoluteEntrySymbol {
+            name: entry_symbol.to_vec(),
+        });
+    }
 
     let layout = relocated_layout(&relocated);
     let entry_address =
