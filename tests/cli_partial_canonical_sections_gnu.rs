@@ -231,7 +231,14 @@ bss_second:
         String::from_utf8_lossy(&gnu_output.stderr)
     );
 
-    for name in [".text", ".rodata", ".data", ".bss", ".rela.rodata", ".rela.data"] {
+    for name in [
+        ".text",
+        ".rodata",
+        ".data",
+        ".bss",
+        ".rela.rodata",
+        ".rela.data",
+    ] {
         assert_eq!(
             named_section_count(&ours, name),
             named_section_count(&gnu, name),
