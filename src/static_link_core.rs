@@ -1,19 +1,22 @@
 use core::fmt;
 
 use crate::executable_writer::{
-    write_elf64_x86_64_executable_segments, ExecutableImage, ExecutableWriteError, LoadSegmentInput,
+    write_elf64_x86_64_executable_segments, write_elf64_x86_64_position_independent_segments,
+    ExecutableImage, ExecutableWriteError, LoadSegmentInput,
 };
 use crate::layout::LaidOutSection;
 use crate::link_map::{build_link_map, LinkMap};
 use crate::link_symbols::{resolve_validated_objects, LinkSymbolError};
 use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
+use crate::permission_layout::SHF_TLS;
 use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
 use crate::tls::{
     inject_static_tls_program_header, relocate_allocatable_sections_with_static_tls,
     StaticTlsProgramHeaderError, StaticTlsRelocationError,
 };
+use crate::x86_64_relocations::is_static_pie_relocation_type;
 
 #[derive(Debug)]
 pub enum StaticLinkError {
@@ -26,6 +29,16 @@ pub enum StaticLinkError {
     LoadSegments(LoadSegmentBuildError),
     Write(ExecutableWriteError),
     TlsProgramHeader(StaticTlsProgramHeaderError),
+    PositionIndependentRelocation {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        relocation_type: u32,
+    },
+    PositionIndependentTlsSection {
+        object_index: usize,
+        section_index: u16,
+    },
 }
 
 impl fmt::Display for StaticLinkError {
@@ -46,6 +59,22 @@ impl fmt::Display for StaticLinkError {
             Self::TlsProgramHeader(source) => {
                 write!(f, "cannot emit static TLS program header: {source}")
             }
+            Self::PositionIndependentRelocation {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                relocation_type,
+            } => write!(
+                f,
+                "object {object_index} RELA section {rela_section_index} relocation {relocation_index} uses relocation type {relocation_type}, which is not load-bias invariant for bounded position-independent static linking"
+            ),
+            Self::PositionIndependentTlsSection {
+                object_index,
+                section_index,
+            } => write!(
+                f,
+                "object {object_index} section {section_index} uses SHF_TLS; bounded position-independent static linking does not provide runtime TLS initialization"
+            ),
         }
     }
 }
@@ -60,7 +89,9 @@ impl std::error::Error for StaticLinkError {
             Self::LoadSegments(source) => Some(source),
             Self::Write(source) => Some(source),
             Self::TlsProgramHeader(source) => Some(source),
-            Self::MissingEntrySymbol { .. } => None,
+            Self::MissingEntrySymbol { .. }
+            | Self::PositionIndependentRelocation { .. }
+            | Self::PositionIndependentTlsSection { .. } => None,
         }
     }
 }
@@ -86,6 +117,59 @@ pub fn link_static_executable_with_map(
     start_address: u64,
     page_alignment: u64,
     entry_symbol: &[u8],
+) -> Result<StaticLinkOutput, StaticLinkError> {
+    link_static_image_with_map(
+        inputs,
+        start_address,
+        page_alignment,
+        entry_symbol,
+        false,
+    )
+}
+
+pub fn link_static_position_independent_executable_with_map(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    entry_symbol: &[u8],
+) -> Result<StaticLinkOutput, StaticLinkError> {
+    validate_position_independent_inputs(inputs)?;
+    link_static_image_with_map(inputs, 0, page_alignment, entry_symbol, true)
+}
+
+fn validate_position_independent_inputs(
+    inputs: &[LinkerInputObject<'_>],
+) -> Result<(), StaticLinkError> {
+    for input in inputs {
+        for (section_index, section) in input.object.sections.iter().enumerate() {
+            if section.flags & SHF_TLS != 0 {
+                return Err(StaticLinkError::PositionIndependentTlsSection {
+                    object_index: input.object_index,
+                    section_index: section_index as u16,
+                });
+            }
+        }
+        for table in &input.object.rela_tables {
+            for (relocation_index, relocation) in table.relocations.iter().enumerate() {
+                if !is_static_pie_relocation_type(relocation.relocation_type) {
+                    return Err(StaticLinkError::PositionIndependentRelocation {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        relocation_type: relocation.relocation_type,
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn link_static_image_with_map(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    entry_symbol: &[u8],
+    position_independent: bool,
 ) -> Result<StaticLinkOutput, StaticLinkError> {
     let relocated_output =
         relocate_allocatable_sections_with_static_tls(inputs, start_address, page_alignment)
@@ -134,9 +218,20 @@ pub fn link_static_executable_with_map(
         })
         .collect::<Vec<_>>();
 
-    let mut image =
-        write_elf64_x86_64_executable_segments(&writer_segments, entry_address, page_alignment)
-            .map_err(StaticLinkError::Write)?;
+    let mut image = if position_independent {
+        write_elf64_x86_64_position_independent_segments(
+            &writer_segments,
+            entry_address,
+            page_alignment,
+        )
+    } else {
+        write_elf64_x86_64_executable_segments(
+            &writer_segments,
+            entry_address,
+            page_alignment,
+        )
+    }
+    .map_err(StaticLinkError::Write)?;
     if let Some(tls) = relocated_output.tls_layout {
         image = inject_static_tls_program_header(image, tls, page_alignment)
             .map_err(StaticLinkError::TlsProgramHeader)?;
