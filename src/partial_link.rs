@@ -495,8 +495,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
 
     let mut output_sections = Vec::<OutputSection>::new();
     let mut section_maps = Vec::with_capacity(parsed.len());
-    let mut coalesced_canonical_sections =
-        BTreeMap::<(Vec<u8>, u32, u64, u64), usize>::new();
+    let mut coalesced_canonical_sections = BTreeMap::<(Vec<u8>, u32, u64, u64), usize>::new();
 
     for (input_index, input) in parsed.iter().enumerate() {
         let names = section_names(input_index, input)?;
