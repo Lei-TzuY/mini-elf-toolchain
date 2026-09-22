@@ -107,6 +107,23 @@ pub enum PartialLinkError {
         rela_section_index: u16,
         symbol_index: u32,
     },
+    SectionContributionOverflow {
+        input_index: usize,
+        section_index: u16,
+    },
+    SymbolValueOverflow {
+        input_index: usize,
+        symbol_index: usize,
+        contribution_offset: u64,
+        value: u64,
+    },
+    RelocationOffsetOverflow {
+        input_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        contribution_offset: u64,
+        offset: u64,
+    },
     TooManySections {
         count: usize,
     },
@@ -246,6 +263,32 @@ impl fmt::Display for PartialLinkError {
                 f,
                 "partial-link input {input_index} RELA section {rela_section_index} cannot remap symbol {symbol_index}"
             ),
+            Self::SectionContributionOverflow {
+                input_index,
+                section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} section {section_index} overflows while placing its coalesced contribution"
+            ),
+            Self::SymbolValueOverflow {
+                input_index,
+                symbol_index,
+                contribution_offset,
+                value,
+            } => write!(
+                f,
+                "partial-link input {input_index} symbol {symbol_index} value {value:#x} plus contribution offset {contribution_offset:#x} overflows"
+            ),
+            Self::RelocationOffsetOverflow {
+                input_index,
+                rela_section_index,
+                relocation_index,
+                contribution_offset,
+                offset,
+            } => write!(
+                f,
+                "partial-link input {input_index} RELA section {rela_section_index} relocation {relocation_index} offset {offset:#x} plus contribution offset {contribution_offset:#x} overflows"
+            ),
             Self::TooManySections { count } => write!(
                 f,
                 "partial-link output requires {count} sections, exceeding the non-extended ELF64 section-index range"
@@ -293,7 +336,10 @@ impl PartialLinkError {
             | Self::UnsupportedExtendedSymbolSectionIndex { input_index, .. }
             | Self::UnsupportedRelocationTarget { input_index, .. }
             | Self::UnsupportedRelocationSymbolTable { input_index, .. }
-            | Self::MissingRelocationSymbol { input_index, .. } => Some(*input_index),
+            | Self::MissingRelocationSymbol { input_index, .. }
+            | Self::SectionContributionOverflow { input_index, .. }
+            | Self::SymbolValueOverflow { input_index, .. }
+            | Self::RelocationOffsetOverflow { input_index, .. } => Some(*input_index),
             Self::TooManySections { .. }
             | Self::TooManySymbols { .. }
             | Self::StringTableTooLarge
@@ -321,6 +367,12 @@ struct OutputSection {
     entry_size: u64,
     data: Vec<u8>,
     offset: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SectionPlacement {
+    output_section_index: u16,
+    contribution_offset: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -352,6 +404,7 @@ pub fn link_relocatable_objects(
 
     let mut output_sections = Vec::<OutputSection>::new();
     let mut section_maps = Vec::with_capacity(parsed.len());
+    let mut coalesced_text_sections = BTreeMap::<(Vec<u8>, u32, u64, u64), usize>::new();
 
     for (input_index, input) in parsed.iter().enumerate() {
         let names = section_names(input_index, input)?;
@@ -380,30 +433,87 @@ pub fn link_relocatable_objects(
                 });
             }
 
-            let output_index = output_sections
-                .len()
-                .checked_add(1)
-                .ok_or(PartialLinkError::SizeOverflow("section count"))?;
-            if output_index >= usize::from(SHN_LORESERVE) {
-                return Err(PartialLinkError::TooManySections {
-                    count: output_index + 4,
-                });
-            }
-            mapping[section_index] = Some(output_index as u16);
-
+            let name = names[section_index].clone();
             let data = section_bytes(input.file, section);
-            output_sections.push(OutputSection {
-                name: names[section_index].clone(),
-                section_type: section.section_type,
-                flags: section.flags,
-                size: section.size,
-                link: 0,
-                info: 0,
-                alignment: section.address_alignment,
-                entry_size: section.entry_size,
-                data,
-                offset: 0,
-            });
+            let merge_key = (name.clone(), section.section_type, section.flags, section.entry_size);
+            let existing = if name.as_slice() == b".text" {
+                coalesced_text_sections.get(&merge_key).copied()
+            } else {
+                None
+            };
+
+            let placement = if let Some(output_slot) = existing {
+                let output = &mut output_sections[output_slot];
+                let contribution_offset =
+                    align_section_contribution(output.size, section.address_alignment).ok_or(
+                        PartialLinkError::SectionContributionOverflow {
+                            input_index,
+                            section_index: section_index_u16,
+                        },
+                    )?;
+                let new_size = contribution_offset.checked_add(section.size).ok_or(
+                    PartialLinkError::SectionContributionOverflow {
+                        input_index,
+                        section_index: section_index_u16,
+                    },
+                )?;
+
+                if section.section_type != SHT_NOBITS {
+                    let contribution_offset = usize::try_from(contribution_offset).map_err(|_| {
+                        PartialLinkError::SectionContributionOverflow {
+                            input_index,
+                            section_index: section_index_u16,
+                        }
+                    })?;
+                    if output.data.len() < contribution_offset {
+                        output.data.resize(contribution_offset, 0);
+                    }
+                    output.data.extend_from_slice(&data);
+                }
+                output.size = new_size;
+                output.alignment = output.alignment.max(section.address_alignment);
+
+                SectionPlacement {
+                    output_section_index: u16::try_from(output_slot + 1).map_err(|_| {
+                        PartialLinkError::TooManySections {
+                            count: output_sections.len() + 4,
+                        }
+                    })?,
+                    contribution_offset,
+                }
+            } else {
+                let output_index = output_sections
+                    .len()
+                    .checked_add(1)
+                    .ok_or(PartialLinkError::SizeOverflow("section count"))?;
+                if output_index >= usize::from(SHN_LORESERVE) {
+                    return Err(PartialLinkError::TooManySections {
+                        count: output_index + 4,
+                    });
+                }
+                let output_slot = output_sections.len();
+                output_sections.push(OutputSection {
+                    name: name.clone(),
+                    section_type: section.section_type,
+                    flags: section.flags,
+                    size: section.size,
+                    link: 0,
+                    info: 0,
+                    alignment: section.address_alignment,
+                    entry_size: section.entry_size,
+                    data,
+                    offset: 0,
+                });
+                if name.as_slice() == b".text" {
+                    coalesced_text_sections.insert(merge_key, output_slot);
+                }
+                SectionPlacement {
+                    output_section_index: output_index as u16,
+                    contribution_offset: 0,
+                }
+            };
+
+            mapping[section_index] = Some(placement);
         }
 
         section_maps.push(mapping);
@@ -480,7 +590,7 @@ pub fn link_relocatable_objects(
             }
             let mut remapped = symbol;
             if symbol.section_index != 0 && symbol.section_index < SHN_LORESERVE {
-                let output_section = section_maps[input_index]
+                let placement = section_maps[input_index]
                     .get(usize::from(symbol.section_index))
                     .copied()
                     .flatten()
@@ -489,7 +599,16 @@ pub fn link_relocatable_objects(
                         symbol_index,
                         section_index: symbol.section_index,
                     })?;
-                remapped.section_index = output_section;
+                remapped.section_index = placement.output_section_index;
+                remapped.value = placement
+                    .contribution_offset
+                    .checked_add(symbol.value)
+                    .ok_or(PartialLinkError::SymbolValueOverflow {
+                        input_index,
+                        symbol_index,
+                        contribution_offset: placement.contribution_offset,
+                        value: symbol.value,
+                    })?;
             }
 
             let pending = PendingSymbol {
@@ -612,7 +731,7 @@ pub fn link_relocatable_objects(
             }
 
             let mut relocations = Vec::with_capacity(table.relocations.len());
-            for relocation in &table.relocations {
+            for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 let symbol_index = symbol_maps
                     .get(&(
                         input_index,
@@ -625,8 +744,18 @@ pub fn link_relocatable_objects(
                         rela_section_index: table.section_index,
                         symbol_index: relocation.symbol_index,
                     })?;
+                let offset = target
+                    .contribution_offset
+                    .checked_add(relocation.offset)
+                    .ok_or(PartialLinkError::RelocationOffsetOverflow {
+                        input_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        contribution_offset: target.contribution_offset,
+                        offset: relocation.offset,
+                    })?;
                 relocations.push(Elf64Rela {
-                    offset: relocation.offset,
+                    offset,
                     symbol_index,
                     relocation_type: relocation.relocation_type,
                     addend: relocation.addend,
@@ -647,7 +776,7 @@ pub fn link_relocatable_objects(
                 flags: 0,
                 size: data.len() as u64,
                 link: u32::from(symtab_index),
-                info: u32::from(target),
+                info: u32::from(target.output_section_index),
                 alignment: 8,
                 entry_size: ELF64_RELA_SIZE,
                 data,
@@ -746,6 +875,15 @@ fn section_names(
             Ok(tail[..nul].to_vec())
         })
         .collect()
+}
+
+fn align_section_contribution(value: u64, alignment: u64) -> Option<u64> {
+    let alignment = alignment.max(1);
+    if alignment == 1 {
+        return Some(value);
+    }
+    let mask = alignment - 1;
+    value.checked_add(mask).map(|value| value & !mask)
 }
 
 fn section_bytes(file: &[u8], section: &Elf64SectionHeader) -> Vec<u8> {
