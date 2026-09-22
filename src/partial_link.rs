@@ -16,6 +16,7 @@ const ELF64_SECTION_HEADER_SIZE: usize = 64;
 const ELF64_SYMBOL_SIZE: usize = 24;
 const EM_X86_64: u16 = 62;
 const ET_REL: u16 = 1;
+const SHF_GROUP: u64 = 0x200;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PartialLinkInput<'a> {
@@ -59,6 +60,10 @@ pub enum PartialLinkError {
         section_index: u16,
         link: u32,
         info: u32,
+    },
+    UnsupportedGroupedAllocSection {
+        input_index: usize,
+        section_index: u16,
     },
     TooManyStaticSymbolTables {
         input_index: usize,
@@ -164,6 +169,13 @@ impl fmt::Display for PartialLinkError {
                 f,
                 "partial-link input {input_index} allocatable section {section_index} carries unsupported sh_link={link} sh_info={info}; bounded partial linking requires self-contained allocatable sections"
             ),
+            Self::UnsupportedGroupedAllocSection {
+                input_index,
+                section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} allocatable section {section_index} has SHF_GROUP/COMDAT membership, but bounded partial linking does not preserve SHT_GROUP metadata"
+            ),
             Self::TooManyStaticSymbolTables { input_index, count } => write!(
                 f,
                 "partial-link input {input_index} has {count} static symbol tables; bounded partial linking supports at most one SHT_SYMTAB per input"
@@ -260,6 +272,7 @@ impl PartialLinkError {
             | Self::InvalidSectionNameOffset { input_index, .. }
             | Self::UnterminatedSectionName { input_index, .. }
             | Self::UnsupportedAllocSectionMetadata { input_index, .. }
+            | Self::UnsupportedGroupedAllocSection { input_index, .. }
             | Self::TooManyStaticSymbolTables { input_index, .. }
             | Self::UnsupportedDynamicSymbolTable { input_index, .. }
             | Self::InvalidSymbolName { input_index, .. }
@@ -339,6 +352,12 @@ pub fn link_relocatable_objects(
                 u16::try_from(section_index).map_err(|_| PartialLinkError::TooManySections {
                     count: input.object.sections.len(),
                 })?;
+            if section.flags & SHF_GROUP != 0 {
+                return Err(PartialLinkError::UnsupportedGroupedAllocSection {
+                    input_index,
+                    section_index: section_index_u16,
+                });
+            }
             if section.link != 0 || section.info != 0 {
                 return Err(PartialLinkError::UnsupportedAllocSectionMetadata {
                     input_index,
