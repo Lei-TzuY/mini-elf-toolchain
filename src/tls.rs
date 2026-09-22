@@ -435,21 +435,10 @@ pub fn apply_tpoff32_relocations(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TlsGotApplyError {
-    MissingGlobalAddress {
-        name: Vec<u8>,
-    },
-    SymbolOutsideTlsImage {
-        name: Vec<u8>,
-        address: u64,
-    },
-    OffsetOutOfRange {
-        name: Vec<u8>,
-        value: i128,
-    },
-    MissingGotEntryTarget {
-        name: Vec<u8>,
-        entry_address: u64,
-    },
+    MissingGlobalAddress { name: Vec<u8> },
+    SymbolOutsideTlsImage { name: Vec<u8>, address: u64 },
+    OffsetOutOfRange { name: Vec<u8>, value: i128 },
+    MissingGotEntryTarget { name: Vec<u8>, entry_address: u64 },
 }
 
 impl fmt::Display for TlsGotApplyError {
@@ -505,9 +494,8 @@ fn apply_tls_got_offsets(
             });
         }
 
-        let value = i128::from(symbol_address)
-            - i128::from(tls.base_address)
-            - i128::from(tls.block_size);
+        let value =
+            i128::from(symbol_address) - i128::from(tls.base_address) - i128::from(tls.block_size);
         let value = i64::try_from(value).map_err(|_| TlsGotApplyError::OffsetOutOfRange {
             name: name.clone(),
             value,
@@ -639,9 +627,12 @@ pub fn relocate_allocatable_sections_with_static_tls(
         })
         .collect::<Vec<_>>();
 
-    let relocated_output =
-        relocate_allocatable_sections_with_metadata(&stripped_inputs, start_address, page_alignment)
-            .map_err(StaticTlsRelocationError::Regular)?;
+    let relocated_output = relocate_allocatable_sections_with_metadata(
+        &stripped_inputs,
+        start_address,
+        page_alignment,
+    )
+    .map_err(StaticTlsRelocationError::Regular)?;
     let tls_got_entries = relocated_output.tls_got_entries;
     let mut relocated = relocated_output.sections;
     let layout = relocated
@@ -689,13 +680,10 @@ pub fn relocate_allocatable_sections_with_static_tls(
                     .rela_tables
                     .iter()
                     .filter(|table| {
-                        table
-                            .relocations
-                            .iter()
-                            .any(|relocation| {
-                                relocation.relocation_type == R_X86_64_TPOFF32
-                                    || relocation.relocation_type == R_X86_64_GOTTPOFF
-                            })
+                        table.relocations.iter().any(|relocation| {
+                            relocation.relocation_type == R_X86_64_TPOFF32
+                                || relocation.relocation_type == R_X86_64_GOTTPOFF
+                        })
                     })
                     .map(move |table| (input.object_index, table.section_index))
             })
