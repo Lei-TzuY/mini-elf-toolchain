@@ -201,9 +201,8 @@ fn option_terminator_requires_archive_operand() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("usage: mini-elf-ar <t|x|rcs|crs> [--] <archive>")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("usage: mini-elf-ar <t|x|rcs|crs> [--] <archive>"));
 }
 
 #[test]
@@ -232,5 +231,6 @@ fn rejects_unsupported_operation_before_reading_input() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("supported operations are 't', 'x', and creation-only 'rcs'/'crs'"));
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("supported operations are 't', 'x', and creation-only 'rcs'/'crs'"));
 }
