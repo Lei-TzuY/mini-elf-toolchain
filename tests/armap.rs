@@ -144,8 +144,8 @@ fn armap_option_terminator_allows_help_named_archive() {
         .unwrap()
         .success());
     assert!(Command::new("ar")
-        .current_dir(&dir)
-        .args(["rcs", "-h"])
+        .args(["rcs"])
+        .arg(&archive)
         .arg(&object)
         .status()
         .unwrap()
