@@ -76,7 +76,10 @@ fn remove_last_member_from_first_group(path: &Path) {
             continue;
         }
         let size = read_u64(&bytes, section + 32);
-        assert!(size >= 12, "fixture group must contain at least two members");
+        assert!(
+            size >= 12,
+            "fixture group must contain at least two members"
+        );
         bytes[section + 32..section + 40].copy_from_slice(&(size - 4).to_le_bytes());
         changed = true;
         break;
