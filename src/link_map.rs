@@ -107,6 +107,7 @@ pub fn build_link_map(
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
     image: &ExecutableImage,
     entry_symbol: &[u8],
+    entry_address: u64,
 ) -> Result<LinkMap, FinalSymbolAddressError> {
     let layout = relocated
         .iter()
@@ -157,7 +158,7 @@ pub fn build_link_map(
 
     Ok(LinkMap {
         entry_symbol: entry_symbol.to_vec(),
-        entry_address: image.entry_address,
+        entry_address,
         sections,
         symbols,
         segments,
@@ -224,7 +225,14 @@ mod tests {
             }],
         };
 
-        let map = build_link_map(&relocated, &definitions, &image, b"_start").unwrap();
+        let map = build_link_map(
+            &relocated,
+            &definitions,
+            &image,
+            b"_start",
+            0x400000,
+        )
+        .unwrap();
         let rendered = map.render();
 
         assert!(rendered.contains("ENTRY _start 0x0000000000400000"));
