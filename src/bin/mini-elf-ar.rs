@@ -85,7 +85,11 @@ fn create_archive(
             ));
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(format!("cannot inspect archive target '{display}': {error}")),
+        Err(error) => {
+            return Err(format!(
+                "cannot inspect archive target '{display}': {error}"
+            ))
+        }
     }
 
     let mut loaded = Vec::with_capacity(member_paths.len());
@@ -94,10 +98,19 @@ fn create_archive(
         let member_name = path_ref
             .file_name()
             .and_then(|name| name.to_str())
-            .ok_or_else(|| format!("archive member path '{}' has no UTF-8 file name", path_ref.display()))?
+            .ok_or_else(|| {
+                format!(
+                    "archive member path '{}' has no UTF-8 file name",
+                    path_ref.display()
+                )
+            })?
             .to_owned();
-        let data = fs::read(path_ref)
-            .map_err(|error| format!("cannot read archive member '{}': {error}", path_ref.display()))?;
+        let data = fs::read(path_ref).map_err(|error| {
+            format!(
+                "cannot read archive member '{}': {error}",
+                path_ref.display()
+            )
+        })?;
         loaded.push((member_name, data));
     }
 
@@ -108,8 +121,8 @@ fn create_archive(
             data,
         })
         .collect::<Vec<_>>();
-    let bytes =
-        write_indexed_archive(&members).map_err(|error| format!("cannot create '{display}': {error}"))?;
+    let bytes = write_indexed_archive(&members)
+        .map_err(|error| format!("cannot create '{display}': {error}"))?;
 
     let mut output = OpenOptions::new()
         .write(true)
