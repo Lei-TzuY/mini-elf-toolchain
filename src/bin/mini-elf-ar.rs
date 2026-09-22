@@ -88,8 +88,8 @@ fn extract_members(
     selectors: &[String],
     display: &str,
 ) -> Result<String, String> {
-    let planned =
-        plan_archive_extraction(archive, selectors).map_err(|error| format!("{display}: {error}"))?;
+    let planned = plan_archive_extraction(archive, selectors)
+        .map_err(|error| format!("{display}: {error}"))?;
 
     for member in &planned {
         match fs::symlink_metadata(&member.name) {
