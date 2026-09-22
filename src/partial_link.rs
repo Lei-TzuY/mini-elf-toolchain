@@ -16,8 +16,11 @@ const ELF64_SECTION_HEADER_SIZE: usize = 64;
 const ELF64_SYMBOL_SIZE: usize = 24;
 const EM_X86_64: u16 = 62;
 const ET_REL: u16 = 1;
+const SHT_GROUP: u32 = 17;
 const SHF_GROUP: u64 = 0x200;
 const SHN_XINDEX: u16 = 0xffff;
+const GRP_COMDAT: u32 = 1;
+const ELF_GROUP_WORD_SIZE: u64 = 4;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PartialLinkInput<'a> {
@@ -65,6 +68,74 @@ pub enum PartialLinkError {
     UnsupportedGroupedAllocSection {
         input_index: usize,
         section_index: u16,
+    },
+    InvalidGroupEntrySize {
+        input_index: usize,
+        group_section_index: u16,
+        entry_size: u64,
+    },
+    InvalidGroupAlignment {
+        input_index: usize,
+        group_section_index: u16,
+        alignment: u64,
+    },
+    InvalidGroupSize {
+        input_index: usize,
+        group_section_index: u16,
+        size: u64,
+    },
+    UnsupportedGroupFlags {
+        input_index: usize,
+        group_section_index: u16,
+        flags: u32,
+    },
+    InvalidGroupSymbolTable {
+        input_index: usize,
+        group_section_index: u16,
+        symbol_table_index: u32,
+    },
+    MissingGroupSymbolTable {
+        input_index: usize,
+        group_section_index: u16,
+        symbol_table_index: u16,
+    },
+    InvalidGroupSignature {
+        input_index: usize,
+        group_section_index: u16,
+        signature_symbol_index: u32,
+        symbol_count: usize,
+    },
+    InvalidGroupMember {
+        input_index: usize,
+        group_section_index: u16,
+        member_section_index: u32,
+        section_count: usize,
+    },
+    GroupMemberMissingFlag {
+        input_index: usize,
+        group_section_index: u16,
+        member_section_index: u16,
+    },
+    UnsupportedNonAllocGroupMember {
+        input_index: usize,
+        group_section_index: u16,
+        member_section_index: u16,
+        section_type: u32,
+    },
+    DuplicateGroupMember {
+        input_index: usize,
+        group_section_index: u16,
+        member_section_index: u16,
+    },
+    MissingGroupSignatureOutput {
+        input_index: usize,
+        group_section_index: u16,
+        signature_symbol_index: usize,
+    },
+    MissingGroupMemberOutput {
+        input_index: usize,
+        group_section_index: u16,
+        member_section_index: u16,
     },
     TooManyStaticSymbolTables {
         input_index: usize,
@@ -219,7 +290,114 @@ impl fmt::Display for PartialLinkError {
                 section_index,
             } => write!(
                 f,
-                "partial-link input {input_index} allocatable section {section_index} has SHF_GROUP/COMDAT membership, but bounded partial linking does not preserve SHT_GROUP metadata"
+                "partial-link input {input_index} allocatable section {section_index} has SHF_GROUP without membership in a supported SHT_GROUP"
+            ),
+            Self::InvalidGroupEntrySize {
+                input_index,
+                group_section_index,
+                entry_size,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} has entry size {entry_size}; expected 4"
+            ),
+            Self::InvalidGroupAlignment {
+                input_index,
+                group_section_index,
+                alignment,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} has alignment {alignment}; expected 4"
+            ),
+            Self::InvalidGroupSize {
+                input_index,
+                group_section_index,
+                size,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} has invalid size {size}; expected at least two 32-bit words"
+            ),
+            Self::UnsupportedGroupFlags {
+                input_index,
+                group_section_index,
+                flags,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} has unsupported flags {flags:#x}; bounded preservation supports GRP_COMDAT only"
+            ),
+            Self::InvalidGroupSymbolTable {
+                input_index,
+                group_section_index,
+                symbol_table_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} links to invalid/non-static symbol table section {symbol_table_index}"
+            ),
+            Self::MissingGroupSymbolTable {
+                input_index,
+                group_section_index,
+                symbol_table_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} links to static symbol table {symbol_table_index}, but it was not parsed"
+            ),
+            Self::InvalidGroupSignature {
+                input_index,
+                group_section_index,
+                signature_symbol_index,
+                symbol_count,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} signature symbol {signature_symbol_index} is invalid for symbol count {symbol_count}"
+            ),
+            Self::InvalidGroupMember {
+                input_index,
+                group_section_index,
+                member_section_index,
+                section_count,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} member section {member_section_index} is outside section count {section_count}"
+            ),
+            Self::GroupMemberMissingFlag {
+                input_index,
+                group_section_index,
+                member_section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} member section {member_section_index} is missing SHF_GROUP"
+            ),
+            Self::UnsupportedNonAllocGroupMember {
+                input_index,
+                group_section_index,
+                member_section_index,
+                section_type,
+            } => write!(
+                f,
+                "partial-link input {input_index} COMDAT group {group_section_index} contains unsupported non-allocatable member section {member_section_index} of type {section_type}"
+            ),
+            Self::DuplicateGroupMember {
+                input_index,
+                group_section_index,
+                member_section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} repeats or reuses member section {member_section_index}"
+            ),
+            Self::MissingGroupSignatureOutput {
+                input_index,
+                group_section_index,
+                signature_symbol_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} signature symbol {signature_symbol_index} has no output symbol mapping"
+            ),
+            Self::MissingGroupMemberOutput {
+                input_index,
+                group_section_index,
+                member_section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHT_GROUP section {group_section_index} member section {member_section_index} has no preserved output section"
             ),
             Self::TooManyStaticSymbolTables { input_index, count } => write!(
                 f,
@@ -388,6 +566,19 @@ impl PartialLinkError {
             | Self::UnterminatedSectionName { input_index, .. }
             | Self::UnsupportedAllocSectionMetadata { input_index, .. }
             | Self::UnsupportedGroupedAllocSection { input_index, .. }
+            | Self::InvalidGroupEntrySize { input_index, .. }
+            | Self::InvalidGroupAlignment { input_index, .. }
+            | Self::InvalidGroupSize { input_index, .. }
+            | Self::UnsupportedGroupFlags { input_index, .. }
+            | Self::InvalidGroupSymbolTable { input_index, .. }
+            | Self::MissingGroupSymbolTable { input_index, .. }
+            | Self::InvalidGroupSignature { input_index, .. }
+            | Self::InvalidGroupMember { input_index, .. }
+            | Self::GroupMemberMissingFlag { input_index, .. }
+            | Self::UnsupportedNonAllocGroupMember { input_index, .. }
+            | Self::DuplicateGroupMember { input_index, .. }
+            | Self::MissingGroupSignatureOutput { input_index, .. }
+            | Self::MissingGroupMemberOutput { input_index, .. }
             | Self::TooManyStaticSymbolTables { input_index, .. }
             | Self::UnsupportedDynamicSymbolTable { input_index, .. }
             | Self::InvalidSymbolName { input_index, .. }
@@ -420,6 +611,24 @@ impl PartialLinkError {
 struct ParsedInput<'a> {
     file: &'a [u8],
     object: RelocatableObject,
+}
+
+#[derive(Debug, Clone)]
+struct InputComdatGroup {
+    name: Vec<u8>,
+    group_section_index: u16,
+    symbol_table_index: u16,
+    signature_symbol_index: usize,
+    member_section_indices: Vec<u16>,
+    flags: u64,
+    alignment: u64,
+    entry_size: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ParsedComdatGroups {
+    groups: Vec<InputComdatGroup>,
+    member_sections: BTreeSet<u16>,
 }
 
 #[derive(Debug, Clone)]
@@ -492,6 +701,11 @@ pub fn link_relocatable_objects_with_forced_undefined(
             })
         })
         .collect::<Result<Vec<_>, PartialLinkError>>()?;
+    let parsed_groups = parsed
+        .iter()
+        .enumerate()
+        .map(|(input_index, input)| parse_comdat_groups(input_index, input))
+        .collect::<Result<Vec<_>, PartialLinkError>>()?;
 
     let mut output_sections = Vec::<OutputSection>::new();
     let mut section_maps = Vec::with_capacity(parsed.len());
@@ -509,7 +723,10 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 u16::try_from(section_index).map_err(|_| PartialLinkError::TooManySections {
                     count: input.object.sections.len(),
                 })?;
-            if section.flags & SHF_GROUP != 0 {
+            let grouped = parsed_groups[input_index]
+                .member_sections
+                .contains(&section_index_u16);
+            if section.flags & SHF_GROUP != 0 && !grouped {
                 return Err(PartialLinkError::UnsupportedGroupedAllocSection {
                     input_index,
                     section_index: section_index_u16,
@@ -532,7 +749,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 section.flags,
                 section.entry_size,
             );
-            let existing = if is_canonical_alloc_section_name(&name) {
+            let existing = if is_canonical_alloc_section_name(&name) && !grouped {
                 coalesced_canonical_sections.get(&merge_key).copied()
             } else {
                 None
@@ -602,7 +819,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
                     data,
                     offset: 0,
                 });
-                if is_canonical_alloc_section_name(&name) {
+                if is_canonical_alloc_section_name(&name) && !grouped {
                     coalesced_canonical_sections.insert(merge_key, output_slot);
                 }
                 SectionPlacement {
@@ -843,6 +1060,53 @@ pub fn link_relocatable_objects_with_forced_undefined(
         data: symtab_data,
         offset: 0,
     });
+
+    for (input_index, groups) in parsed_groups.iter().enumerate() {
+        for group in &groups.groups {
+            let signature_symbol_index = symbol_maps
+                .get(&(
+                    input_index,
+                    group.symbol_table_index,
+                    group.signature_symbol_index,
+                ))
+                .copied()
+                .ok_or(PartialLinkError::MissingGroupSignatureOutput {
+                    input_index,
+                    group_section_index: group.group_section_index,
+                    signature_symbol_index: group.signature_symbol_index,
+                })?;
+            let mut data = Vec::with_capacity(
+                (group.member_section_indices.len() + 1)
+                    .checked_mul(ELF_GROUP_WORD_SIZE as usize)
+                    .ok_or(PartialLinkError::SizeOverflow("SHT_GROUP data"))?,
+            );
+            data.extend_from_slice(&GRP_COMDAT.to_le_bytes());
+            for member_section_index in &group.member_section_indices {
+                let placement = section_maps[input_index]
+                    .get(usize::from(*member_section_index))
+                    .copied()
+                    .flatten()
+                    .ok_or(PartialLinkError::MissingGroupMemberOutput {
+                        input_index,
+                        group_section_index: group.group_section_index,
+                        member_section_index: *member_section_index,
+                    })?;
+                data.extend_from_slice(&u32::from(placement.output_section_index).to_le_bytes());
+            }
+            output_sections.push(OutputSection {
+                name: group.name.clone(),
+                section_type: SHT_GROUP,
+                flags: group.flags,
+                size: data.len() as u64,
+                link: u32::from(symtab_index),
+                info: signature_symbol_index,
+                alignment: group.alignment,
+                entry_size: group.entry_size,
+                data,
+                offset: 0,
+            });
+        }
+    }
 
     let mut pending_rela_sections = Vec::<PendingRelaSection>::new();
     let mut pending_rela_by_target_and_name = BTreeMap::<(u16, Vec<u8>), usize>::new();
@@ -1186,6 +1450,141 @@ fn intern_symbol_name(
     table.push(0);
     offsets.insert(name.to_vec(), offset);
     Ok(offset)
+}
+
+fn parse_comdat_groups(
+    input_index: usize,
+    input: &ParsedInput<'_>,
+) -> Result<ParsedComdatGroups, PartialLinkError> {
+    let names = section_names(input_index, input)?;
+    let mut groups = Vec::new();
+    let mut member_sections = BTreeSet::new();
+
+    for (group_index, section) in input.object.sections.iter().enumerate() {
+        if section.section_type != SHT_GROUP {
+            continue;
+        }
+        let group_section_index =
+            u16::try_from(group_index).map_err(|_| PartialLinkError::TooManySections {
+                count: input.object.sections.len(),
+            })?;
+        if section.entry_size != ELF_GROUP_WORD_SIZE {
+            return Err(PartialLinkError::InvalidGroupEntrySize {
+                input_index,
+                group_section_index,
+                entry_size: section.entry_size,
+            });
+        }
+        if section.address_alignment != ELF_GROUP_WORD_SIZE {
+            return Err(PartialLinkError::InvalidGroupAlignment {
+                input_index,
+                group_section_index,
+                alignment: section.address_alignment,
+            });
+        }
+        if section.size < ELF_GROUP_WORD_SIZE * 2 || section.size % ELF_GROUP_WORD_SIZE != 0 {
+            return Err(PartialLinkError::InvalidGroupSize {
+                input_index,
+                group_section_index,
+                size: section.size,
+            });
+        }
+        let symbol_table_index = usize::try_from(section.link).ok().filter(|index| {
+            *index < input.object.sections.len()
+                && input.object.sections[*index].section_type == SHT_SYMTAB
+        });
+        let Some(symbol_table_index) = symbol_table_index else {
+            return Err(PartialLinkError::InvalidGroupSymbolTable {
+                input_index,
+                group_section_index,
+                symbol_table_index: section.link,
+            });
+        };
+        let symbol_table_index = symbol_table_index as u16;
+        let symbol_table = input
+            .object
+            .symbol_tables
+            .iter()
+            .find(|table| table.section_index == symbol_table_index)
+            .ok_or(PartialLinkError::MissingGroupSymbolTable {
+                input_index,
+                group_section_index,
+                symbol_table_index,
+            })?;
+        if section.info == 0 || section.info as usize >= symbol_table.symbols.len() {
+            return Err(PartialLinkError::InvalidGroupSignature {
+                input_index,
+                group_section_index,
+                signature_symbol_index: section.info,
+                symbol_count: symbol_table.symbols.len(),
+            });
+        }
+
+        let data = section_bytes(input.file, section);
+        let flags = u32::from_le_bytes(data[0..4].try_into().expect("validated group word"));
+        if flags != GRP_COMDAT {
+            return Err(PartialLinkError::UnsupportedGroupFlags {
+                input_index,
+                group_section_index,
+                flags,
+            });
+        }
+
+        let mut members = Vec::with_capacity(data.len() / 4 - 1);
+        for word in data[4..].chunks_exact(4) {
+            let member_index =
+                u32::from_le_bytes(word.try_into().expect("validated group member word"));
+            if member_index == 0 || member_index as usize >= input.object.sections.len() {
+                return Err(PartialLinkError::InvalidGroupMember {
+                    input_index,
+                    group_section_index,
+                    member_section_index: member_index,
+                    section_count: input.object.sections.len(),
+                });
+            }
+            let member_section_index = member_index as u16;
+            let member = &input.object.sections[member_index as usize];
+            if member.flags & SHF_GROUP == 0 {
+                return Err(PartialLinkError::GroupMemberMissingFlag {
+                    input_index,
+                    group_section_index,
+                    member_section_index,
+                });
+            }
+            if member.flags & SHF_ALLOC == 0 {
+                return Err(PartialLinkError::UnsupportedNonAllocGroupMember {
+                    input_index,
+                    group_section_index,
+                    member_section_index,
+                    section_type: member.section_type,
+                });
+            }
+            if !member_sections.insert(member_section_index) {
+                return Err(PartialLinkError::DuplicateGroupMember {
+                    input_index,
+                    group_section_index,
+                    member_section_index,
+                });
+            }
+            members.push(member_section_index);
+        }
+
+        groups.push(InputComdatGroup {
+            name: names[group_index].clone(),
+            group_section_index,
+            symbol_table_index,
+            signature_symbol_index: section.info as usize,
+            member_section_indices: members,
+            flags: section.flags,
+            alignment: section.address_alignment,
+            entry_size: section.entry_size,
+        });
+    }
+
+    Ok(ParsedComdatGroups {
+        groups,
+        member_sections,
+    })
 }
 
 fn is_canonical_alloc_section_name(name: &[u8]) -> bool {
