@@ -49,6 +49,78 @@ fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
     object
 }
 
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn rewrite_symbol_as_absolute(path: &Path, target_name: &[u8], value: u64) {
+    const SHT_SYMTAB: u32 = 2;
+    const SHN_ABS: u16 = 0xfff1;
+
+    let mut bytes = fs::read(path).unwrap();
+    let shoff = read_u64(&bytes, 40) as usize;
+    let shentsize = read_u16(&bytes, 58) as usize;
+    let shnum = read_u16(&bytes, 60) as usize;
+    let mut rewritten = false;
+
+    for section_index in 0..shnum {
+        let section = shoff + section_index * shentsize;
+        if read_u32(&bytes, section + 4) != SHT_SYMTAB {
+            continue;
+        }
+
+        let symtab_offset = read_u64(&bytes, section + 24) as usize;
+        let symtab_size = read_u64(&bytes, section + 32) as usize;
+        let string_table_index = read_u32(&bytes, section + 40) as usize;
+        let entry_size = read_u64(&bytes, section + 56) as usize;
+        assert!(entry_size >= 24);
+        assert!(string_table_index < shnum);
+
+        let string_section = shoff + string_table_index * shentsize;
+        let string_offset = read_u64(&bytes, string_section + 24) as usize;
+        let string_size = read_u64(&bytes, string_section + 32) as usize;
+        let string_end = string_offset + string_size;
+
+        for symbol in (symtab_offset..symtab_offset + symtab_size).step_by(entry_size) {
+            let name_offset = read_u32(&bytes, symbol) as usize;
+            assert!(name_offset < string_size);
+            let name_start = string_offset + name_offset;
+            let name_tail = &bytes[name_start..string_end];
+            let name_end = name_tail
+                .iter()
+                .position(|byte| *byte == 0)
+                .expect("symbol name must be NUL terminated");
+            if &name_tail[..name_end] != target_name {
+                continue;
+            }
+
+            bytes[symbol + 6..symbol + 8].copy_from_slice(&SHN_ABS.to_le_bytes());
+            bytes[symbol + 8..symbol + 16].copy_from_slice(&value.to_le_bytes());
+            rewritten = true;
+            break;
+        }
+
+        if rewritten {
+            break;
+        }
+    }
+
+    assert!(
+        rewritten,
+        "fixture did not contain symbol {}",
+        String::from_utf8_lossy(target_name)
+    );
+    fs::write(path, bytes).unwrap();
+}
+
 fn dynamic_relative_count(path: &Path) -> usize {
     let output = Command::new("readelf")
         .args(["-rW", "--use-dynamic"])
@@ -122,8 +194,9 @@ _start:
 
     let ours = dir.join("ours-pie");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
-        .args(["link", "--pie", "-o"])
+        .args(["link", "-o"])
         .arg(&ours)
+        .arg("--pie")
         .arg(&object)
         .output()
         .unwrap();
@@ -184,8 +257,13 @@ fn pie_gotpcrel_absolute_symbol_keeps_fixed_got_value_without_dynamic_plane() {
     let object = assemble(
         &dir,
         "absolute-got",
-        r#".globl absolute_target
-.set absolute_target, 0x4321
+        r#".section .data
+.align 8
+.globl absolute_target
+.type absolute_target,@object
+absolute_target:
+    .quad 0
+.size absolute_target, .-absolute_target
 
 .section .text
 .globl _start
@@ -204,6 +282,8 @@ _start:
 .size _start, .-_start
 "#,
     );
+
+    rewrite_symbol_as_absolute(&object, b"absolute_target", 0x4321);
 
     let input_relocations = Command::new("readelf")
         .args(["-rW"])
