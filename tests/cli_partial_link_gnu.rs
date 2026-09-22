@@ -185,11 +185,7 @@ fn global_nm_records(path: &Path) -> Vec<(String, char, Option<u64>)> {
         .filter_map(|line| {
             let fields = line.split_whitespace().collect::<Vec<_>>();
             match fields.as_slice() {
-                [kind, name] => Some((
-                    (*name).to_owned(),
-                    kind.chars().next()?,
-                    None,
-                )),
+                [kind, name] => Some(((*name).to_owned(), kind.chars().next()?, None)),
                 [value, kind, name, ..] => Some((
                     (*name).to_owned(),
                     kind.chars().next()?,
@@ -729,7 +725,10 @@ choice:
         String::from_utf8_lossy(&gnu.stderr)
     );
 
-    assert_eq!(global_nm_records(&ours_partial), global_nm_records(&gnu_partial));
+    assert_eq!(
+        global_nm_records(&ours_partial),
+        global_nm_records(&gnu_partial)
+    );
     assert_eq!(
         global_nm_records(&ours_partial)
             .iter()
@@ -737,11 +736,9 @@ choice:
             .count(),
         1
     );
-    assert!(
-        !global_nm_records(&ours_partial)
-            .iter()
-            .any(|(name, kind, _)| name == "choice" && *kind == 'U')
-    );
+    assert!(!global_nm_records(&ours_partial)
+        .iter()
+        .any(|(name, kind, _)| name == "choice" && *kind == 'U'));
 
     let mini_exe = dir.join("mini-resolved");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
@@ -856,7 +853,10 @@ fn multiple_strong_definitions_fail_before_partial_output() {
         .arg(&second)
         .output()
         .unwrap();
-    assert!(!gnu.status.success(), "GNU ld -r unexpectedly accepted duplicate strong definitions");
+    assert!(
+        !gnu.status.success(),
+        "GNU ld -r unexpectedly accepted duplicate strong definitions"
+    );
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["partial", "-o"])
