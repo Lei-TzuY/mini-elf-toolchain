@@ -225,14 +225,7 @@ mod tests {
             }],
         };
 
-        let map = build_link_map(
-            &relocated,
-            &definitions,
-            &image,
-            b"_start",
-            0x400000,
-        )
-        .unwrap();
+        let map = build_link_map(&relocated, &definitions, &image, b"_start", 0x400000).unwrap();
         let rendered = map.render();
 
         assert!(rendered.contains("ENTRY _start 0x0000000000400000"));
