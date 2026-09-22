@@ -41,7 +41,10 @@ where
         .map_err(|error| format!("{display}: {error}"))?
         .ok_or_else(|| format!("{display}: archive has no symbol index"))?;
 
-    let mut output = String::from("Archive index:\n");
+    // GNU nm -s starts the archive-index block with a blank line before the
+    // "Archive index:" heading. Preserve that byte-for-byte surface so this
+    // inspector can be used in differential toolchain checks.
+    let mut output = String::from("\nArchive index:\n");
     for entry in index.entries {
         let symbol = String::from_utf8_lossy(entry.name);
         let member = String::from_utf8_lossy(&archive.members[entry.member_index].name);
