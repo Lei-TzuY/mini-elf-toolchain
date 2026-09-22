@@ -144,6 +144,9 @@ pub enum PartialLinkError {
         first_input_index: usize,
         second_input_index: usize,
     },
+    EmptyForcedUndefinedSymbol {
+        forced_index: usize,
+    },
     TooManySections {
         count: usize,
     },
@@ -342,6 +345,10 @@ impl fmt::Display for PartialLinkError {
                 "multiple strong definitions for symbol {:?}: first in partial-link input {first_input_index}, second in input {second_input_index}",
                 String::from_utf8_lossy(name)
             ),
+            Self::EmptyForcedUndefinedSymbol { forced_index } => write!(
+                f,
+                "partial-link forced undefined symbol {forced_index} is empty"
+            ),
             Self::TooManySections { count } => write!(
                 f,
                 "partial-link output requires {count} sections, exceeding the non-extended ELF64 section-index range"
@@ -399,7 +406,8 @@ impl PartialLinkError {
             Self::MultipleStrongDefinitions {
                 second_input_index, ..
             } => Some(*second_input_index),
-            Self::TooManySections { .. }
+            Self::EmptyForcedUndefinedSymbol { .. }
+            | Self::TooManySections { .. }
             | Self::TooManySymbols { .. }
             | Self::StringTableTooLarge
             | Self::SizeOverflow(_)
@@ -438,7 +446,7 @@ type SymbolSource = (usize, u16, usize);
 
 #[derive(Debug, Clone)]
 struct PendingSymbol {
-    source: SymbolSource,
+    source: Option<SymbolSource>,
     name: Vec<u8>,
     symbol: Elf64Symbol,
 }
@@ -447,12 +455,19 @@ struct PendingSymbol {
 struct CanonicalNonlocal {
     name: Vec<u8>,
     symbol: Elf64Symbol,
-    representative_source: SymbolSource,
+    representative_source: Option<SymbolSource>,
     sources: Vec<SymbolSource>,
 }
 
 pub fn link_relocatable_objects(
     inputs: &[PartialLinkInput<'_>],
+) -> Result<Vec<u8>, PartialLinkError> {
+    link_relocatable_objects_with_forced_undefined(inputs, &[])
+}
+
+pub fn link_relocatable_objects_with_forced_undefined(
+    inputs: &[PartialLinkInput<'_>],
+    forced_undefined: &[Vec<u8>],
 ) -> Result<Vec<u8>, PartialLinkError> {
     let parsed = inputs
         .iter()
@@ -695,7 +710,7 @@ pub fn link_relocatable_objects(
             }
 
             let pending = PendingSymbol {
-                source: (input_index, table.section_index, symbol_index),
+                source: Some((input_index, table.section_index, symbol_index)),
                 name,
                 symbol: remapped,
             };
@@ -705,6 +720,24 @@ pub fn link_relocatable_objects(
                 nonlocals.push(pending);
             }
         }
+    }
+
+    for (forced_index, name) in forced_undefined.iter().enumerate() {
+        if name.is_empty() {
+            return Err(PartialLinkError::EmptyForcedUndefinedSymbol { forced_index });
+        }
+        nonlocals.push(PendingSymbol {
+            source: None,
+            name: name.clone(),
+            symbol: Elf64Symbol {
+                name_offset: 0,
+                info: STB_GLOBAL << 4,
+                other: 0,
+                section_index: SHN_UNDEF,
+                value: 0,
+                size: 0,
+            },
+        });
     }
 
     let canonical_nonlocals = canonicalize_nonlocal_symbols(nonlocals)?;
@@ -978,7 +1011,7 @@ fn canonicalize_nonlocal_symbols(
                 name: candidate.name,
                 symbol: candidate.symbol,
                 representative_source: candidate.source,
-                sources: vec![candidate.source],
+                sources: candidate.source.into_iter().collect(),
             });
             continue;
         }
@@ -990,13 +1023,15 @@ fn canonicalize_nonlocal_symbols(
                 name: candidate.name,
                 symbol: candidate.symbol,
                 representative_source: candidate.source,
-                sources: vec![candidate.source],
+                sources: candidate.source.into_iter().collect(),
             });
             continue;
         };
 
         let existing = &mut canonical[index];
-        existing.sources.push(candidate.source);
+        if let Some(source) = candidate.source {
+            existing.sources.push(source);
+        }
         merge_nonlocal_candidate(existing, &candidate)?;
     }
 
@@ -1008,19 +1043,22 @@ fn validate_common_candidate(candidate: &PendingSymbol) -> Result<(), PartialLin
         return Ok(());
     }
 
+    let source = candidate
+        .source
+        .expect("SHN_COMMON candidates originate from input symbols");
     let binding = candidate.symbol.info >> 4;
     if binding != STB_GLOBAL {
         return Err(PartialLinkError::UnsupportedCommonBinding {
-            input_index: candidate.source.0,
-            symbol_index: candidate.source.2,
+            input_index: source.0,
+            symbol_index: source.2,
             binding,
         });
     }
     let alignment = candidate.symbol.value;
     if alignment == 0 || !alignment.is_power_of_two() {
         return Err(PartialLinkError::InvalidCommonAlignment {
-            input_index: candidate.source.0,
-            symbol_index: candidate.source.2,
+            input_index: source.0,
+            symbol_index: source.2,
             alignment,
         });
     }
@@ -1077,10 +1115,16 @@ fn merge_nonlocal_candidate(
                 existing.representative_source = candidate.source;
             }
             (STB_GLOBAL, STB_GLOBAL) => {
+                let first_source = existing
+                    .representative_source
+                    .expect("strong definitions originate from input symbols");
+                let second_source = candidate
+                    .source
+                    .expect("strong definitions originate from input symbols");
                 return Err(PartialLinkError::MultipleStrongDefinitions {
                     name: existing.name.clone(),
-                    first_input_index: existing.representative_source.0,
-                    second_input_index: candidate.source.0,
+                    first_input_index: first_source.0,
+                    second_input_index: second_source.0,
                 });
             }
             (STB_GLOBAL, STB_WEAK) | (STB_WEAK, STB_WEAK) => {}
