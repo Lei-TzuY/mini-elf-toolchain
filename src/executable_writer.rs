@@ -112,6 +112,10 @@ pub enum ExecutableWriteError {
     EntryOutsideExecutableSegment {
         entry_address: u64,
     },
+    MetadataRangeOutsideLoadSegments {
+        address: u64,
+        size: u64,
+    },
     FileOffsetOverflow {
         metadata_end: u64,
         alignment: u64,
@@ -177,6 +181,10 @@ impl fmt::Display for ExecutableWriteError {
             Self::EntryOutsideExecutableSegment { entry_address } => write!(
                 f,
                 "entry address {entry_address:#x} is outside every file-backed executable PT_LOAD segment"
+            ),
+            Self::MetadataRangeOutsideLoadSegments { address, size } => write!(
+                f,
+                "runtime metadata at virtual address {address:#x} with size {size} is outside every file-backed PT_LOAD segment"
             ),
             Self::FileOffsetOverflow {
                 metadata_end,

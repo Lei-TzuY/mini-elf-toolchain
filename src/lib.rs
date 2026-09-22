@@ -24,6 +24,7 @@ pub mod ordered_inputs;
 pub mod output_image;
 pub mod partial_link;
 pub mod permission_layout;
+pub mod pie_runtime;
 pub mod preload;
 mod program_headers;
 pub mod rela_apply;

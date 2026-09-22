@@ -11,6 +11,7 @@ use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
 use crate::object_symbols::named_symbols_from_table;
 use crate::permission_layout::SHF_TLS;
+use crate::pie_runtime::{add_runtime_relative_relocations, PieDynamicSegment, PieRuntimeError};
 use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
 use crate::resolve::{SHN_UNDEF, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
@@ -35,6 +36,7 @@ pub enum StaticLinkError {
     LoadSegments(LoadSegmentBuildError),
     Write(ExecutableWriteError),
     TlsProgramHeader(StaticTlsProgramHeaderError),
+    PieRuntime(PieRuntimeError),
     PositionIndependentRelocation {
         object_index: usize,
         rela_section_index: u16,
@@ -79,6 +81,9 @@ impl fmt::Display for StaticLinkError {
             Self::Write(source) => write!(f, "cannot emit executable: {source}"),
             Self::TlsProgramHeader(source) => {
                 write!(f, "cannot emit static TLS program header: {source}")
+            }
+            Self::PieRuntime(source) => {
+                write!(f, "cannot build PIE runtime relocations: {source}")
             }
             Self::PositionIndependentRelocation {
                 object_index,
@@ -133,6 +138,7 @@ impl std::error::Error for StaticLinkError {
             Self::LoadSegments(source) => Some(source),
             Self::Write(source) => Some(source),
             Self::TlsProgramHeader(source) => Some(source),
+            Self::PieRuntime(source) => Some(source),
             Self::MissingEntrySymbol { .. }
             | Self::PositionIndependentRelocation { .. }
             | Self::PositionIndependentTlsSection { .. }
@@ -147,6 +153,12 @@ impl std::error::Error for StaticLinkError {
 pub struct StaticLinkOutput {
     pub image: ExecutableImage,
     pub link_map: LinkMap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct StaticPositionIndependentArtifact {
+    pub output: StaticLinkOutput,
+    pub dynamic: Option<PieDynamicSegment>,
 }
 
 pub fn link_static_executable(
@@ -165,16 +177,17 @@ pub fn link_static_executable_with_map(
     page_alignment: u64,
     entry_symbol: &[u8],
 ) -> Result<StaticLinkOutput, StaticLinkError> {
-    link_static_image_with_map(inputs, start_address, page_alignment, entry_symbol, false)
+    link_static_image_artifact(inputs, start_address, page_alignment, entry_symbol, false)
+        .map(|artifact| artifact.output)
 }
 
-pub fn link_static_position_independent_executable_with_map(
+pub(crate) fn link_static_position_independent_artifact_with_map(
     inputs: &[LinkerInputObject<'_>],
     page_alignment: u64,
     entry_symbol: &[u8],
-) -> Result<StaticLinkOutput, StaticLinkError> {
+) -> Result<StaticPositionIndependentArtifact, StaticLinkError> {
     validate_position_independent_inputs(inputs)?;
-    link_static_image_with_map(inputs, 0, page_alignment, entry_symbol, true)
+    link_static_image_artifact(inputs, 0, page_alignment, entry_symbol, true)
 }
 
 fn validate_position_independent_inputs(
@@ -264,19 +277,20 @@ fn validate_position_independent_inputs(
     Ok(())
 }
 
-fn link_static_image_with_map(
+fn link_static_image_artifact(
     inputs: &[LinkerInputObject<'_>],
     start_address: u64,
     page_alignment: u64,
     entry_symbol: &[u8],
     position_independent: bool,
-) -> Result<StaticLinkOutput, StaticLinkError> {
+) -> Result<StaticPositionIndependentArtifact, StaticLinkError> {
     let relocated_output =
         relocate_allocatable_sections_with_static_tls(inputs, start_address, page_alignment)
             .map_err(|source| match source {
                 StaticTlsRelocationError::Regular(source) => StaticLinkError::Relocation(source),
                 source => StaticLinkError::TlsRelocation(source),
             })?;
+    let tls_layout = relocated_output.tls_layout;
     let relocated = relocated_output.sections;
 
     let validated_objects = inputs
@@ -298,8 +312,21 @@ fn link_static_image_with_map(
     }
 
     let layout = relocated_layout(&relocated);
-    let entry_address =
+    let user_entry_address =
         final_symbol_address(entry_definition, &layout).map_err(StaticLinkError::EntryAddress)?;
+    let (relocated, runtime_entry_address, dynamic) = if position_independent {
+        let runtime = add_runtime_relative_relocations(
+            inputs,
+            relocated,
+            &definitions,
+            user_entry_address,
+            page_alignment,
+        )
+        .map_err(StaticLinkError::PieRuntime)?;
+        (runtime.sections, runtime.entry_address, runtime.dynamic)
+    } else {
+        (relocated, user_entry_address, None)
+    };
 
     let load_segments = build_load_segments(relocated.iter().map(|section| LoadableSectionInput {
         layout: LaidOutSection {
@@ -326,21 +353,34 @@ fn link_static_image_with_map(
     let mut image = if position_independent {
         write_elf64_x86_64_position_independent_segments(
             &writer_segments,
-            entry_address,
+            runtime_entry_address,
             page_alignment,
         )
     } else {
-        write_elf64_x86_64_executable_segments(&writer_segments, entry_address, page_alignment)
+        write_elf64_x86_64_executable_segments(
+            &writer_segments,
+            runtime_entry_address,
+            page_alignment,
+        )
     }
     .map_err(StaticLinkError::Write)?;
-    if let Some(tls) = relocated_output.tls_layout {
+    if let Some(tls) = tls_layout {
         image = inject_static_tls_program_header(image, tls, page_alignment)
             .map_err(StaticLinkError::TlsProgramHeader)?;
     }
-    let link_map = build_link_map(&relocated, &definitions, &image, entry_symbol)
-        .map_err(StaticLinkError::LinkMap)?;
+    let link_map = build_link_map(
+        &relocated,
+        &definitions,
+        &image,
+        entry_symbol,
+        user_entry_address,
+    )
+    .map_err(StaticLinkError::LinkMap)?;
 
-    Ok(StaticLinkOutput { image, link_map })
+    Ok(StaticPositionIndependentArtifact {
+        output: StaticLinkOutput { image, link_map },
+        dynamic,
+    })
 }
 
 fn relocated_layout(sections: &[RelocatedSectionImage]) -> Vec<LaidOutSection> {
