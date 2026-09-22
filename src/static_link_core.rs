@@ -225,7 +225,9 @@ fn validate_position_independent_inputs(
                 let resolved = if binding == STB_LOCAL {
                     Some(symbol.symbol)
                 } else {
-                    definitions.get(symbol.name).map(|definition| definition.symbol)
+                    definitions
+                        .get(symbol.name)
+                        .map(|definition| definition.symbol)
                 };
 
                 if resolved.is_some_and(|symbol| symbol.section_index == SHN_ABS) {
