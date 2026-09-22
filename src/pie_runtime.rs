@@ -288,8 +288,7 @@ pub fn add_runtime_relative_relocations(
         });
     }
 
-    let relocations =
-        collect_relative_relocations(inputs, &sections, definitions, got_entries)?;
+    let relocations = collect_relative_relocations(inputs, &sections, definitions, got_entries)?;
     if relocations.is_empty() {
         return Ok(PieRuntimeOutput {
             sections,
@@ -543,11 +542,12 @@ fn collect_relative_relocations(
             continue;
         }
 
-        let address =
-            final_symbol_address(definition, &layout).map_err(|source| PieRuntimeError::GotSymbolAddress {
+        let address = final_symbol_address(definition, &layout).map_err(|source| {
+            PieRuntimeError::GotSymbolAddress {
                 name: name.clone(),
                 source,
-            })?;
+            }
+        })?;
         let target_is_writable_file_data = sections.iter().any(|section| {
             if section.flags & SHF_WRITE == 0 {
                 return false;
@@ -566,12 +566,11 @@ fn collect_relative_relocations(
             });
         }
         let value = i128::from(address);
-        let addend = i64::try_from(value).map_err(|_| {
-            PieRuntimeError::GotRelativeAddendOutOfRange {
+        let addend =
+            i64::try_from(value).map_err(|_| PieRuntimeError::GotRelativeAddendOutOfRange {
                 name: name.clone(),
                 value,
-            }
-        })?;
+            })?;
         runtime.push(RelativeRelocation {
             offset: *entry_address,
             addend,
