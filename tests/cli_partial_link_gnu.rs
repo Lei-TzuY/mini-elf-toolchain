@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -110,6 +110,66 @@ fn global_defined_names(path: &Path) -> BTreeSet<String> {
         .lines()
         .filter_map(|line| line.split_whitespace().last())
         .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn global_defined_values(path: &Path) -> BTreeMap<String, u64> {
+    let output = Command::new("nm")
+        .args(["-g", "--defined-only", "-n"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.len() < 3 {
+                return None;
+            }
+            let value = u64::from_str_radix(fields[0], 16).ok()?;
+            Some((fields[2].to_owned(), value))
+        })
+        .collect()
+}
+
+fn named_section_count(path: &Path, wanted: &str) -> usize {
+    let output = Command::new("readelf")
+        .args(["-SW"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.split_whitespace().any(|field| field == wanted))
+        .count()
+}
+
+fn relocation_offsets(path: &Path, relocation_name: &str) -> BTreeSet<u64> {
+    let output = Command::new("readelf")
+        .args(["-rW"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|line| line.contains(relocation_name))
+        .filter_map(|line| line.split_whitespace().next())
+        .filter_map(|offset| u64::from_str_radix(offset, 16).ok())
         .collect()
 }
 
@@ -415,6 +475,125 @@ fn shn_xindex_symbol_is_rejected_without_output() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn compatible_text_sections_are_coalesced_with_gnu_ld_r_offsets() {
+    if !have_gnu_toolchain() {
+        return;
+    }
+
+    let dir = temp_dir("coalesce-text");
+    let start = assemble(
+        &dir,
+        "coalesce-start",
+        r#".section .text
+.globl _start
+.type _start,@function
+_start:
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+    .quad helper
+.size _start, .-_start
+"#,
+    );
+    let helper = assemble(
+        &dir,
+        "coalesce-helper",
+        r#".section .text,"ax",@progbits
+.p2align 4
+.globl helper
+.type helper,@function
+helper:
+    ret
+    .quad _start
+.size helper, .-helper
+"#,
+    );
+    let ours_partial = dir.join("ours-coalesced.o");
+    let gnu_partial = dir.join("gnu-coalesced.o");
+
+    let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours_partial)
+        .arg(&start)
+        .arg(&helper)
+        .output()
+        .unwrap();
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
+
+    let gnu = Command::new("ld")
+        .args(["-r", "-o"])
+        .arg(&gnu_partial)
+        .arg(&start)
+        .arg(&helper)
+        .output()
+        .unwrap();
+    assert!(
+        gnu.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu.stderr)
+    );
+
+    assert_eq!(named_section_count(&ours_partial, ".text"), 1);
+    assert_eq!(named_section_count(&gnu_partial, ".text"), 1);
+    assert_eq!(
+        global_defined_values(&ours_partial),
+        global_defined_values(&gnu_partial)
+    );
+    assert_eq!(
+        relocation_offsets(&ours_partial, "R_X86_64_64"),
+        relocation_offsets(&gnu_partial, "R_X86_64_64")
+    );
+
+    let helper_value = global_defined_values(&ours_partial)
+        .get("helper")
+        .copied()
+        .unwrap();
+    assert_eq!(helper_value % 16, 0, "helper contribution lost 16-byte alignment");
+
+    let mini_exe = dir.join("mini-coalesced");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&mini_exe)
+        .arg(&ours_partial)
+        .output()
+        .unwrap();
+    assert!(
+        mini.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
+    );
+
+    let gnu_exe = dir.join("gnu-coalesced");
+    let gnu_final = Command::new("ld")
+        .args(["-static", "-o"])
+        .arg(&gnu_exe)
+        .arg(&ours_partial)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_final.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_final.stderr)
+    );
+
+    #[cfg(target_os = "linux")]
+    for executable in [&mini_exe, &gnu_exe] {
+        let status = Command::new(executable).status().unwrap();
+        assert!(
+            status.success(),
+            "{} returned {status}",
+            executable.display()
+        );
+    }
 
     let _ = fs::remove_dir_all(dir);
 }
