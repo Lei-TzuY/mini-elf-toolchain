@@ -1,5 +1,5 @@
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::elf64::{
     Elf64SectionHeader, Elf64Symbol, Elf64SymbolTable, SHN_LORESERVE, SHT_DYNSYM, SHT_NOBITS,
@@ -722,9 +722,17 @@ pub fn link_relocatable_objects_with_forced_undefined(
         }
     }
 
+    let real_nonlocal_names = nonlocals
+        .iter()
+        .filter(|candidate| !candidate.name.is_empty())
+        .map(|candidate| candidate.name.clone())
+        .collect::<BTreeSet<_>>();
     for (forced_index, name) in forced_undefined.iter().enumerate() {
         if name.is_empty() {
             return Err(PartialLinkError::EmptyForcedUndefinedSymbol { forced_index });
+        }
+        if real_nonlocal_names.contains(name) {
+            continue;
         }
         nonlocals.push(PendingSymbol {
             source: None,
