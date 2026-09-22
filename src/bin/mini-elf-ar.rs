@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: mini-elf-ar t <archive>";
+const USAGE: &str = "usage: mini-elf-ar t <archive> [member...]";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -37,9 +37,13 @@ where
     }
 
     let input = args.next().ok_or_else(|| USAGE.to_owned())?;
-    if args.next().is_some() {
-        return Err(USAGE.to_owned());
-    }
+    let selectors = args
+        .map(|selector| {
+            selector
+                .into_string()
+                .map_err(|_| "archive member selector is not UTF-8".to_owned())
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let display = input.to_string_lossy();
     let file = fs::read(&input).map_err(|error| format!("cannot read '{display}': {error}"))?;
@@ -52,6 +56,9 @@ where
         }
         let name = std::str::from_utf8(&member.name)
             .map_err(|_| format!("{display}: archive member name is not UTF-8"))?;
+        if !selectors.is_empty() && !selectors.iter().any(|selector| selector == name) {
+            continue;
+        }
         output.push_str(name);
         output.push('\n');
     }
