@@ -31,7 +31,7 @@ fn append_member(bytes: &mut Vec<u8>, name: &str, data: &[u8]) {
         "100644",
         data.len()
     );
-    assert_eq!(header.as_bytes().len(), 60);
+    assert_eq!(header.len(), 60);
     bytes.extend_from_slice(header.as_bytes());
     bytes.extend_from_slice(data);
     if data.len() % 2 != 0 {
