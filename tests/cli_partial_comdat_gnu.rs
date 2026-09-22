@@ -51,6 +51,44 @@ fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
     object
 }
 
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn remove_last_member_from_first_group(path: &Path) {
+    let mut bytes = fs::read(path).unwrap();
+    let shoff = read_u64(&bytes, 40) as usize;
+    let shentsize = read_u16(&bytes, 58) as usize;
+    let shnum = read_u16(&bytes, 60) as usize;
+    let mut changed = false;
+
+    for section_index in 0..shnum {
+        let section = shoff + section_index * shentsize;
+        if read_u32(&bytes, section + 4) != 17 {
+            continue;
+        }
+        let size = read_u64(&bytes, section + 32);
+        assert!(
+            size >= 12,
+            "fixture group must contain at least two members"
+        );
+        bytes[section + 32..section + 40].copy_from_slice(&(size - 4).to_le_bytes());
+        changed = true;
+        break;
+    }
+
+    assert!(changed, "fixture did not contain SHT_GROUP");
+    fs::write(path, bytes).unwrap();
+}
+
 fn section_groups(path: &Path) -> String {
     let output = Command::new("readelf")
         .arg("--section-groups")
@@ -208,12 +246,27 @@ comdat_fn:
 }
 
 #[test]
-fn relocation_member_inside_comdat_group_remains_fail_closed() {
+fn preserves_grouped_rela_member_through_partial_link() {
     if !have_gnu_toolchain() {
         return;
     }
 
     let dir = temp_dir("rela-member");
+    let start_object = assemble(
+        &dir,
+        "start-rela",
+        r#".section .text
+.globl _start
+.type _start,@function
+.extern grouped_rela
+_start:
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+    .quad grouped_rela
+.size _start, .-_start
+"#,
+    );
     let grouped = assemble(
         &dir,
         "grouped-rela",
@@ -227,12 +280,150 @@ grouped_rela:
 .size grouped_rela, .-grouped_rela
 "#,
     );
-    let groups = section_groups(&grouped);
-    assert!(groups.contains(".text.grouped_rela"));
-    assert!(
-        groups.contains(".rela.text.grouped_rela"),
-        "GNU fixture must put the relocation section in the COMDAT group: {groups}"
+    let target = assemble(
+        &dir,
+        "target",
+        r#".section .data
+.globl external_target
+.type external_target,@object
+external_target:
+    .quad 0x1122334455667788
+.size external_target, .-external_target
+"#,
     );
+
+    let input_groups = section_groups(&grouped);
+    assert!(input_groups.contains(".text.grouped_rela"));
+    assert!(
+        input_groups.contains(".rela.text.grouped_rela"),
+        "GNU fixture must put the relocation section in the COMDAT group: {input_groups}"
+    );
+
+    let ours = dir.join("ours-rela.o");
+    let gnu = dir.join("gnu-rela.o");
+
+    let partial = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours)
+        .arg(&start_object)
+        .arg(&grouped)
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        partial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&partial.stderr)
+    );
+
+    let gnu_partial = Command::new("ld")
+        .args(["-r", "-o"])
+        .arg(&gnu)
+        .arg(&start_object)
+        .arg(&grouped)
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_partial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_partial.stderr)
+    );
+
+    let ours_groups = section_groups(&ours);
+    let gnu_groups = section_groups(&gnu);
+    for output in [&ours_groups, &gnu_groups] {
+        assert!(output.contains("grouped_rela"));
+        assert!(output.contains(".text.grouped_rela"));
+        assert!(output.contains(".rela.text.grouped_rela"));
+    }
+    assert_eq!(global_records(&ours), global_records(&gnu));
+
+    let ours_relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(ours_relocations.status.success());
+    let ours_relocations = String::from_utf8_lossy(&ours_relocations.stdout);
+    assert!(ours_relocations.contains(".rela.text.grouped_rela"));
+    assert!(ours_relocations.contains("external_target"));
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .arg("validate-rel")
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let mini_exe = dir.join("mini-rela-final");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&mini_exe)
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        mini.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
+    );
+
+    let gnu_exe = dir.join("gnu-rela-final");
+    let gnu_final = Command::new("ld")
+        .args(["-static", "-o"])
+        .arg(&gnu_exe)
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_final.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_final.stderr)
+    );
+
+    #[cfg(target_os = "linux")]
+    for executable in [&mini_exe, &gnu_exe] {
+        let status = Command::new(executable).status().unwrap();
+        assert!(
+            status.success(),
+            "{} returned {status}",
+            executable.display()
+        );
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn orphan_grouped_rela_section_is_rejected_without_output() {
+    if !have_gnu_toolchain() {
+        return;
+    }
+
+    let dir = temp_dir("orphan-rela");
+    let grouped = assemble(
+        &dir,
+        "orphan-grouped-rela",
+        r#".section .text.orphan_grouped,"axG",@progbits,orphan_grouped,comdat
+.globl orphan_grouped
+.type orphan_grouped,@function
+.extern external_target
+orphan_grouped:
+    .quad external_target
+    ret
+.size orphan_grouped, .-orphan_grouped
+"#,
+    );
+    let groups = section_groups(&grouped);
+    assert!(groups.contains(".text.orphan_grouped"));
+    assert!(groups.contains(".rela.text.orphan_grouped"));
+
+    remove_last_member_from_first_group(&grouped);
 
     let output = dir.join("partial.o");
     let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
@@ -245,7 +436,8 @@ grouped_rela:
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
     assert!(
-        String::from_utf8_lossy(&result.stderr).contains("non-allocatable member"),
+        String::from_utf8_lossy(&result.stderr)
+            .contains("SHF_GROUP without membership in a supported SHT_GROUP"),
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );

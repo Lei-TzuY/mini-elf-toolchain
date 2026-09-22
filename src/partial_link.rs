@@ -122,6 +122,28 @@ pub enum PartialLinkError {
         member_section_index: u16,
         section_type: u32,
     },
+    OrphanGroupedNonAllocSection {
+        input_index: usize,
+        section_index: u16,
+        section_type: u32,
+    },
+    MissingGroupedRelaTable {
+        input_index: usize,
+        group_section_index: u16,
+        rela_section_index: u16,
+    },
+    GroupedRelaSymbolTableMismatch {
+        input_index: usize,
+        group_section_index: u16,
+        rela_section_index: u16,
+        symbol_table_index: u16,
+    },
+    GroupedRelaTargetOutsideGroup {
+        input_index: usize,
+        group_section_index: u16,
+        rela_section_index: u16,
+        target_section_index: u16,
+    },
     DuplicateGroupMember {
         input_index: usize,
         group_section_index: u16,
@@ -375,6 +397,40 @@ impl fmt::Display for PartialLinkError {
                 f,
                 "partial-link input {input_index} COMDAT group {group_section_index} contains unsupported non-allocatable member section {member_section_index} of type {section_type}"
             ),
+            Self::OrphanGroupedNonAllocSection {
+                input_index,
+                section_index,
+                section_type,
+            } => write!(
+                f,
+                "partial-link input {input_index} non-allocatable section {section_index} of type {section_type} has SHF_GROUP without membership in a supported SHT_GROUP"
+            ),
+            Self::MissingGroupedRelaTable {
+                input_index,
+                group_section_index,
+                rela_section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} COMDAT group {group_section_index} member RELA section {rela_section_index} has no validated relocation table"
+            ),
+            Self::GroupedRelaSymbolTableMismatch {
+                input_index,
+                group_section_index,
+                rela_section_index,
+                symbol_table_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} COMDAT group {group_section_index} RELA section {rela_section_index} uses symbol table {symbol_table_index}, not the group's static symbol table"
+            ),
+            Self::GroupedRelaTargetOutsideGroup {
+                input_index,
+                group_section_index,
+                rela_section_index,
+                target_section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} COMDAT group {group_section_index} RELA section {rela_section_index} targets section {target_section_index}, which is not a member of the same group"
+            ),
             Self::DuplicateGroupMember {
                 input_index,
                 group_section_index,
@@ -576,6 +632,10 @@ impl PartialLinkError {
             | Self::InvalidGroupMember { input_index, .. }
             | Self::GroupMemberMissingFlag { input_index, .. }
             | Self::UnsupportedNonAllocGroupMember { input_index, .. }
+            | Self::OrphanGroupedNonAllocSection { input_index, .. }
+            | Self::MissingGroupedRelaTable { input_index, .. }
+            | Self::GroupedRelaSymbolTableMismatch { input_index, .. }
+            | Self::GroupedRelaTargetOutsideGroup { input_index, .. }
             | Self::DuplicateGroupMember { input_index, .. }
             | Self::MissingGroupSignatureOutput { input_index, .. }
             | Self::MissingGroupMemberOutput { input_index, .. }
@@ -655,7 +715,11 @@ struct SectionPlacement {
 struct PendingRelaSection {
     name: Vec<u8>,
     target_section_index: u16,
+    flags: u64,
+    alignment: u64,
+    entry_size: u64,
     relocations: Vec<Elf64Rela>,
+    sources: Vec<(usize, u16)>,
 }
 
 type SymbolSource = (usize, u16, usize);
@@ -1061,55 +1125,9 @@ pub fn link_relocatable_objects_with_forced_undefined(
         offset: 0,
     });
 
-    for (input_index, groups) in parsed_groups.iter().enumerate() {
-        for group in &groups.groups {
-            let signature_symbol_index = symbol_maps
-                .get(&(
-                    input_index,
-                    group.symbol_table_index,
-                    group.signature_symbol_index,
-                ))
-                .copied()
-                .ok_or(PartialLinkError::MissingGroupSignatureOutput {
-                    input_index,
-                    group_section_index: group.group_section_index,
-                    signature_symbol_index: group.signature_symbol_index,
-                })?;
-            let mut data = Vec::with_capacity(
-                (group.member_section_indices.len() + 1)
-                    .checked_mul(ELF_GROUP_WORD_SIZE as usize)
-                    .ok_or(PartialLinkError::SizeOverflow("SHT_GROUP data"))?,
-            );
-            data.extend_from_slice(&GRP_COMDAT.to_le_bytes());
-            for member_section_index in &group.member_section_indices {
-                let placement = section_maps[input_index]
-                    .get(usize::from(*member_section_index))
-                    .copied()
-                    .flatten()
-                    .ok_or(PartialLinkError::MissingGroupMemberOutput {
-                        input_index,
-                        group_section_index: group.group_section_index,
-                        member_section_index: *member_section_index,
-                    })?;
-                data.extend_from_slice(&u32::from(placement.output_section_index).to_le_bytes());
-            }
-            output_sections.push(OutputSection {
-                name: group.name.clone(),
-                section_type: SHT_GROUP,
-                flags: group.flags,
-                size: data.len() as u64,
-                link: u32::from(symtab_index),
-                info: signature_symbol_index,
-                alignment: group.alignment,
-                entry_size: group.entry_size,
-                data,
-                offset: 0,
-            });
-        }
-    }
-
     let mut pending_rela_sections = Vec::<PendingRelaSection>::new();
-    let mut pending_rela_by_target_and_name = BTreeMap::<(u16, Vec<u8>), usize>::new();
+    let mut pending_rela_by_target_and_metadata =
+        BTreeMap::<(u16, Vec<u8>, u64, u64, u64), usize>::new();
 
     for (input_index, input) in parsed.iter().enumerate() {
         let names = section_names(input_index, input)?;
@@ -1174,37 +1192,117 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 .unwrap_or_else(|| {
                     format!(".rela.partial.{input_index}.{}", table.section_index).into_bytes()
                 });
-            let key = (target.output_section_index, name.clone());
-            if let Some(&pending_index) = pending_rela_by_target_and_name.get(&key) {
+            let input_rela_section = &input.object.sections[usize::from(table.section_index)];
+            let key = (
+                target.output_section_index,
+                name.clone(),
+                input_rela_section.flags,
+                input_rela_section.address_alignment,
+                input_rela_section.entry_size,
+            );
+            if let Some(&pending_index) = pending_rela_by_target_and_metadata.get(&key) {
                 pending_rela_sections[pending_index]
                     .relocations
                     .extend(relocations);
+                pending_rela_sections[pending_index]
+                    .sources
+                    .push((input_index, table.section_index));
             } else {
                 let pending_index = pending_rela_sections.len();
-                pending_rela_by_target_and_name.insert(key, pending_index);
+                pending_rela_by_target_and_metadata.insert(key, pending_index);
                 pending_rela_sections.push(PendingRelaSection {
                     name,
                     target_section_index: target.output_section_index,
+                    flags: input_rela_section.flags,
+                    alignment: input_rela_section.address_alignment,
+                    entry_size: input_rela_section.entry_size,
                     relocations,
+                    sources: vec![(input_index, table.section_index)],
                 });
             }
         }
     }
 
+    let mut rela_section_maps = BTreeMap::<(usize, u16), u16>::new();
     for pending in pending_rela_sections {
+        let output_section_index = next_section_index(output_sections.len(), 1)?;
         let data = serialize_relocations(&pending.relocations)?;
+        for source in &pending.sources {
+            rela_section_maps.insert(*source, output_section_index);
+        }
         output_sections.push(OutputSection {
             name: pending.name,
             section_type: SHT_RELA,
-            flags: 0,
+            flags: pending.flags,
             size: data.len() as u64,
             link: u32::from(symtab_index),
             info: u32::from(pending.target_section_index),
-            alignment: 8,
-            entry_size: ELF64_RELA_SIZE,
+            alignment: pending.alignment,
+            entry_size: pending.entry_size,
             data,
             offset: 0,
         });
+    }
+
+    for (input_index, groups) in parsed_groups.iter().enumerate() {
+        for group in &groups.groups {
+            let signature_symbol_index = symbol_maps
+                .get(&(
+                    input_index,
+                    group.symbol_table_index,
+                    group.signature_symbol_index,
+                ))
+                .copied()
+                .ok_or(PartialLinkError::MissingGroupSignatureOutput {
+                    input_index,
+                    group_section_index: group.group_section_index,
+                    signature_symbol_index: group.signature_symbol_index,
+                })?;
+            let mut data = Vec::with_capacity(
+                (group.member_section_indices.len() + 1)
+                    .checked_mul(ELF_GROUP_WORD_SIZE as usize)
+                    .ok_or(PartialLinkError::SizeOverflow("SHT_GROUP data"))?,
+            );
+            data.extend_from_slice(&GRP_COMDAT.to_le_bytes());
+            for member_section_index in &group.member_section_indices {
+                let input_section =
+                    &parsed[input_index].object.sections[usize::from(*member_section_index)];
+                let output_section_index = if input_section.section_type == SHT_RELA {
+                    rela_section_maps
+                        .get(&(input_index, *member_section_index))
+                        .copied()
+                        .ok_or(PartialLinkError::MissingGroupMemberOutput {
+                            input_index,
+                            group_section_index: group.group_section_index,
+                            member_section_index: *member_section_index,
+                        })?
+                } else {
+                    section_maps[input_index]
+                        .get(usize::from(*member_section_index))
+                        .copied()
+                        .flatten()
+                        .ok_or(PartialLinkError::MissingGroupMemberOutput {
+                            input_index,
+                            group_section_index: group.group_section_index,
+                            member_section_index: *member_section_index,
+                        })?
+                        .output_section_index
+                };
+                data.extend_from_slice(&u32::from(output_section_index).to_le_bytes());
+            }
+            output_sections.push(OutputSection {
+                name: group.name.clone(),
+                section_type: SHT_GROUP,
+                flags: group.flags,
+                size: data.len() as u64,
+                link: u32::from(symtab_index),
+                info: signature_symbol_index,
+                alignment: group.alignment,
+                entry_size: group.entry_size,
+                data,
+                offset: 0,
+            });
+        }
     }
 
     let shstrtab_index = next_section_index(output_sections.len(), 1)?;
@@ -1551,7 +1649,7 @@ fn parse_comdat_groups(
                     member_section_index,
                 });
             }
-            if member.flags & SHF_ALLOC == 0 {
+            if member.flags & SHF_ALLOC == 0 && member.section_type != SHT_RELA {
                 return Err(PartialLinkError::UnsupportedNonAllocGroupMember {
                     input_index,
                     group_section_index,
@@ -1569,6 +1667,40 @@ fn parse_comdat_groups(
             members.push(member_section_index);
         }
 
+        let members_set = members.iter().copied().collect::<BTreeSet<_>>();
+        for member_section_index in &members {
+            let member = &input.object.sections[usize::from(*member_section_index)];
+            if member.section_type != SHT_RELA {
+                continue;
+            }
+            let table = input
+                .object
+                .rela_tables
+                .iter()
+                .find(|table| table.section_index == *member_section_index)
+                .ok_or(PartialLinkError::MissingGroupedRelaTable {
+                    input_index,
+                    group_section_index,
+                    rela_section_index: *member_section_index,
+                })?;
+            if table.symbol_table_index != symbol_table_index {
+                return Err(PartialLinkError::GroupedRelaSymbolTableMismatch {
+                    input_index,
+                    group_section_index,
+                    rela_section_index: *member_section_index,
+                    symbol_table_index: table.symbol_table_index,
+                });
+            }
+            if !members_set.contains(&table.target_section_index) {
+                return Err(PartialLinkError::GroupedRelaTargetOutsideGroup {
+                    input_index,
+                    group_section_index,
+                    rela_section_index: *member_section_index,
+                    target_section_index: table.target_section_index,
+                });
+            }
+        }
+
         groups.push(InputComdatGroup {
             name: names[group_index].clone(),
             group_section_index,
@@ -1579,6 +1711,23 @@ fn parse_comdat_groups(
             alignment: section.address_alignment,
             entry_size: section.entry_size,
         });
+    }
+
+    for (section_index, section) in input.object.sections.iter().enumerate() {
+        if section.flags & SHF_GROUP == 0 || section.flags & SHF_ALLOC != 0 {
+            continue;
+        }
+        let section_index =
+            u16::try_from(section_index).map_err(|_| PartialLinkError::TooManySections {
+                count: input.object.sections.len(),
+            })?;
+        if !member_sections.contains(&section_index) {
+            return Err(PartialLinkError::OrphanGroupedNonAllocSection {
+                input_index,
+                section_index,
+                section_type: section.section_type,
+            });
+        }
     }
 
     Ok(ParsedComdatGroups {
