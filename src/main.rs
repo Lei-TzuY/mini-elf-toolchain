@@ -13,7 +13,9 @@ use mini_elf_toolchain::ordered_inputs::{
 use mini_elf_toolchain::partial_link::{
     link_relocatable_objects_with_forced_undefined, PartialLinkInput,
 };
-use mini_elf_toolchain::static_link::link_static_executable_with_map;
+use mini_elf_toolchain::static_link::{
+    link_static_executable_with_map, link_static_position_independent_executable_with_map,
+};
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -29,7 +31,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -137,6 +139,12 @@ where
             ));
         };
         let raw_remaining: Vec<_> = args.collect();
+        let (position_independent, raw_remaining) = extract_pie_argument(&raw_remaining)?;
+        if position_independent && contains_image_base_argument(&raw_remaining) {
+            return Err(CliError::Usage(
+                "--pie cannot be combined with --image-base".to_owned(),
+            ));
+        }
         let forced =
             extract_forced_undefined_arguments(&raw_remaining).map_err(forced_undefined_error)?;
         let image_base =
@@ -202,6 +210,7 @@ where
             map_output.as_ref(),
             &entry_symbol,
             image_base.image_base,
+            position_independent,
             &forced.symbols,
             &remaining,
         );
@@ -228,6 +237,38 @@ fn validate_partial_group_nesting(arguments: &[OsString]) -> Result<(), CliError
         }
     }
     Ok(())
+}
+
+fn extract_pie_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>), CliError> {
+    let mut position_independent = false;
+    let mut remaining = Vec::with_capacity(arguments.len());
+
+    for argument in arguments {
+        if argument == "--pie" {
+            if position_independent {
+                return Err(CliError::Usage("duplicate --pie option".to_owned()));
+            }
+            position_independent = true;
+        } else if argument
+            .to_str()
+            .is_some_and(|argument| argument.starts_with("--pie="))
+        {
+            return Err(CliError::Usage("--pie does not accept a value".to_owned()));
+        } else {
+            remaining.push(argument.clone());
+        }
+    }
+
+    Ok((position_independent, remaining))
+}
+
+fn contains_image_base_argument(arguments: &[OsString]) -> bool {
+    arguments.iter().any(|argument| {
+        argument == "--image-base"
+            || argument
+                .to_str()
+                .is_some_and(|argument| argument.starts_with("--image-base="))
+    })
 }
 
 fn forced_undefined_error(error: ForcedUndefinedArgumentError) -> CliError {
@@ -414,6 +455,7 @@ fn link_files(
     map_output: Option<&OsString>,
     entry_symbol: &OsString,
     image_base: u64,
+    position_independent: bool,
     forced_undefined: &[Vec<u8>],
     paths: &[OsString],
 ) -> Result<String, CliError> {
@@ -444,12 +486,20 @@ fn link_files(
             .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     let entry_symbol = entry_symbol.to_string_lossy();
 
-    let linked = link_static_executable_with_map(
-        &prepared.objects,
-        image_base,
-        DEFAULT_PAGE_ALIGNMENT,
-        entry_symbol.as_bytes(),
-    )
+    let linked = if position_independent {
+        link_static_position_independent_executable_with_map(
+            &prepared.objects,
+            DEFAULT_PAGE_ALIGNMENT,
+            entry_symbol.as_bytes(),
+        )
+    } else {
+        link_static_executable_with_map(
+            &prepared.objects,
+            image_base,
+            DEFAULT_PAGE_ALIGNMENT,
+            entry_symbol.as_bytes(),
+        )
+    }
     .map_err(|error| CliError::Failure(format!("link failed: {error}")))?;
 
     fs::write(output, &linked.image.bytes)
@@ -463,7 +513,12 @@ fn link_files(
     }
 
     Ok(format!(
-        "linked static ELF64 x86-64: output={}, objects={}, bytes={}, entry={:#x}",
+        "{}: output={}, objects={}, bytes={}, entry={:#x}",
+        if position_independent {
+            "linked static PIE ELF64 x86-64"
+        } else {
+            "linked static ELF64 x86-64"
+        },
         output.to_string_lossy(),
         prepared.objects.len(),
         linked.image.bytes.len(),
