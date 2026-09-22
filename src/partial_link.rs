@@ -442,6 +442,13 @@ struct SectionPlacement {
     contribution_offset: u64,
 }
 
+#[derive(Debug)]
+struct PendingRelaSection {
+    name: Vec<u8>,
+    target_section_index: u16,
+    relocations: Vec<Elf64Rela>,
+}
+
 type SymbolSource = (usize, u16, usize);
 
 #[derive(Debug, Clone)]
@@ -488,7 +495,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
 
     let mut output_sections = Vec::<OutputSection>::new();
     let mut section_maps = Vec::with_capacity(parsed.len());
-    let mut coalesced_text_sections = BTreeMap::<(Vec<u8>, u32, u64, u64), usize>::new();
+    let mut coalesced_canonical_sections = BTreeMap::<(Vec<u8>, u32, u64, u64), usize>::new();
 
     for (input_index, input) in parsed.iter().enumerate() {
         let names = section_names(input_index, input)?;
@@ -525,8 +532,8 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 section.flags,
                 section.entry_size,
             );
-            let existing = if name.as_slice() == b".text" {
-                coalesced_text_sections.get(&merge_key).copied()
+            let existing = if is_canonical_alloc_section_name(&name) {
+                coalesced_canonical_sections.get(&merge_key).copied()
             } else {
                 None
             };
@@ -595,8 +602,8 @@ pub fn link_relocatable_objects_with_forced_undefined(
                     data,
                     offset: 0,
                 });
-                if name.as_slice() == b".text" {
-                    coalesced_text_sections.insert(merge_key, output_slot);
+                if is_canonical_alloc_section_name(&name) {
+                    coalesced_canonical_sections.insert(merge_key, output_slot);
                 }
                 SectionPlacement {
                     output_section_index: output_index as u16,
@@ -837,6 +844,9 @@ pub fn link_relocatable_objects_with_forced_undefined(
         offset: 0,
     });
 
+    let mut pending_rela_sections = Vec::<PendingRelaSection>::new();
+    let mut pending_rela_by_target_and_name = BTreeMap::<(u16, Vec<u8>), usize>::new();
+
     for (input_index, input) in parsed.iter().enumerate() {
         let names = section_names(input_index, input)?;
         let selected_table = static_tables[input_index]
@@ -900,20 +910,37 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 .unwrap_or_else(|| {
                     format!(".rela.partial.{input_index}.{}", table.section_index).into_bytes()
                 });
-            let data = serialize_relocations(&relocations)?;
-            output_sections.push(OutputSection {
-                name,
-                section_type: SHT_RELA,
-                flags: 0,
-                size: data.len() as u64,
-                link: u32::from(symtab_index),
-                info: u32::from(target.output_section_index),
-                alignment: 8,
-                entry_size: ELF64_RELA_SIZE,
-                data,
-                offset: 0,
-            });
+            let key = (target.output_section_index, name.clone());
+            if let Some(&pending_index) = pending_rela_by_target_and_name.get(&key) {
+                pending_rela_sections[pending_index]
+                    .relocations
+                    .extend(relocations);
+            } else {
+                let pending_index = pending_rela_sections.len();
+                pending_rela_by_target_and_name.insert(key, pending_index);
+                pending_rela_sections.push(PendingRelaSection {
+                    name,
+                    target_section_index: target.output_section_index,
+                    relocations,
+                });
+            }
         }
+    }
+
+    for pending in pending_rela_sections {
+        let data = serialize_relocations(&pending.relocations)?;
+        output_sections.push(OutputSection {
+            name: pending.name,
+            section_type: SHT_RELA,
+            flags: 0,
+            size: data.len() as u64,
+            link: u32::from(symtab_index),
+            info: u32::from(pending.target_section_index),
+            alignment: 8,
+            entry_size: ELF64_RELA_SIZE,
+            data,
+            offset: 0,
+        });
     }
 
     let shstrtab_index = next_section_index(output_sections.len(), 1)?;
@@ -1159,6 +1186,10 @@ fn intern_symbol_name(
     table.push(0);
     offsets.insert(name.to_vec(), offset);
     Ok(offset)
+}
+
+fn is_canonical_alloc_section_name(name: &[u8]) -> bool {
+    matches!(name, b".text" | b".rodata" | b".data" | b".bss")
 }
 
 fn align_section_contribution(value: u64, alignment: u64) -> Option<u64> {
