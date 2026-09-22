@@ -263,3 +263,59 @@ fn partial_archive_lookup_preserves_left_to_right_order() {
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn selected_archive_member_partial_error_keeps_member_provenance() {
+    if !have_gnu_tools() {
+        return;
+    }
+
+    let dir = temp_dir("provenance");
+    let start = assemble(
+        &dir,
+        "provenance-start",
+        r#".section .text
+.globl _start
+.extern hidden_helper
+_start:
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+    .quad hidden_helper
+"#,
+    );
+    let hidden = assemble(
+        &dir,
+        "hidden-helper",
+        r#".section .text
+.globl hidden_helper
+.hidden hidden_helper
+.type hidden_helper,@function
+hidden_helper:
+    ret
+.size hidden_helper, .-hidden_helper
+"#,
+    );
+    let archive = make_archive(&dir, &[&hidden]);
+    let output_path = dir.join("partial.o");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&output_path)
+        .arg(&start)
+        .arg(&archive)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("libsupport.a(hidden-helper.o)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("default visibility"), "{stderr}");
+    assert!(!output_path.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
