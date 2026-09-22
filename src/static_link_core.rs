@@ -9,9 +9,10 @@ use crate::link_map::{build_link_map, LinkMap};
 use crate::link_symbols::{resolve_validated_objects, LinkSymbolError};
 use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
+use crate::object_symbols::named_symbols_from_table;
 use crate::permission_layout::SHF_TLS;
 use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
-use crate::resolve::{SHN_UNDEF, STB_WEAK};
+use crate::resolve::{SHN_UNDEF, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
 use crate::tls::{
     inject_static_tls_program_header, relocate_allocatable_sections_with_static_tls,
@@ -170,6 +171,13 @@ pub fn link_static_position_independent_executable_with_map(
 fn validate_position_independent_inputs(
     inputs: &[LinkerInputObject<'_>],
 ) -> Result<(), StaticLinkError> {
+    let validated_objects = inputs
+        .iter()
+        .map(LinkerInputObject::validated_object)
+        .collect::<Vec<_>>();
+    let definitions =
+        resolve_validated_objects(&validated_objects).map_err(StaticLinkError::Symbols)?;
+
     for input in inputs {
         for (section_index, section) in input.object.sections.iter().enumerate() {
             if section.flags & SHF_TLS != 0 {
@@ -186,6 +194,19 @@ fn validate_position_independent_inputs(
                 .iter()
                 .find(|candidate| candidate.section_index == table.symbol_table_index)
                 .expect("validated RELA table references a validated symbol table");
+            let named_symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                symbol_table,
+                input.object_index,
+            )
+            .map_err(|source| {
+                StaticLinkError::Symbols(LinkSymbolError::ObjectSymbols {
+                    object_index: input.object_index,
+                    source,
+                })
+            })?;
+
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 if !is_static_pie_relocation_type(relocation.relocation_type) {
                     return Err(StaticLinkError::PositionIndependentRelocation {
@@ -195,24 +216,36 @@ fn validate_position_independent_inputs(
                         relocation_type: relocation.relocation_type,
                     });
                 }
-                if is_static_pie_pc_relative_relocation_type(relocation.relocation_type) {
-                    let symbol = symbol_table.symbols[relocation.symbol_index as usize];
-                    if symbol.section_index == SHN_ABS {
-                        return Err(StaticLinkError::PositionIndependentAbsoluteSymbol {
-                            object_index: input.object_index,
-                            rela_section_index: table.section_index,
-                            relocation_index,
-                            symbol_index: relocation.symbol_index,
-                        });
-                    }
-                    if symbol.section_index == SHN_UNDEF && symbol.info >> 4 == STB_WEAK {
-                        return Err(StaticLinkError::PositionIndependentUndefinedWeakSymbol {
-                            object_index: input.object_index,
-                            rela_section_index: table.section_index,
-                            relocation_index,
-                            symbol_index: relocation.symbol_index,
-                        });
-                    }
+                if !is_static_pie_pc_relative_relocation_type(relocation.relocation_type) {
+                    continue;
+                }
+
+                let symbol = &named_symbols[relocation.symbol_index as usize];
+                let binding = symbol.symbol.info >> 4;
+                let resolved = if binding == STB_LOCAL {
+                    Some(symbol.symbol)
+                } else {
+                    definitions.get(symbol.name).map(|definition| definition.symbol)
+                };
+
+                if resolved.is_some_and(|symbol| symbol.section_index == SHN_ABS) {
+                    return Err(StaticLinkError::PositionIndependentAbsoluteSymbol {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        symbol_index: relocation.symbol_index,
+                    });
+                }
+                if resolved.is_none()
+                    && binding == STB_WEAK
+                    && symbol.symbol.section_index == SHN_UNDEF
+                {
+                    return Err(StaticLinkError::PositionIndependentUndefinedWeakSymbol {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        symbol_index: relocation.symbol_index,
+                    });
                 }
             }
         }
