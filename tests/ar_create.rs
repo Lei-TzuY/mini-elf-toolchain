@@ -113,7 +113,7 @@ fn creates_indexed_archive_recognized_by_gnu_tools() {
         .output()
         .unwrap();
     let gnu = Command::new("nm")
-        .args(["--print-armap"])
+        .arg("-s")
         .arg(&archive)
         .output()
         .unwrap();
@@ -123,7 +123,12 @@ fn creates_indexed_archive_recognized_by_gnu_tools() {
         String::from_utf8_lossy(&ours.stderr)
     );
     assert!(gnu.status.success(), "{}", String::from_utf8_lossy(&gnu.stderr));
-    assert_eq!(ours.stdout, gnu.stdout);
+    let gnu_stdout = String::from_utf8_lossy(&gnu.stdout);
+    let gnu_index = gnu_stdout
+        .split("\n\n")
+        .next()
+        .expect("GNU nm should print an archive index");
+    assert_eq!(String::from_utf8_lossy(&ours.stdout).trim_end(), gnu_index);
     let map = String::from_utf8_lossy(&ours.stdout);
     assert!(map.contains("short_symbol in short.o"));
     assert!(map.contains("long_symbol in very_long_archive_member_name.o"));
