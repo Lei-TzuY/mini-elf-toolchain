@@ -51,6 +51,41 @@ fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
     object
 }
 
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn remove_last_member_from_first_group(path: &Path) {
+    let mut bytes = fs::read(path).unwrap();
+    let shoff = read_u64(&bytes, 40) as usize;
+    let shentsize = read_u16(&bytes, 58) as usize;
+    let shnum = read_u16(&bytes, 60) as usize;
+    let mut changed = false;
+
+    for section_index in 0..shnum {
+        let section = shoff + section_index * shentsize;
+        if read_u32(&bytes, section + 4) != 17 {
+            continue;
+        }
+        let size = read_u64(&bytes, section + 32);
+        assert!(size >= 12, "fixture group must contain at least two members");
+        bytes[section + 32..section + 40].copy_from_slice(&(size - 4).to_le_bytes());
+        changed = true;
+        break;
+    }
+
+    assert!(changed, "fixture did not contain SHT_GROUP");
+    fs::write(path, bytes).unwrap();
+}
+
 fn section_groups(path: &Path) -> String {
     let output = Command::new("readelf")
         .arg("--section-groups")
@@ -357,6 +392,53 @@ external_target:
             executable.display()
         );
     }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn orphan_grouped_rela_section_is_rejected_without_output() {
+    if !have_gnu_toolchain() {
+        return;
+    }
+
+    let dir = temp_dir("orphan-rela");
+    let grouped = assemble(
+        &dir,
+        "orphan-grouped-rela",
+        r#".section .text.orphan_grouped,"axG",@progbits,orphan_grouped,comdat
+.globl orphan_grouped
+.type orphan_grouped,@function
+.extern external_target
+orphan_grouped:
+    .quad external_target
+    ret
+.size orphan_grouped, .-orphan_grouped
+"#,
+    );
+    let groups = section_groups(&grouped);
+    assert!(groups.contains(".text.orphan_grouped"));
+    assert!(groups.contains(".rela.text.orphan_grouped"));
+
+    remove_last_member_from_first_group(&grouped);
+
+    let output = dir.join("partial.o");
+    let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&output)
+        .arg(&grouped)
+        .output()
+        .unwrap();
+
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&result.stderr)
+            .contains("SHF_GROUP without membership in a supported SHT_GROUP"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
 }
