@@ -950,28 +950,21 @@ pub fn link_relocatable_objects_with_forced_undefined(
         static_tables.push(tables.pop());
     }
 
-    let surviving_relocation_symbols = parsed
-        .iter()
-        .enumerate()
-        .flat_map(|(input_index, input)| {
-            input
-                .object
-                .rela_tables
-                .iter()
-                .filter(move |table| {
-                    !comdat_selection.discarded_sections[input_index].contains(&table.section_index)
-                })
-                .flat_map(move |table| {
-                    table.relocations.iter().map(move |relocation| {
-                        (
-                            input_index,
-                            table.symbol_table_index,
-                            relocation.symbol_index as usize,
-                        )
-                    })
-                })
-        })
-        .collect::<BTreeSet<_>>();
+    let mut surviving_relocation_symbols = BTreeSet::new();
+    for (input_index, input) in parsed.iter().enumerate() {
+        for table in &input.object.rela_tables {
+            if comdat_selection.discarded_sections[input_index].contains(&table.section_index) {
+                continue;
+            }
+            for relocation in &table.relocations {
+                surviving_relocation_symbols.insert((
+                    input_index,
+                    table.symbol_table_index,
+                    relocation.symbol_index as usize,
+                ));
+            }
+        }
+    }
 
     let mut locals = Vec::<PendingSymbol>::new();
     let mut nonlocals = Vec::<PendingSymbol>::new();
