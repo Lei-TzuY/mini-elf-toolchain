@@ -365,10 +365,12 @@ fn collect_relative_relocations(
                 symbol_table,
                 input.object_index,
             )
-            .map_err(|source| PieRuntimeError::Symbols(LinkSymbolError::ObjectSymbols {
-                object_index: input.object_index,
-                source,
-            }))?;
+            .map_err(|source| {
+                PieRuntimeError::Symbols(LinkSymbolError::ObjectSymbols {
+                    object_index: input.object_index,
+                    source,
+                })
+            })?;
 
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 if relocation.relocation_type != R_X86_64_64 {
@@ -408,15 +410,16 @@ fn collect_relative_relocations(
                             symbol_index: symbol.symbol_index,
                             symbol: symbol.symbol,
                         };
-                        let address = final_symbol_address(&definition, &layout).map_err(|source| {
-                            PieRuntimeError::SymbolAddress {
-                                object_index: input.object_index,
-                                rela_section_index: table.section_index,
-                                relocation_index,
-                                symbol_index: relocation.symbol_index,
-                                source,
-                            }
-                        })?;
+                        let address =
+                            final_symbol_address(&definition, &layout).map_err(|source| {
+                                PieRuntimeError::SymbolAddress {
+                                    object_index: input.object_index,
+                                    rela_section_index: table.section_index,
+                                    relocation_index,
+                                    symbol_index: relocation.symbol_index,
+                                    source,
+                                }
+                            })?;
                         (symbol.symbol, address)
                     }
                     STB_GLOBAL | STB_WEAK => {
@@ -469,14 +472,13 @@ fn collect_relative_relocations(
                 };
                 debug_assert_ne!(resolved_symbol.section_index, SHN_UNDEF);
 
-                let offset = target
-                    .address
-                    .checked_add(relocation.offset)
-                    .ok_or(PieRuntimeError::RelocationOffsetOverflow {
+                let offset = target.address.checked_add(relocation.offset).ok_or(
+                    PieRuntimeError::RelocationOffsetOverflow {
                         object_index: input.object_index,
                         section_index: table.target_section_index,
                         relocation_index,
-                    })?;
+                    },
+                )?;
                 let value = i128::from(address) + i128::from(relocation.addend);
                 let addend = i64::try_from(value).map_err(|_| {
                     PieRuntimeError::RelativeAddendOutOfRange {
@@ -587,7 +589,11 @@ fn push_movabs(bytes: &mut Vec<u8>, opcode: u8, immediate: u64) {
     bytes.extend_from_slice(&immediate.to_le_bytes());
 }
 
-fn patch_rel8(bytes: &mut [u8], displacement_index: usize, target: usize) -> Result<(), PieRuntimeError> {
+fn patch_rel8(
+    bytes: &mut [u8],
+    displacement_index: usize,
+    target: usize,
+) -> Result<(), PieRuntimeError> {
     let next = displacement_index
         .checked_add(1)
         .ok_or(PieRuntimeError::TrampolineBranchOutOfRange)?;
