@@ -433,58 +433,35 @@ fn malformed_later_input_fails_without_writing_partial_output() {
 }
 
 #[test]
-fn grouped_alloc_section_is_rejected_without_output() {
+fn duplicate_comdat_signatures_remain_fail_closed_without_output() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("comdat");
-    let source = dir.join("comdat.s");
-    let object = dir.join("comdat.o");
-    let output = dir.join("partial.o");
-
-    fs::write(
-        &source,
-        r#".section .text.comdat_fn,"axG",@progbits,comdat_fn,comdat
+    let dir = temp_dir("duplicate-comdat");
+    let source = r#".section .text.comdat_fn,"axG",@progbits,comdat_fn,comdat
 .globl comdat_fn
 .type comdat_fn,@function
 comdat_fn:
     ret
 .size comdat_fn, .-comdat_fn
-"#,
-    )
-    .unwrap();
-
-    assert!(Command::new("as")
-        .args(["--64", "-o"])
-        .arg(&object)
-        .arg(&source)
-        .status()
-        .unwrap()
-        .success());
-
-    let sections = Command::new("readelf")
-        .args(["-SW"])
-        .arg(&object)
-        .output()
-        .unwrap();
-    assert!(sections.status.success());
-    assert!(
-        String::from_utf8_lossy(&sections.stdout).contains(".group"),
-        "GNU fixture must carry SHT_GROUP metadata"
-    );
+"#;
+    let first = assemble(&dir, "comdat-first", source);
+    let second = assemble(&dir, "comdat-second", source);
+    let output = dir.join("partial.o");
 
     let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["partial", "-o"])
         .arg(&output)
-        .arg(&object)
+        .arg(&first)
+        .arg(&second)
         .output()
         .unwrap();
 
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
     assert!(
-        String::from_utf8_lossy(&result.stderr).contains("SHF_GROUP/COMDAT"),
+        String::from_utf8_lossy(&result.stderr).contains("multiple strong definitions"),
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
