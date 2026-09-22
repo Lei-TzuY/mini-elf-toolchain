@@ -53,6 +53,40 @@ fn has_tls_program_header(path: &Path) -> bool {
     (0..phnum).any(|index| read_u32(&bytes, phoff + index * phentsize) == PT_TLS)
 }
 
+fn rewrite_first_tls_symbol_as_object(path: &Path) {
+    let mut bytes = fs::read(path).unwrap();
+    let shoff = read_u64(&bytes, 40) as usize;
+    let shentsize = read_u16(&bytes, 58) as usize;
+    let shnum = read_u16(&bytes, 60) as usize;
+    let mut rewritten = false;
+
+    for section_index in 0..shnum {
+        let section = shoff + section_index * shentsize;
+        if read_u32(&bytes, section + 4) != 2 {
+            continue;
+        }
+        let offset = read_u64(&bytes, section + 24) as usize;
+        let size = read_u64(&bytes, section + 32) as usize;
+        let entry_size = read_u64(&bytes, section + 56) as usize;
+        assert!(entry_size >= 24);
+
+        for symbol in (offset..offset + size).step_by(entry_size) {
+            let info = bytes[symbol + 4];
+            if info & 0x0f == 6 {
+                bytes[symbol + 4] = (info & 0xf0) | 1;
+                rewritten = true;
+                break;
+            }
+        }
+        if rewritten {
+            break;
+        }
+    }
+
+    assert!(rewritten, "fixture did not contain an STT_TLS symbol");
+    fs::write(path, bytes).unwrap();
+}
+
 #[test]
 fn links_and_executes_initial_exec_tls_gottpoff_with_regular_got() {
     if !have_gnu_toolchain() {
@@ -226,18 +260,18 @@ fn rejects_gottpoff_against_non_tls_symbol_without_output() {
 
     fs::write(
         &source,
-        r#".section .data
-.globl not_tls
-.type not_tls,@object
-not_tls:
+        r#".section .tdata,"awT",@progbits
+.globl mutated_tls
+.type mutated_tls,@tls_object
+mutated_tls:
     .quad 1
-.size not_tls, .-not_tls
+.size mutated_tls, .-mutated_tls
 
 .section .text
 .globl _start
 .type _start,@function
 _start:
-    mov not_tls@gottpoff(%rip), %rax
+    mov mutated_tls@gottpoff(%rip), %rax
     mov $60, %eax
     xor %edi, %edi
     syscall
@@ -254,13 +288,23 @@ _start:
         .unwrap()
         .success());
 
-    let relocations = Command::new("readelf")
+    let before = Command::new("readelf")
         .args(["-rW"])
         .arg(&object)
         .output()
         .unwrap();
-    assert!(relocations.status.success());
-    assert!(String::from_utf8_lossy(&relocations.stdout).contains("R_X86_64_GOTTPOFF"));
+    assert!(before.status.success());
+    assert!(String::from_utf8_lossy(&before.stdout).contains("R_X86_64_GOTTPOFF"));
+
+    rewrite_first_tls_symbol_as_object(&object);
+
+    let after = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(after.status.success());
+    assert!(String::from_utf8_lossy(&after.stdout).contains("R_X86_64_GOTTPOFF"));
 
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
