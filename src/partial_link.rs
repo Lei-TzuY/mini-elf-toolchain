@@ -443,6 +443,10 @@ pub fn link_relocatable_objects(
             };
 
             let placement = if let Some(output_slot) = existing {
+                let output_section_index =
+                    u16::try_from(output_slot + 1).map_err(|_| PartialLinkError::TooManySections {
+                        count: output_slot + 5,
+                    })?;
                 let output = &mut output_sections[output_slot];
                 let contribution_offset =
                     align_section_contribution(output.size, section.address_alignment).ok_or(
@@ -474,11 +478,7 @@ pub fn link_relocatable_objects(
                 output.alignment = output.alignment.max(section.address_alignment);
 
                 SectionPlacement {
-                    output_section_index: u16::try_from(output_slot + 1).map_err(|_| {
-                        PartialLinkError::TooManySections {
-                            count: output_sections.len() + 4,
-                        }
-                    })?,
+                    output_section_index,
                     contribution_offset,
                 }
             } else {
