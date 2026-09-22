@@ -103,6 +103,7 @@ where
             ));
         };
         let inputs = args.collect::<Vec<_>>();
+        validate_partial_group_nesting(&inputs)?;
         let inputs = resolve_static_library_arguments(&inputs).map_err(library_search_error)?;
         if inputs.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
@@ -205,6 +206,23 @@ where
         "unknown command '{}'",
         command.to_string_lossy()
     )))
+}
+
+fn validate_partial_group_nesting(arguments: &[OsString]) -> Result<(), CliError> {
+    let mut depth = 0usize;
+    for argument in arguments {
+        if argument == START_GROUP || argument == "-(" {
+            if depth != 0 {
+                return Err(CliError::Usage(
+                    "nested --start-group is not supported".to_owned(),
+                ));
+            }
+            depth = 1;
+        } else if argument == END_GROUP || argument == "-)" {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    Ok(())
 }
 
 fn forced_undefined_error(error: ForcedUndefinedArgumentError) -> CliError {
