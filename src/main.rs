@@ -27,7 +27,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> <input|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -103,6 +103,8 @@ where
             ));
         };
         let inputs = args.collect::<Vec<_>>();
+        validate_partial_group_nesting(&inputs)?;
+        let inputs = resolve_static_library_arguments(&inputs).map_err(library_search_error)?;
         if inputs.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
@@ -204,6 +206,23 @@ where
         "unknown command '{}'",
         command.to_string_lossy()
     )))
+}
+
+fn validate_partial_group_nesting(arguments: &[OsString]) -> Result<(), CliError> {
+    let mut depth = 0usize;
+    for argument in arguments {
+        if argument == START_GROUP || argument == "-(" {
+            if depth != 0 {
+                return Err(CliError::Usage(
+                    "nested --start-group is not supported".to_owned(),
+                ));
+            }
+            depth = 1;
+        } else if argument == END_GROUP || argument == "-)" {
+            depth = depth.saturating_sub(1);
+        }
+    }
+    Ok(())
 }
 
 fn forced_undefined_error(error: ForcedUndefinedArgumentError) -> CliError {
