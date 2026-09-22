@@ -37,12 +37,20 @@ fn lists_real_archive_members_like_gnu_ar() {
     fs::write(&first_source, ".globl first\nfirst:\n  ret\n").unwrap();
     fs::write(&second_source, ".globl second\nsecond:\n  ret\n").unwrap();
     assert!(Command::new("as")
-        .args(["-o", first_object.to_str().unwrap(), first_source.to_str().unwrap()])
+        .args([
+            "-o",
+            first_object.to_str().unwrap(),
+            first_source.to_str().unwrap(),
+        ])
         .status()
         .unwrap()
         .success());
     assert!(Command::new("as")
-        .args(["-o", second_object.to_str().unwrap(), second_source.to_str().unwrap()])
+        .args([
+            "-o",
+            second_object.to_str().unwrap(),
+            second_source.to_str().unwrap(),
+        ])
         .status()
         .unwrap()
         .success());
@@ -65,7 +73,11 @@ fn lists_real_archive_members_like_gnu_ar() {
         .args(["t", archive.to_str().unwrap()])
         .output()
         .unwrap();
-    assert!(ours.status.success(), "{}", String::from_utf8_lossy(&ours.stderr));
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
     assert!(gnu.status.success());
     assert_eq!(ours.stdout, gnu.stdout);
 
@@ -85,7 +97,9 @@ fn malformed_archive_fails_without_stdout() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("truncated archive member header"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("truncated archive member header")
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
