@@ -4,7 +4,7 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: mini-elf-armap <archive>...";
+const USAGE: &str = "usage: mini-elf-armap [--] <archive>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -23,7 +23,7 @@ fn run<I>(args: I) -> Result<String, String>
 where
     I: Iterator<Item = std::ffi::OsString>,
 {
-    let inputs: Vec<_> = args.collect();
+    let mut inputs: Vec<_> = args.collect();
     if inputs.is_empty() {
         return Err(USAGE.to_owned());
     }
@@ -32,6 +32,12 @@ where
             return Err(USAGE.to_owned());
         }
         return Ok(format!("{USAGE}\n"));
+    }
+    if inputs[0] == "--" {
+        inputs.remove(0);
+        if inputs.is_empty() {
+            return Err(USAGE.to_owned());
+        }
     }
 
     let mut inspected = Vec::with_capacity(inputs.len());
