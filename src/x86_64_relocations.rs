@@ -27,17 +27,16 @@ pub const R_X86_64_SIZE64: u32 = 33;
 pub const R_X86_64_GOTPCRELX: u32 = 41;
 pub const R_X86_64_REX_GOTPCRELX: u32 = 42;
 
-pub fn is_static_pie_relocation_type(relocation_type: u32) -> bool {
+pub fn is_static_pie_pc_relative_relocation_type(relocation_type: u32) -> bool {
     matches!(
         relocation_type,
-        R_X86_64_PC32
-            | R_X86_64_PLT32
-            | R_X86_64_PC16
-            | R_X86_64_PC8
-            | R_X86_64_PC64
-            | R_X86_64_SIZE32
-            | R_X86_64_SIZE64
+        R_X86_64_PC32 | R_X86_64_PLT32 | R_X86_64_PC16 | R_X86_64_PC8 | R_X86_64_PC64
     )
+}
+
+pub fn is_static_pie_relocation_type(relocation_type: u32) -> bool {
+    is_static_pie_pc_relative_relocation_type(relocation_type)
+        || matches!(relocation_type, R_X86_64_SIZE32 | R_X86_64_SIZE64)
 }
 
 pub fn is_static_gotpcrel_type(relocation_type: u32) -> bool {
