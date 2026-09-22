@@ -298,8 +298,9 @@ _start:
 
     let ours = dir.join("absolute-pie");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
-        .args(["link", "--pie", "-o"])
+        .args(["link", "-o"])
         .arg(&ours)
+        .arg("--pie")
         .arg(&object)
         .output()
         .unwrap();
