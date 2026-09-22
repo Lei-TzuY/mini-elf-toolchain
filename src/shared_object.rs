@@ -194,11 +194,11 @@ pub fn link_shared_object(
         .iter()
         .map(LinkerInputObject::validated_object)
         .collect::<Vec<_>>();
-    let resolved = resolve_validated_objects_with_common(&validated)
-        .map_err(SharedObjectError::Symbols)?;
+    let resolved =
+        resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
 
-    let relocated =
-        relocate_allocatable_sections(inputs, 0, page_alignment).map_err(SharedObjectError::Relocation)?;
+    let relocated = relocate_allocatable_sections(inputs, 0, page_alignment)
+        .map_err(SharedObjectError::Relocation)?;
     let layout = relocated
         .iter()
         .map(|section| LaidOutSection {
@@ -213,8 +213,8 @@ pub fn link_shared_object(
         .definitions
         .values()
         .map(|definition| {
-            let value =
-                final_symbol_address(definition, &layout).map_err(SharedObjectError::SymbolAddress)?;
+            let value = final_symbol_address(definition, &layout)
+                .map_err(SharedObjectError::SymbolAddress)?;
             Ok(ExportSymbol {
                 name: definition.name.clone(),
                 info: definition.symbol.info,
@@ -260,7 +260,8 @@ pub fn link_shared_object(
         section_type: SHT_PROGBITS,
         flags: SHF_ALLOC | SHF_WRITE,
         address: metadata_address,
-        size: u64::try_from(metadata.bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?,
+        size: u64::try_from(metadata.bytes.len())
+            .map_err(|_| SharedObjectError::MetadataTooLarge)?,
         alignment: 8,
         bytes: metadata.bytes,
     });
@@ -319,12 +320,16 @@ fn validate_inputs(inputs: &[LinkerInputObject<'_>]) -> Result<(), SharedObjectE
         }
 
         for table in &input.object.symbol_tables {
-            let symbols =
-                named_symbols_from_table(input.file, &input.object.sections, table, input.object_index)
-                    .map_err(|source| SharedObjectError::ObjectSymbols {
-                        object_index: input.object_index,
-                        source,
-                    })?;
+            let symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                table,
+                input.object_index,
+            )
+            .map_err(|source| SharedObjectError::ObjectSymbols {
+                object_index: input.object_index,
+                source,
+            })?;
             for symbol in symbols {
                 let binding = symbol.symbol.info >> 4;
                 if binding == STB_LOCAL {
@@ -461,10 +466,7 @@ fn build_dynamic_metadata(
     })
 }
 
-fn checked_metadata_address(
-    base_address: u64,
-    offset: usize,
-) -> Result<u64, SharedObjectError> {
+fn checked_metadata_address(base_address: u64, offset: usize) -> Result<u64, SharedObjectError> {
     base_address
         .checked_add(u64::try_from(offset).map_err(|_| SharedObjectError::MetadataTooLarge)?)
         .ok_or(SharedObjectError::AddressOverflow)
