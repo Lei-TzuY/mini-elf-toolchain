@@ -8,7 +8,8 @@ use crate::resolve::{NamedSymbol, SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_L
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
 use crate::x86_64_relocations::{
     is_static_got_base_type, is_static_got_entry_type, is_static_got_offset_type,
-    is_static_gotoff_type, is_static_gotpcrel_type, R_X86_64_SIZE32, R_X86_64_SIZE64,
+    is_static_gotoff_type, is_static_gotpcrel_type, is_static_tls_gotpcrel_type,
+    R_X86_64_SIZE32, R_X86_64_SIZE64,
 };
 
 const R_X86_64_NONE: u32 = 0;
@@ -42,6 +43,11 @@ pub enum LinkRelocationError {
         name: Vec<u8>,
     },
     MissingGotEntry {
+        relocation_index: usize,
+        symbol_index: u32,
+        name: Vec<u8>,
+    },
+    MissingTlsGotEntry {
         relocation_index: usize,
         symbol_index: u32,
         name: Vec<u8>,
@@ -109,6 +115,15 @@ impl fmt::Display for LinkRelocationError {
                 "relocation {relocation_index} symbol {symbol_index} ({:?}) has no synthetic GOT entry",
                 String::from_utf8_lossy(name)
             ),
+            Self::MissingTlsGotEntry {
+                relocation_index,
+                symbol_index,
+                name,
+            } => write!(
+                f,
+                "relocation {relocation_index} symbol {symbol_index} ({:?}) has no synthetic TLS GOT entry",
+                String::from_utf8_lossy(name)
+            ),
             Self::LocalSymbolAddress {
                 relocation_index,
                 symbol_index,
@@ -132,7 +147,8 @@ impl std::error::Error for LinkRelocationError {
             | Self::UnsupportedBinding { .. }
             | Self::MissingGlobalAddress { .. }
             | Self::MissingGlobalDefinition { .. }
-            | Self::MissingGotEntry { .. } => None,
+            | Self::MissingGotEntry { .. }
+            | Self::MissingTlsGotEntry { .. } => None,
         }
     }
 }
@@ -148,6 +164,7 @@ pub struct ResolvedGlobalSymbols<'a> {
     pub addresses: &'a BTreeMap<Vec<u8>, u64>,
     pub definitions: &'a BTreeMap<Vec<u8>, SymbolDefinition>,
     pub got_entries: &'a BTreeMap<Vec<u8>, u64>,
+    pub tls_got_entries: &'a BTreeMap<Vec<u8>, u64>,
 }
 
 pub fn apply_rela_table_with_resolved_symbols(
@@ -161,6 +178,7 @@ pub fn apply_rela_table_with_resolved_symbols(
 ) -> Result<(), LinkRelocationError> {
     let global_definitions = BTreeMap::new();
     let got_entries = BTreeMap::new();
+    let tls_got_entries = BTreeMap::new();
     apply_rela_table_with_resolved_symbols_and_definitions(
         section,
         section_address,
@@ -171,6 +189,7 @@ pub fn apply_rela_table_with_resolved_symbols(
             addresses: global_addresses,
             definitions: &global_definitions,
             got_entries: &got_entries,
+            tls_got_entries: &tls_got_entries,
         },
         layout,
     )
@@ -312,6 +331,12 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
                         && symbol.symbol_index == relocation.symbol_index as usize
                 })?;
                 globals.got_entries.get(symbol.name).copied()
+            } else if is_static_tls_gotpcrel_type(relocation.relocation_type) {
+                let symbol = symbols.iter().find(|symbol| {
+                    symbol.table_section_index == table.symbol_table_index
+                        && symbol.symbol_index == relocation.symbol_index as usize
+                })?;
+                globals.tls_got_entries.get(symbol.name).copied()
             } else {
                 Some(values.address)
             }
@@ -331,7 +356,18 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
                 symbol_index,
             } => {
                 if let Some(relocation) = table.relocations.get(*relocation_index) {
-                    if is_static_got_entry_type(relocation.relocation_type) {
+                    if is_static_tls_gotpcrel_type(relocation.relocation_type) {
+                        if let Some(symbol) = symbols.iter().find(|symbol| {
+                            symbol.table_section_index == table.symbol_table_index
+                                && symbol.symbol_index == *symbol_index as usize
+                        }) {
+                            return LinkRelocationError::MissingTlsGotEntry {
+                                relocation_index: *relocation_index,
+                                symbol_index: *symbol_index,
+                                name: symbol.name.to_vec(),
+                            };
+                        }
+                    } else if is_static_got_entry_type(relocation.relocation_type) {
                         if let Some(symbol) = symbols.iter().find(|symbol| {
                             symbol.table_section_index == table.symbol_table_index
                                 && symbol.symbol_index == *symbol_index as usize
