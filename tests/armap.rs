@@ -127,6 +127,60 @@ fn armap_traverses_multiple_archives_in_order() {
 }
 
 #[test]
+fn armap_option_terminator_allows_help_named_archive() {
+    if !tool_available("as") || !tool_available("ar") || !tool_available("nm") {
+        return;
+    }
+    let dir = temp_dir("armap-option-terminator");
+    let assembly = dir.join("member.s");
+    let object = dir.join("member.o");
+    let archive = dir.join("-h");
+    fs::write(
+        &assembly,
+        ".text\n.globl option_symbol\noption_symbol:\n  ret\n",
+    )
+    .unwrap();
+    assert!(Command::new("as")
+        .arg("-o")
+        .arg(&object)
+        .arg(&assembly)
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("ar")
+        .args(["rcs"])
+        .arg(&archive)
+        .arg(&object)
+        .status()
+        .unwrap()
+        .success());
+
+    let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-armap"))
+        .current_dir(&dir)
+        .args(["--", "-h"])
+        .output()
+        .unwrap();
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
+    let gnu = Command::new("nm")
+        .current_dir(&dir)
+        .args(["-s", "--", "-h"])
+        .output()
+        .unwrap();
+    assert!(gnu.status.success());
+    let gnu_stdout = String::from_utf8_lossy(&gnu.stdout);
+    let gnu_index = gnu_stdout
+        .split("\n\n")
+        .next()
+        .expect("GNU nm should print an archive index");
+    assert_eq!(String::from_utf8_lossy(&ours.stdout).trim_end(), gnu_index);
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn armap_rejects_malformed_index_without_partial_stdout() {
     let dir = temp_dir("armap-malformed");
     let archive = dir.join("bad.a");
