@@ -261,3 +261,71 @@ fn pie_and_image_base_are_mutually_exclusive_before_input_io() {
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn static_pie_rejects_pc_relative_relocation_to_absolute_symbol() {
+    if !have_gnu_tools() {
+        return;
+    }
+
+    let dir = temp_dir("absolute-pcrel");
+    let object = assemble(
+        &dir,
+        "absolute-pcrel",
+        r#".globl absolute_target
+.set absolute_target, 0x1234
+
+.section .text
+.globl _start
+.type _start,@function
+_start:
+    lea absolute_target(%rip), %rax
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+.size _start, .-_start
+"#,
+    );
+
+    let symbols = Command::new("readelf")
+        .args(["-sW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(symbols.status.success());
+    let symbols = String::from_utf8_lossy(&symbols.stdout);
+    assert!(
+        symbols.contains("ABS") && symbols.contains("absolute_target"),
+        "fixture must define absolute_target as SHN_ABS: {symbols}"
+    );
+
+    let relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(relocations.status.success());
+    let relocations = String::from_utf8_lossy(&relocations.stdout);
+    assert!(
+        relocations.contains("R_X86_64_PC32") && relocations.contains("absolute_target"),
+        "fixture must carry a PC-relative relocation to the absolute symbol: {relocations}"
+    );
+
+    let output = dir.join("must-not-exist");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--pie")
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(stderr.contains("SHN_ABS"));
+    assert!(stderr.contains("load-bias invariant"));
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
