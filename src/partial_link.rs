@@ -959,8 +959,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 .rela_tables
                 .iter()
                 .filter(move |table| {
-                    !comdat_selection.discarded_sections[input_index]
-                        .contains(&table.section_index)
+                    !comdat_selection.discarded_sections[input_index].contains(&table.section_index)
                 })
                 .flat_map(move |table| {
                     table.relocations.iter().map(move |relocation| {
@@ -1011,8 +1010,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 .to_vec();
             let discarded_definition = symbol.section_index != SHN_UNDEF
                 && symbol.section_index < SHN_LORESERVE
-                && comdat_selection.discarded_sections[input_index]
-                    .contains(&symbol.section_index);
+                && comdat_selection.discarded_sections[input_index].contains(&symbol.section_index);
             let source = (input_index, table.section_index, symbol_index);
             if discarded_definition
                 && (binding == STB_LOCAL || !surviving_relocation_symbols.contains(&source))
