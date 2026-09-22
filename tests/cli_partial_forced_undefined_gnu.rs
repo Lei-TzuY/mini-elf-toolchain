@@ -316,7 +316,7 @@ fn empty_forced_root_is_rejected_before_input_io() {
 }
 
 #[test]
-fn forced_root_promotes_same_name_weak_undefined_like_gnu_ld_r() {
+fn forced_root_preserves_same_name_weak_undefined_like_gnu_ld_r() {
     if !have_gnu_tools() {
         return;
     }
@@ -367,10 +367,8 @@ _start:
 
     assert_eq!(globals(&ours), globals(&gnu));
     let records = globals(&ours);
-    assert!(records.iter().any(|line| line == "U optional_hook"));
-    assert!(!records
-        .iter()
-        .any(|line| line.ends_with(" w optional_hook")));
+    assert!(records.iter().any(|line| line == "w optional_hook"));
+    assert!(!records.iter().any(|line| line == "U optional_hook"));
 
     let _ = fs::remove_dir_all(dir);
 }
