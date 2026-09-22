@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::process::ExitCode;
 
-const USAGE: &str = "usage: mini-elf-ar t <archive> [member...]";
+const USAGE: &str = "usage: mini-elf-ar t [--] <archive> [member...]";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -36,7 +36,10 @@ where
         ));
     }
 
-    let input = args.next().ok_or_else(|| USAGE.to_owned())?;
+    let mut input = args.next().ok_or_else(|| USAGE.to_owned())?;
+    if input == "--" {
+        input = args.next().ok_or_else(|| USAGE.to_owned())?;
+    }
     let selectors = args
         .map(|selector| {
             selector
