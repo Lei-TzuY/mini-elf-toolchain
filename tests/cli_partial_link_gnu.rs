@@ -151,8 +151,9 @@ fn partial_output_is_consumable_by_mini_and_gnu_linkers() {
         .output()
         .unwrap();
     assert!(header.status.success());
-    assert!(String::from_utf8_lossy(&header.stdout)
-        .contains("Type:                              REL"));
+    assert!(
+        String::from_utf8_lossy(&header.stdout).contains("Type:                              REL")
+    );
 
     let relocations = Command::new("readelf")
         .args(["-rW"])
@@ -253,11 +254,7 @@ fn malformed_later_input_fails_without_writing_partial_output() {
     }
 
     let dir = temp_dir("malformed");
-    let valid = assemble(
-        &dir,
-        "valid",
-        ".text\n.globl valid\nvalid:\n  ret\n",
-    );
+    let valid = assemble(&dir, "valid", ".text\n.globl valid\nvalid:\n  ret\n");
     let invalid = dir.join("invalid.o");
     fs::write(&invalid, b"not an ELF object").unwrap();
     let output = dir.join("partial.o");
