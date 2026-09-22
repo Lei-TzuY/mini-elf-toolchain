@@ -435,7 +435,12 @@ pub fn link_relocatable_objects(
 
             let name = names[section_index].clone();
             let data = section_bytes(input.file, section);
-            let merge_key = (name.clone(), section.section_type, section.flags, section.entry_size);
+            let merge_key = (
+                name.clone(),
+                section.section_type,
+                section.flags,
+                section.entry_size,
+            );
             let existing = if name.as_slice() == b".text" {
                 coalesced_text_sections.get(&merge_key).copied()
             } else {
@@ -443,10 +448,11 @@ pub fn link_relocatable_objects(
             };
 
             let placement = if let Some(output_slot) = existing {
-                let output_section_index =
-                    u16::try_from(output_slot + 1).map_err(|_| PartialLinkError::TooManySections {
+                let output_section_index = u16::try_from(output_slot + 1).map_err(|_| {
+                    PartialLinkError::TooManySections {
                         count: output_slot + 5,
-                    })?;
+                    }
+                })?;
                 let output = &mut output_sections[output_slot];
                 let contribution_offset =
                     align_section_contribution(output.size, section.address_alignment).ok_or(
@@ -463,12 +469,13 @@ pub fn link_relocatable_objects(
                 )?;
 
                 if section.section_type != SHT_NOBITS {
-                    let contribution_offset = usize::try_from(contribution_offset).map_err(|_| {
-                        PartialLinkError::SectionContributionOverflow {
-                            input_index,
-                            section_index: section_index_u16,
-                        }
-                    })?;
+                    let contribution_offset =
+                        usize::try_from(contribution_offset).map_err(|_| {
+                            PartialLinkError::SectionContributionOverflow {
+                                input_index,
+                                section_index: section_index_u16,
+                            }
+                        })?;
                     if output.data.len() < contribution_offset {
                         output.data.resize(contribution_offset, 0);
                     }
