@@ -147,7 +147,14 @@ _start:
 
     let gnu = dir.join("gnu-pie");
     let gnu_link = Command::new("ld")
-        .args(["-pie", "--no-dynamic-linker", "-Ttext=0", "-e", "_start", "-o"])
+        .args([
+            "-pie",
+            "--no-dynamic-linker",
+            "-Ttext=0",
+            "-e",
+            "_start",
+            "-o",
+        ])
         .arg(&gnu)
         .arg(&object)
         .output()
