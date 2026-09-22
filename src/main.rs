@@ -27,7 +27,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> <input|--start-group|--end-group>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> <input|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -288,11 +288,7 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
 
 fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError> {
     for argument in paths {
-        if argument == WHOLE_ARCHIVE
-            || argument == NO_WHOLE_ARCHIVE
-            || argument == PUSH_STATE
-            || argument == POP_STATE
-        {
+        if argument == PUSH_STATE || argument == POP_STATE {
             return Err(CliError::Usage(format!(
                 "'{}' is not supported by partial linking",
                 argument.to_string_lossy()
@@ -307,7 +303,11 @@ fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliErr
         .map(|input| {
             let file = &loaded.files[input.file_index];
             if file.starts_with(ARCHIVE_MAGIC) {
-                OrderedLinkInput::Archive(file)
+                if input.whole_archive {
+                    OrderedLinkInput::WholeArchive(file)
+                } else {
+                    OrderedLinkInput::Archive(file)
+                }
             } else {
                 OrderedLinkInput::Object(file)
             }
