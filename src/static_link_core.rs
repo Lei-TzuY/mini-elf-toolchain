@@ -11,12 +11,14 @@ use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
 use crate::permission_layout::SHF_TLS;
 use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
-use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
+use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
 use crate::tls::{
     inject_static_tls_program_header, relocate_allocatable_sections_with_static_tls,
     StaticTlsProgramHeaderError, StaticTlsRelocationError,
 };
-use crate::x86_64_relocations::is_static_pie_relocation_type;
+use crate::x86_64_relocations::{
+    is_static_pie_pc_relative_relocation_type, is_static_pie_relocation_type,
+};
 
 #[derive(Debug)]
 pub enum StaticLinkError {
@@ -40,6 +42,12 @@ pub enum StaticLinkError {
     PositionIndependentTlsSection {
         object_index: usize,
         section_index: u16,
+    },
+    PositionIndependentAbsoluteSymbol {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        symbol_index: u32,
     },
 }
 
@@ -77,6 +85,15 @@ impl fmt::Display for StaticLinkError {
                 f,
                 "object {object_index} section {section_index} uses SHF_TLS; bounded position-independent static linking does not provide runtime TLS initialization"
             ),
+            Self::PositionIndependentAbsoluteSymbol {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                symbol_index,
+            } => write!(
+                f,
+                "object {object_index} RELA section {rela_section_index} relocation {relocation_index} references SHN_ABS symbol {symbol_index} with a PC-relative relocation; the result is not load-bias invariant"
+            ),
         }
     }
 }
@@ -93,7 +110,8 @@ impl std::error::Error for StaticLinkError {
             Self::TlsProgramHeader(source) => Some(source),
             Self::MissingEntrySymbol { .. }
             | Self::PositionIndependentRelocation { .. }
-            | Self::PositionIndependentTlsSection { .. } => None,
+            | Self::PositionIndependentTlsSection { .. }
+            | Self::PositionIndependentAbsoluteSymbol { .. } => None,
         }
     }
 }
@@ -145,6 +163,12 @@ fn validate_position_independent_inputs(
             }
         }
         for table in &input.object.rela_tables {
+            let symbol_table = input
+                .object
+                .symbol_tables
+                .iter()
+                .find(|candidate| candidate.section_index == table.symbol_table_index)
+                .expect("validated RELA table references a validated symbol table");
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 if !is_static_pie_relocation_type(relocation.relocation_type) {
                     return Err(StaticLinkError::PositionIndependentRelocation {
@@ -152,6 +176,16 @@ fn validate_position_independent_inputs(
                         rela_section_index: table.section_index,
                         relocation_index,
                         relocation_type: relocation.relocation_type,
+                    });
+                }
+                if is_static_pie_pc_relative_relocation_type(relocation.relocation_type)
+                    && symbol_table.symbols[relocation.symbol_index as usize].section_index == SHN_ABS
+                {
+                    return Err(StaticLinkError::PositionIndependentAbsoluteSymbol {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        symbol_index: relocation.symbol_index,
                     });
                 }
             }
