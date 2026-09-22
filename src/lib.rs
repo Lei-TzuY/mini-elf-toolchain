@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod archive;
+pub mod archive_extract;
 pub mod archive_index;
 pub mod archive_lazy;
 pub mod elf64;

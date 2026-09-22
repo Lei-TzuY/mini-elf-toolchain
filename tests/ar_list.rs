@@ -201,7 +201,9 @@ fn option_terminator_requires_archive_operand() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("usage: mini-elf-ar t [--] <archive>"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("usage: mini-elf-ar <t|x> [--] <archive>")
+    );
 }
 
 #[test]
@@ -225,10 +227,10 @@ fn malformed_archive_fails_without_stdout() {
 #[test]
 fn rejects_unsupported_operation_before_reading_input() {
     let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-ar"))
-        .args(["x", "definitely-missing.a"])
+        .args(["r", "definitely-missing.a"])
         .output()
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("only 't' is supported"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("only 't' and 'x' are supported"));
 }
