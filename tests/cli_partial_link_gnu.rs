@@ -47,6 +47,54 @@ fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
     object
 }
 
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn rewrite_first_defined_global_symbol_to_shn_xindex(path: &Path) {
+    let mut bytes = fs::read(path).unwrap();
+    let shoff = read_u64(&bytes, 40) as usize;
+    let shentsize = read_u16(&bytes, 58) as usize;
+    let shnum = read_u16(&bytes, 60) as usize;
+    let mut rewritten = false;
+
+    for section_index in 0..shnum {
+        let section = shoff + section_index * shentsize;
+        if read_u32(&bytes, section + 4) != 2 {
+            continue;
+        }
+        let offset = read_u64(&bytes, section + 24) as usize;
+        let size = read_u64(&bytes, section + 32) as usize;
+        let entry_size = read_u64(&bytes, section + 56) as usize;
+        assert!(entry_size >= 24);
+
+        for symbol in (offset..offset + size).step_by(entry_size) {
+            let info = bytes[symbol + 4];
+            let binding = info >> 4;
+            let section_index = read_u16(&bytes, symbol + 6);
+            if binding == 1 && section_index != 0 && section_index < 0xff00 {
+                bytes[symbol + 6..symbol + 8].copy_from_slice(&0xffff_u16.to_le_bytes());
+                rewritten = true;
+                break;
+            }
+        }
+        if rewritten {
+            break;
+        }
+    }
+
+    assert!(rewritten, "fixture did not contain a defined global symbol");
+    fs::write(path, bytes).unwrap();
+}
+
 fn global_defined_names(path: &Path) -> BTreeSet<String> {
     let output = Command::new("nm")
         .args(["-g", "--defined-only"])
@@ -328,6 +376,41 @@ comdat_fn:
     assert!(result.stdout.is_empty());
     assert!(
         String::from_utf8_lossy(&result.stderr).contains("SHF_GROUP/COMDAT"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn shn_xindex_symbol_is_rejected_without_output() {
+    if !command_reports("as", "GNU assembler") {
+        return;
+    }
+
+    let dir = temp_dir("shn-xindex");
+    let object = assemble(
+        &dir,
+        "xindex",
+        ".text\n.globl xindex_target\n.type xindex_target,@function\nxindex_target:\n  ret\n.size xindex_target, .-xindex_target\n",
+    );
+    let output = dir.join("partial.o");
+
+    rewrite_first_defined_global_symbol_to_shn_xindex(&object);
+
+    let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&output)
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("SHN_XINDEX"),
         "{}",
         String::from_utf8_lossy(&result.stderr)
     );
