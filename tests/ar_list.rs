@@ -85,6 +85,70 @@ fn lists_real_archive_members_like_gnu_ar() {
 }
 
 #[test]
+fn selects_named_member_like_gnu_ar() {
+    if !command_available("as") || !command_available("ar") {
+        return;
+    }
+
+    let dir = temp_dir();
+    fs::create_dir_all(&dir).unwrap();
+    let first_source = dir.join("first.s");
+    let second_source = dir.join("second.s");
+    let first_object = dir.join("first.o");
+    let second_object = dir.join("second.o");
+    let archive = dir.join("libselected.a");
+    fs::write(&first_source, ".globl first\nfirst:\n  ret\n").unwrap();
+    fs::write(&second_source, ".globl second\nsecond:\n  ret\n").unwrap();
+    assert!(Command::new("as")
+        .args([
+            "-o",
+            first_object.to_str().unwrap(),
+            first_source.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("as")
+        .args([
+            "-o",
+            second_object.to_str().unwrap(),
+            second_source.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("ar")
+        .args([
+            "rcs",
+            archive.to_str().unwrap(),
+            first_object.to_str().unwrap(),
+            second_object.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap()
+        .success());
+
+    let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-ar"))
+        .args(["t", archive.to_str().unwrap(), "second.o"])
+        .output()
+        .unwrap();
+    let gnu = Command::new("ar")
+        .args(["t", archive.to_str().unwrap(), "second.o"])
+        .output()
+        .unwrap();
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
+    assert!(gnu.status.success());
+    assert_eq!(ours.stdout, gnu.stdout);
+    assert_eq!(ours.stdout, b"second.o\n");
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn malformed_archive_fails_without_stdout() {
     let dir = temp_dir();
     fs::create_dir_all(&dir).unwrap();
