@@ -181,15 +181,6 @@ pub fn link_static_executable_with_map(
         .map(|artifact| artifact.output)
 }
 
-pub fn link_static_position_independent_executable_with_map(
-    inputs: &[LinkerInputObject<'_>],
-    page_alignment: u64,
-    entry_symbol: &[u8],
-) -> Result<StaticLinkOutput, StaticLinkError> {
-    link_static_position_independent_artifact_with_map(inputs, page_alignment, entry_symbol)
-        .map(|artifact| artifact.output)
-}
-
 pub(crate) fn link_static_position_independent_artifact_with_map(
     inputs: &[LinkerInputObject<'_>],
     page_alignment: u64,
@@ -300,7 +291,7 @@ fn link_static_image_artifact(
                 source => StaticLinkError::TlsRelocation(source),
             })?;
     let tls_layout = relocated_output.tls_layout;
-    let mut relocated = relocated_output.sections;
+    let relocated = relocated_output.sections;
 
     let validated_objects = inputs
         .iter()
