@@ -701,6 +701,9 @@ struct SectionPlacement {
 struct PendingRelaSection {
     name: Vec<u8>,
     target_section_index: u16,
+    flags: u64,
+    alignment: u64,
+    entry_size: u64,
     relocations: Vec<Elf64Rela>,
     sources: Vec<(usize, u16)>,
 }
@@ -1109,7 +1112,8 @@ pub fn link_relocatable_objects_with_forced_undefined(
     });
 
     let mut pending_rela_sections = Vec::<PendingRelaSection>::new();
-    let mut pending_rela_by_target_and_name = BTreeMap::<(u16, Vec<u8>), usize>::new();
+    let mut pending_rela_by_target_and_metadata =
+        BTreeMap::<(u16, Vec<u8>, u64, u64, u64), usize>::new();
 
     for (input_index, input) in parsed.iter().enumerate() {
         let names = section_names(input_index, input)?;
@@ -1174,8 +1178,16 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 .unwrap_or_else(|| {
                     format!(".rela.partial.{input_index}.{}", table.section_index).into_bytes()
                 });
-            let key = (target.output_section_index, name.clone());
-            if let Some(&pending_index) = pending_rela_by_target_and_name.get(&key) {
+            let input_rela_section =
+                &input.object.sections[usize::from(table.section_index)];
+            let key = (
+                target.output_section_index,
+                name.clone(),
+                input_rela_section.flags,
+                input_rela_section.address_alignment,
+                input_rela_section.entry_size,
+            );
+            if let Some(&pending_index) = pending_rela_by_target_and_metadata.get(&key) {
                 pending_rela_sections[pending_index]
                     .relocations
                     .extend(relocations);
@@ -1184,10 +1196,13 @@ pub fn link_relocatable_objects_with_forced_undefined(
                     .push((input_index, table.section_index));
             } else {
                 let pending_index = pending_rela_sections.len();
-                pending_rela_by_target_and_name.insert(key, pending_index);
+                pending_rela_by_target_and_metadata.insert(key, pending_index);
                 pending_rela_sections.push(PendingRelaSection {
                     name,
                     target_section_index: target.output_section_index,
+                    flags: input_rela_section.flags,
+                    alignment: input_rela_section.address_alignment,
+                    entry_size: input_rela_section.entry_size,
                     relocations,
                     sources: vec![(input_index, table.section_index)],
                 });
@@ -1205,12 +1220,12 @@ pub fn link_relocatable_objects_with_forced_undefined(
         output_sections.push(OutputSection {
             name: pending.name,
             section_type: SHT_RELA,
-            flags: 0,
+            flags: pending.flags,
             size: data.len() as u64,
             link: u32::from(symtab_index),
             info: u32::from(pending.target_section_index),
-            alignment: 8,
-            entry_size: ELF64_RELA_SIZE,
+            alignment: pending.alignment,
+            entry_size: pending.entry_size,
             data,
             offset: 0,
         });
