@@ -778,7 +778,10 @@ pub fn link_relocatable_objects_with_forced_undefined(
             u32::try_from(output_symbols.len()).map_err(|_| PartialLinkError::TooManySymbols {
                 count: symbol_count,
             })?;
-        symbol_maps.insert(pending.source, output_index);
+        let source = pending
+            .source
+            .expect("local symbols originate from input symbol tables");
+        symbol_maps.insert(source, output_index);
         output_symbols.push(symbol);
     }
 
