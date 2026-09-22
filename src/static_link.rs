@@ -1,6 +1,9 @@
 use crate::executable_writer::ExecutableImage;
 use crate::linker_input::LinkerInputObject;
-use crate::program_headers::map_runtime_program_headers;
+use crate::program_headers::{
+    map_runtime_program_headers, map_runtime_program_headers_with_dynamic,
+    RuntimeDynamicProgramHeader,
+};
 
 pub use crate::static_link_core::{StaticLinkError, StaticLinkOutput};
 
@@ -24,12 +27,25 @@ pub fn link_static_position_independent_executable_with_map(
     page_alignment: u64,
     entry_symbol: &[u8],
 ) -> Result<StaticLinkOutput, StaticLinkError> {
-    let mut output = crate::static_link_core::link_static_position_independent_executable_with_map(
-        inputs,
-        page_alignment,
-        entry_symbol,
-    )?;
-    output.image = map_runtime_program_headers(output.image).map_err(StaticLinkError::Write)?;
+    let artifact =
+        crate::static_link_core::link_static_position_independent_artifact_with_map(
+            inputs,
+            page_alignment,
+            entry_symbol,
+        )?;
+    let mut output = artifact.output;
+    output.image = if let Some(dynamic) = artifact.dynamic {
+        map_runtime_program_headers_with_dynamic(
+            output.image,
+            RuntimeDynamicProgramHeader {
+                address: dynamic.address,
+                size: dynamic.size,
+            },
+        )
+    } else {
+        map_runtime_program_headers(output.image)
+    }
+    .map_err(StaticLinkError::Write)?;
     synchronize_link_map_segments(&mut output);
     Ok(output)
 }
