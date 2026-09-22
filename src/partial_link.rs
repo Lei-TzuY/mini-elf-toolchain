@@ -122,6 +122,11 @@ pub enum PartialLinkError {
         member_section_index: u16,
         section_type: u32,
     },
+    OrphanGroupedNonAllocSection {
+        input_index: usize,
+        section_index: u16,
+        section_type: u32,
+    },
     MissingGroupedRelaTable {
         input_index: usize,
         group_section_index: u16,
@@ -392,6 +397,14 @@ impl fmt::Display for PartialLinkError {
                 f,
                 "partial-link input {input_index} COMDAT group {group_section_index} contains unsupported non-allocatable member section {member_section_index} of type {section_type}"
             ),
+            Self::OrphanGroupedNonAllocSection {
+                input_index,
+                section_index,
+                section_type,
+            } => write!(
+                f,
+                "partial-link input {input_index} non-allocatable section {section_index} of type {section_type} has SHF_GROUP without membership in a supported SHT_GROUP"
+            ),
             Self::MissingGroupedRelaTable {
                 input_index,
                 group_section_index,
@@ -619,6 +632,7 @@ impl PartialLinkError {
             | Self::InvalidGroupMember { input_index, .. }
             | Self::GroupMemberMissingFlag { input_index, .. }
             | Self::UnsupportedNonAllocGroupMember { input_index, .. }
+            | Self::OrphanGroupedNonAllocSection { input_index, .. }
             | Self::MissingGroupedRelaTable { input_index, .. }
             | Self::GroupedRelaSymbolTableMismatch { input_index, .. }
             | Self::GroupedRelaTargetOutsideGroup { input_index, .. }
@@ -1697,6 +1711,23 @@ fn parse_comdat_groups(
             alignment: section.address_alignment,
             entry_size: section.entry_size,
         });
+    }
+
+    for (section_index, section) in input.object.sections.iter().enumerate() {
+        if section.flags & SHF_GROUP == 0 || section.flags & SHF_ALLOC != 0 {
+            continue;
+        }
+        let section_index =
+            u16::try_from(section_index).map_err(|_| PartialLinkError::TooManySections {
+                count: input.object.sections.len(),
+            })?;
+        if !member_sections.contains(&section_index) {
+            return Err(PartialLinkError::OrphanGroupedNonAllocSection {
+                input_index,
+                section_index,
+                section_type: section.section_type,
+            });
+        }
     }
 
     Ok(ParsedComdatGroups {
