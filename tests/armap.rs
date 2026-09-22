@@ -84,8 +84,6 @@ fn armap_rejects_malformed_index_without_partial_stdout() {
         .unwrap();
     assert!(!output.status.success());
     assert!(output.stdout.is_empty(), "stdout must remain atomic");
-    assert!(
-        String::from_utf8_lossy(&output.stderr).contains("truncated archive symbol count")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("truncated archive symbol count"));
     let _ = fs::remove_dir_all(dir);
 }
