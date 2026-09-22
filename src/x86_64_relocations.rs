@@ -13,6 +13,7 @@ pub const R_X86_64_16: u32 = 12;
 pub const R_X86_64_PC16: u32 = 13;
 pub const R_X86_64_8: u32 = 14;
 pub const R_X86_64_PC8: u32 = 15;
+pub const R_X86_64_GOTTPOFF: u32 = 22;
 pub const R_X86_64_PC64: u32 = 24;
 pub const R_X86_64_GOTOFF64: u32 = 25;
 pub const R_X86_64_GOTPC32: u32 = 26;
@@ -31,6 +32,10 @@ pub fn is_static_gotpcrel_type(relocation_type: u32) -> bool {
         relocation_type,
         R_X86_64_GOTPCREL | R_X86_64_GOTPCREL64 | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
     )
+}
+
+pub fn is_static_tls_gotpcrel_type(relocation_type: u32) -> bool {
+    relocation_type == R_X86_64_GOTTPOFF
 }
 
 pub fn is_static_got_offset_type(relocation_type: u32) -> bool {
@@ -206,6 +211,7 @@ pub fn evaluate_relocation(
         | R_X86_64_PLT32
         | R_X86_64_GOTPC32
         | R_X86_64_GOTPCREL
+        | R_X86_64_GOTTPOFF
         | R_X86_64_GOTPCRELX
         | R_X86_64_REX_GOTPCRELX => {
             let value = symbol_value + addend - place;
