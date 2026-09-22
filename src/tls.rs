@@ -14,9 +14,7 @@ use crate::relocated_sections::{
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{SymbolDefinition, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
-use crate::x86_64_relocations::R_X86_64_GOTTPOFF;
-
-pub const R_X86_64_TPOFF32: u32 = 23;
+use crate::x86_64_relocations::{R_X86_64_GOTTPOFF, R_X86_64_TPOFF32};
 const STT_TLS: u8 = 6;
 const ELF64_EHDR_SIZE: usize = 64;
 const ELF64_PHDR_SIZE: usize = 56;
