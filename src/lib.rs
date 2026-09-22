@@ -22,6 +22,7 @@ pub mod load_segments;
 pub mod object_symbols;
 pub mod ordered_inputs;
 pub mod output_image;
+pub mod partial_link;
 pub mod permission_layout;
 pub mod preload;
 mod program_headers;

@@ -9,6 +9,7 @@ use mini_elf_toolchain::library_search::{resolve_static_library_arguments, Libra
 use mini_elf_toolchain::ordered_inputs::{
     prepare_ordered_link_inputs_with_forced_undefined, OrderedLinkInput, OrderedLinkInputError,
 };
+use mini_elf_toolchain::partial_link::{link_relocatable_objects, PartialLinkInput};
 use mini_elf_toolchain::static_link::link_static_executable_with_map;
 use std::env;
 use std::ffi::OsString;
@@ -25,7 +26,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> <input>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -78,6 +79,33 @@ where
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
         return validate_relocatable_files(&inputs);
+    }
+
+    if command == "partial" {
+        let output_flag = args
+            .next()
+            .ok_or_else(|| CliError::Usage("missing -o <output>".to_owned()))?;
+        let output = if output_flag == "-o" {
+            args.next()
+                .ok_or_else(|| CliError::Usage("missing output path after -o".to_owned()))?
+        } else if let Some(path) = output_flag
+            .to_str()
+            .and_then(|argument| argument.strip_prefix("--output="))
+        {
+            if path.is_empty() {
+                return Err(CliError::Usage("output path cannot be empty".to_owned()));
+            }
+            OsString::from(path)
+        } else {
+            return Err(CliError::Usage(
+                "expected -o <output> after partial".to_owned(),
+            ));
+        };
+        let inputs = args.collect::<Vec<_>>();
+        if inputs.is_empty() {
+            return Err(CliError::Usage("missing relocatable input path".to_owned()));
+        }
+        return partial_files(&output, &inputs);
     }
 
     if command == "link" {
@@ -254,6 +282,36 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
     Ok(format!(
         "valid relocatable ELF64 x86-64 inputs: objects={}, sections={section_count}, symbol_tables={symbol_table_count}, symbols={symbol_count}, rela_tables={rela_table_count}, relocations={relocation_count}",
         paths.len()
+    ))
+}
+
+fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError> {
+    let mut files = Vec::with_capacity(paths.len());
+    for path in paths {
+        files.push(read_file(path)?);
+    }
+    let inputs = files
+        .iter()
+        .map(|file| PartialLinkInput { file })
+        .collect::<Vec<_>>();
+    let bytes = link_relocatable_objects(&inputs).map_err(|error| {
+        match error
+            .input_index()
+            .and_then(|input_index| paths.get(input_index))
+        {
+            Some(path) => CliError::Failure(format!("{}: {error}", path.to_string_lossy())),
+            None => CliError::Failure(format!("partial link failed: {error}")),
+        }
+    })?;
+
+    fs::write(output, &bytes)
+        .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
+
+    Ok(format!(
+        "partial ELF64 x86-64: output={}, objects={}, bytes={}",
+        output.to_string_lossy(),
+        paths.len(),
+        bytes.len()
     ))
 }
 
