@@ -149,6 +149,62 @@ fn selects_named_member_like_gnu_ar() {
 }
 
 #[test]
+fn option_terminator_allows_option_like_archive_name() {
+    if !command_available("as") || !command_available("ar") {
+        return;
+    }
+
+    let dir = temp_dir();
+    fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("member.s");
+    let object = dir.join("member.o");
+    fs::write(&source, ".globl member\nmember:\n  ret\n").unwrap();
+    assert!(Command::new("as")
+        .args(["-o", object.to_str().unwrap(), source.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(Command::new("ar")
+        .current_dir(&dir)
+        .args(["rcs", "-archive.a", "member.o"])
+        .status()
+        .unwrap()
+        .success());
+
+    let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-ar"))
+        .current_dir(&dir)
+        .args(["t", "--", "-archive.a"])
+        .output()
+        .unwrap();
+    let gnu = Command::new("ar")
+        .current_dir(&dir)
+        .args(["t", "--", "-archive.a"])
+        .output()
+        .unwrap();
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
+    assert!(gnu.status.success());
+    assert_eq!(ours.stdout, gnu.stdout);
+    assert_eq!(ours.stdout, b"member.o\n");
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn option_terminator_requires_archive_operand() {
+    let output = Command::new(env!("CARGO_BIN_EXE_mini-elf-ar"))
+        .args(["t", "--"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("usage: mini-elf-ar t [--] <archive>"));
+}
+
+#[test]
 fn malformed_archive_fails_without_stdout() {
     let dir = temp_dir();
     fs::create_dir_all(&dir).unwrap();
