@@ -288,11 +288,7 @@ fn validate_relocatable_files(paths: &[OsString]) -> Result<String, CliError> {
 
 fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliError> {
     for argument in paths {
-        if argument == WHOLE_ARCHIVE
-            || argument == NO_WHOLE_ARCHIVE
-            || argument == PUSH_STATE
-            || argument == POP_STATE
-        {
+        if argument == PUSH_STATE || argument == POP_STATE {
             return Err(CliError::Usage(format!(
                 "'{}' is not supported by partial linking",
                 argument.to_string_lossy()
@@ -307,7 +303,11 @@ fn partial_files(output: &OsString, paths: &[OsString]) -> Result<String, CliErr
         .map(|input| {
             let file = &loaded.files[input.file_index];
             if file.starts_with(ARCHIVE_MAGIC) {
-                OrderedLinkInput::Archive(file)
+                if input.whole_archive {
+                    OrderedLinkInput::WholeArchive(file)
+                } else {
+                    OrderedLinkInput::Archive(file)
+                }
             } else {
                 OrderedLinkInput::Object(file)
             }
