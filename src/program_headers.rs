@@ -3,11 +3,33 @@ use crate::executable_writer::{ExecutableImage, ExecutableWriteError};
 const ELF64_EHDR_SIZE: usize = 64;
 const ELF64_PHDR_SIZE: usize = 56;
 const PT_LOAD: u32 = 1;
+const PT_DYNAMIC: u32 = 2;
 const PT_PHDR: u32 = 6;
+const PF_W: u32 = 2;
 const PF_R: u32 = 4;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeDynamicProgramHeader {
+    pub address: u64,
+    pub size: u64,
+}
+
 pub(crate) fn map_runtime_program_headers(
+    image: ExecutableImage,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(image, None)
+}
+
+pub(crate) fn map_runtime_program_headers_with_dynamic(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(image, Some(dynamic))
+}
+
+fn map_runtime_program_headers_impl(
     mut image: ExecutableImage,
+    dynamic: Option<RuntimeDynamicProgramHeader>,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
     if image.load_segments.is_empty() {
         return Err(ExecutableWriteError::NoLoadSegments);
@@ -41,9 +63,11 @@ pub(crate) fn map_runtime_program_headers(
             file_size: image.bytes.len() as u64,
         });
     }
-    if old_phnum == u16::MAX as usize {
+
+    let extra_headers = 1usize + usize::from(dynamic.is_some());
+    if old_phnum > u16::MAX as usize - extra_headers {
         return Err(ExecutableWriteError::TooManyLoadSegments {
-            count: old_phnum + 1,
+            count: old_phnum + extra_headers,
         });
     }
 
@@ -81,7 +105,7 @@ pub(crate) fn map_runtime_program_headers(
                 base_address: last.virtual_address,
                 memory_size: delta,
             })?;
-    let new_phnum = old_phnum + 1;
+    let new_phnum = old_phnum + extra_headers;
     let new_table_size =
         new_phnum
             .checked_mul(ELF64_PHDR_SIZE)
@@ -120,6 +144,44 @@ pub(crate) fn map_runtime_program_headers(
     }
     let last_header_index = last_header_index.ok_or(ExecutableWriteError::NoLoadSegments)?;
 
+    let mut new_segments = image.load_segments.clone();
+    new_segments[last_index].file_size = new_last_size;
+    new_segments[last_index].memory_size = new_last_size;
+
+    let dynamic_file_offset = if let Some(dynamic) = dynamic {
+        let dynamic_end = dynamic
+            .address
+            .checked_add(dynamic.size)
+            .ok_or(ExecutableWriteError::MetadataRangeOutsideLoadSegments {
+                address: dynamic.address,
+                size: dynamic.size,
+            })?;
+        let segment = new_segments
+            .iter()
+            .find(|segment| {
+                let file_end = segment
+                    .virtual_address
+                    .checked_add(segment.file_size)
+                    .unwrap_or(u64::MAX);
+                dynamic.address >= segment.virtual_address && dynamic_end <= file_end
+            })
+            .ok_or(ExecutableWriteError::MetadataRangeOutsideLoadSegments {
+                address: dynamic.address,
+                size: dynamic.size,
+            })?;
+        Some(
+            segment
+                .file_offset
+                .checked_add(dynamic.address - segment.virtual_address)
+                .ok_or(ExecutableWriteError::FileOffsetOverflow {
+                    metadata_end: segment.file_offset,
+                    alignment: 1,
+                })?,
+        )
+    } else {
+        None
+    };
+
     let mut table = vec![0_u8; new_table_size];
     write_phdr_program_header(
         &mut table[..ELF64_PHDR_SIZE],
@@ -137,6 +199,14 @@ pub(crate) fn map_runtime_program_headers(
             put_u64(&mut table, new_start + 40, new_last_size);
         }
     }
+    if let (Some(dynamic), Some(file_offset)) = (dynamic, dynamic_file_offset) {
+        let start = (1 + old_phnum) * ELF64_PHDR_SIZE;
+        write_dynamic_program_header(
+            &mut table[start..start + ELF64_PHDR_SIZE],
+            dynamic,
+            file_offset,
+        );
+    }
 
     image.bytes.resize(new_file_len, 0);
     put_u64(&mut image.bytes, 32, phdr_file_offset);
@@ -144,8 +214,7 @@ pub(crate) fn map_runtime_program_headers(
     let table_start = phdr_file_offset as usize;
     image.bytes[table_start..table_start + new_table_size].copy_from_slice(&table);
 
-    image.load_segments[last_index].file_size = new_last_size;
-    image.load_segments[last_index].memory_size = new_last_size;
+    image.load_segments = new_segments;
     if image.load_segments.len() == 1 {
         image.load_memory_size = new_last_size;
     }
@@ -160,6 +229,21 @@ fn write_phdr_program_header(out: &mut [u8], file_offset: u64, vaddr: u64, size:
     put_u64(out, 24, vaddr);
     put_u64(out, 32, size);
     put_u64(out, 40, size);
+    put_u64(out, 48, 8);
+}
+
+fn write_dynamic_program_header(
+    out: &mut [u8],
+    dynamic: RuntimeDynamicProgramHeader,
+    file_offset: u64,
+) {
+    put_u32(out, 0, PT_DYNAMIC);
+    put_u32(out, 4, PF_R | PF_W);
+    put_u64(out, 8, file_offset);
+    put_u64(out, 16, dynamic.address);
+    put_u64(out, 24, dynamic.address);
+    put_u64(out, 32, dynamic.size);
+    put_u64(out, 40, dynamic.size);
     put_u64(out, 48, 8);
 }
 
@@ -195,7 +279,10 @@ fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::executable_writer::write_elf64_x86_64_executable;
+    use crate::executable_writer::{
+        write_elf64_x86_64_executable, write_elf64_x86_64_position_independent_segments,
+        LoadSegmentInput, LoadSegmentPermissions,
+    };
     use crate::output_image::OutputSectionImage;
 
     #[test]
@@ -227,5 +314,51 @@ mod tests {
             old_address
         );
         assert_eq!(finalized.bytes[old_offset as usize], 0xc3);
+    }
+
+    #[test]
+    fn appends_dynamic_program_header_for_mapped_runtime_table() {
+        let code = OutputSectionImage {
+            base_address: 0x1000,
+            bytes: vec![0xc3],
+            sections: Vec::new(),
+        };
+        let dynamic = OutputSectionImage {
+            base_address: 0x3000,
+            bytes: vec![0_u8; 80],
+            sections: Vec::new(),
+        };
+        let inputs = [
+            LoadSegmentInput {
+                image: &code,
+                memory_size: 1,
+                permissions: LoadSegmentPermissions::ReadExecute,
+            },
+            LoadSegmentInput {
+                image: &dynamic,
+                memory_size: 80,
+                permissions: LoadSegmentPermissions::ReadWrite,
+            },
+        ];
+        let original =
+            write_elf64_x86_64_position_independent_segments(&inputs, 0x1000, 0x1000).unwrap();
+        let finalized = map_runtime_program_headers_with_dynamic(
+            original,
+            RuntimeDynamicProgramHeader {
+                address: 0x3000,
+                size: 80,
+            },
+        )
+        .unwrap();
+        let phoff = read_u64(&finalized.bytes, 32) as usize;
+        let phnum = read_u16(&finalized.bytes, 56) as usize;
+        assert_eq!(phnum, 4);
+
+        let dynamic_header = (0..phnum)
+            .map(|index| phoff + index * ELF64_PHDR_SIZE)
+            .find(|offset| read_u32(&finalized.bytes, *offset) == PT_DYNAMIC)
+            .expect("PT_DYNAMIC should be emitted");
+        assert_eq!(read_u64(&finalized.bytes, dynamic_header + 16), 0x3000);
+        assert_eq!(read_u64(&finalized.bytes, dynamic_header + 32), 80);
     }
 }
