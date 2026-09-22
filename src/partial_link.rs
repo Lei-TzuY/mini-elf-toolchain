@@ -717,11 +717,7 @@ pub fn link_relocatable_objects(
     });
 
     for pending in &locals {
-        let name_offset = intern_symbol_name(
-            &mut strtab,
-            &mut string_offsets,
-            &pending.name,
-        )?;
+        let name_offset = intern_symbol_name(&mut strtab, &mut string_offsets, &pending.name)?;
         let mut symbol = pending.symbol;
         symbol.name_offset = name_offset;
         let output_index =
@@ -733,11 +729,7 @@ pub fn link_relocatable_objects(
     }
 
     for canonical in &canonical_nonlocals {
-        let name_offset = intern_symbol_name(
-            &mut strtab,
-            &mut string_offsets,
-            &canonical.name,
-        )?;
+        let name_offset = intern_symbol_name(&mut strtab, &mut string_offsets, &canonical.name)?;
         let mut symbol = canonical.symbol;
         symbol.name_offset = name_offset;
         let output_index =
