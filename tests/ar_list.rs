@@ -166,7 +166,7 @@ fn option_terminator_allows_option_like_archive_name() {
         .success());
     assert!(Command::new("ar")
         .current_dir(&dir)
-        .args(["rcs", "-archive.a", "member.o"])
+        .args(["rcs", "--", "-archive.a", "member.o"])
         .status()
         .unwrap()
         .success());
