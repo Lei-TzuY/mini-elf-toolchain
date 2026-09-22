@@ -27,12 +27,11 @@ pub fn link_static_position_independent_executable_with_map(
     page_alignment: u64,
     entry_symbol: &[u8],
 ) -> Result<StaticLinkOutput, StaticLinkError> {
-    let artifact =
-        crate::static_link_core::link_static_position_independent_artifact_with_map(
-            inputs,
-            page_alignment,
-            entry_symbol,
-        )?;
+    let artifact = crate::static_link_core::link_static_position_independent_artifact_with_map(
+        inputs,
+        page_alignment,
+        entry_symbol,
+    )?;
     let mut output = artifact.output;
     output.image = if let Some(dynamic) = artifact.dynamic {
         map_runtime_program_headers_with_dynamic(
