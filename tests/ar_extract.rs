@@ -110,7 +110,11 @@ fn extracts_real_archive_members_like_gnu_ar() {
         "{}",
         String::from_utf8_lossy(&ours.stderr)
     );
-    assert!(gnu.status.success(), "{}", String::from_utf8_lossy(&gnu.stderr));
+    assert!(
+        gnu.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu.stderr)
+    );
     assert!(ours.stdout.is_empty());
     assert_eq!(
         fs::read(ours_dir.join("first.o")).unwrap(),
