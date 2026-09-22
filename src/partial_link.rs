@@ -17,6 +17,7 @@ const ELF64_SYMBOL_SIZE: usize = 24;
 const EM_X86_64: u16 = 62;
 const ET_REL: u16 = 1;
 const SHF_GROUP: u64 = 0x200;
+const SHN_XINDEX: u16 = 0xffff;
 
 #[derive(Debug, Clone, Copy)]
 pub struct PartialLinkInput<'a> {
@@ -86,6 +87,10 @@ pub enum PartialLinkError {
         input_index: usize,
         symbol_index: usize,
         section_index: u16,
+    },
+    UnsupportedExtendedSymbolSectionIndex {
+        input_index: usize,
+        symbol_index: usize,
     },
     UnsupportedRelocationTarget {
         input_index: usize,
@@ -210,6 +215,13 @@ impl fmt::Display for PartialLinkError {
                 f,
                 "partial-link input {input_index} symbol {symbol_index} refers to non-allocatable section {section_index}, which is not preserved by the bounded partial-link output"
             ),
+            Self::UnsupportedExtendedSymbolSectionIndex {
+                input_index,
+                symbol_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} symbol {symbol_index} uses SHN_XINDEX, but bounded partial linking does not preserve SHT_SYMTAB_SHNDX metadata"
+            ),
             Self::UnsupportedRelocationTarget {
                 input_index,
                 rela_section_index,
@@ -278,6 +290,7 @@ impl PartialLinkError {
             | Self::InvalidSymbolName { input_index, .. }
             | Self::UnsupportedSymbolBinding { input_index, .. }
             | Self::UnsupportedSymbolSection { input_index, .. }
+            | Self::UnsupportedExtendedSymbolSectionIndex { input_index, .. }
             | Self::UnsupportedRelocationTarget { input_index, .. }
             | Self::UnsupportedRelocationSymbolTable { input_index, .. }
             | Self::MissingRelocationSymbol { input_index, .. } => Some(*input_index),
@@ -459,6 +472,12 @@ pub fn link_relocatable_objects(
                     source,
                 })?
                 .to_vec();
+            if symbol.section_index == SHN_XINDEX {
+                return Err(PartialLinkError::UnsupportedExtendedSymbolSectionIndex {
+                    input_index,
+                    symbol_index,
+                });
+            }
             let mut remapped = symbol;
             if symbol.section_index != 0 && symbol.section_index < SHN_LORESERVE {
                 let output_section = section_maps[input_index]
