@@ -257,7 +257,7 @@ fn partial_archive_lookup_preserves_left_to_right_order() {
 
     assert_eq!(global_records(&ours), global_records(&gnu));
     let records = global_records(&ours);
-    assert!(records.iter().any(|line| line.ends_with(" U helper")));
+    assert!(records.iter().any(|line| line == "U helper"));
     assert!(!records.iter().any(|line| line.ends_with(" leaf")));
     assert!(!records.iter().any(|line| line.ends_with(" unused_symbol")));
 
