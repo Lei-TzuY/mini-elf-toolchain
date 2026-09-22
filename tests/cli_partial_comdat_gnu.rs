@@ -567,6 +567,61 @@ loser_target:
         "discarded COMDAT RELA leaked into output: {relocations}"
     );
 
+    let ours_reverse = dir.join("ours-duplicate-reverse.o");
+    let gnu_reverse = dir.join("gnu-duplicate-reverse.o");
+
+    let partial_reverse = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours_reverse)
+        .arg(&start)
+        .arg(&loser)
+        .arg(&winner)
+        .arg(&targets)
+        .output()
+        .unwrap();
+    assert!(
+        partial_reverse.status.success(),
+        "{}",
+        String::from_utf8_lossy(&partial_reverse.stderr)
+    );
+
+    let gnu_reverse_output = Command::new("ld")
+        .args(["-r", "-o"])
+        .arg(&gnu_reverse)
+        .arg(&start)
+        .arg(&loser)
+        .arg(&winner)
+        .arg(&targets)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_reverse_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_reverse_output.stderr)
+    );
+
+    assert_eq!(global_records(&ours_reverse), global_records(&gnu_reverse));
+    let reverse_records = global_records(&ours_reverse);
+    assert!(reverse_records
+        .iter()
+        .any(|line| line.ends_with(" loser_marker")));
+    assert!(!reverse_records
+        .iter()
+        .any(|line| line.ends_with(" winner_marker")));
+
+    let reverse_relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&ours_reverse)
+        .output()
+        .unwrap();
+    assert!(reverse_relocations.status.success());
+    let reverse_relocations = String::from_utf8_lossy(&reverse_relocations.stdout);
+    assert!(reverse_relocations.contains("loser_target"));
+    assert!(
+        !reverse_relocations.contains("winner_target"),
+        "reverse-order loser selection leaked winner RELA: {reverse_relocations}"
+    );
+
     let mini_exe = dir.join("mini-duplicate-final");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
