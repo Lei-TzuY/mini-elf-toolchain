@@ -307,8 +307,9 @@ fn empty_forced_root_is_rejected_before_input_io() {
 
     assert_eq!(result.status.code(), Some(2));
     assert!(result.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&result.stderr)
-        .contains("forced undefined symbol cannot be empty"));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("forced undefined symbol cannot be empty")
+    );
     assert!(!output_path.exists());
 
     let _ = fs::remove_dir_all(dir);
@@ -367,7 +368,9 @@ _start:
     assert_eq!(globals(&ours), globals(&gnu));
     let records = globals(&ours);
     assert!(records.iter().any(|line| line == "U optional_hook"));
-    assert!(!records.iter().any(|line| line.ends_with(" w optional_hook")));
+    assert!(!records
+        .iter()
+        .any(|line| line.ends_with(" w optional_hook")));
 
     let _ = fs::remove_dir_all(dir);
 }
