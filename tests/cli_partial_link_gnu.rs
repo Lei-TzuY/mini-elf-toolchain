@@ -877,3 +877,47 @@ fn multiple_strong_definitions_fail_before_partial_output() {
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn nondefault_nonlocal_visibility_is_rejected_without_output() {
+    if !command_reports("as", "GNU assembler") {
+        return;
+    }
+
+    let dir = temp_dir("visibility");
+    let object = assemble(
+        &dir,
+        "hidden",
+        ".text\n.globl hidden_target\n.hidden hidden_target\n.type hidden_target,@function\nhidden_target:\n  ret\n.size hidden_target, .-hidden_target\n",
+    );
+    let output = dir.join("partial.o");
+
+    let symbols = Command::new("readelf")
+        .args(["-sW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(symbols.status.success());
+    assert!(
+        String::from_utf8_lossy(&symbols.stdout).contains("HIDDEN"),
+        "GNU fixture must carry non-default symbol visibility"
+    );
+
+    let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&output)
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("default visibility"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
