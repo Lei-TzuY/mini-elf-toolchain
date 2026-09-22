@@ -11,9 +11,7 @@ use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
 use crate::object_symbols::named_symbols_from_table;
 use crate::permission_layout::SHF_TLS;
-use crate::pie_runtime::{
-    add_runtime_relative_relocations, PieDynamicSegment, PieRuntimeError,
-};
+use crate::pie_runtime::{add_runtime_relative_relocations, PieDynamicSegment, PieRuntimeError};
 use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
 use crate::resolve::{SHN_UNDEF, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
