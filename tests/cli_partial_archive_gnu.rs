@@ -310,10 +310,7 @@ hidden_helper:
     assert!(!output.status.success());
     assert!(output.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("libsupport.a(hidden-helper.o)"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("libsupport.a(hidden-helper.o)"), "{stderr}");
     assert!(stderr.contains("default visibility"), "{stderr}");
     assert!(!output_path.exists());
 
