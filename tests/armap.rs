@@ -135,7 +135,11 @@ fn armap_option_terminator_allows_help_named_archive() {
     let assembly = dir.join("member.s");
     let object = dir.join("member.o");
     let archive = dir.join("-h");
-    fs::write(&assembly, ".text\n.globl option_symbol\noption_symbol:\n  ret\n").unwrap();
+    fs::write(
+        &assembly,
+        ".text\n.globl option_symbol\noption_symbol:\n  ret\n",
+    )
+    .unwrap();
     assert!(Command::new("as")
         .arg("-o")
         .arg(&object)
