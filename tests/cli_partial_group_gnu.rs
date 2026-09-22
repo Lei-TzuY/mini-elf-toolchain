@@ -311,8 +311,9 @@ fn nested_partial_archive_groups_fail_before_output() {
 
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&result.stderr)
-        .contains("nested --start-group is not supported"));
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("nested --start-group is not supported")
+    );
     assert!(!output_path.exists());
 
     let _ = fs::remove_dir_all(dir);
