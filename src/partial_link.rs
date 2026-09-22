@@ -8,7 +8,7 @@ use crate::elf64::{
 use crate::input_object::{RelocatableObject, RelocatableObjectError};
 use crate::load_segments::SHF_ALLOC;
 use crate::relocations::{Elf64Rela, ELF64_RELA_SIZE, SHT_RELA};
-use crate::resolve::{STB_GLOBAL, STB_LOCAL, STB_WEAK};
+use crate::resolve::{SHN_COMMON, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_names::{symbol_name, SymbolNameError};
 
 const ELF64_HEADER_SIZE: usize = 64;
@@ -88,6 +88,11 @@ pub enum PartialLinkError {
         symbol_index: usize,
         section_index: u16,
     },
+    UnsupportedNondefaultSymbolVisibility {
+        input_index: usize,
+        symbol_index: usize,
+        other: u8,
+    },
     UnsupportedExtendedSymbolSectionIndex {
         input_index: usize,
         symbol_index: usize,
@@ -123,6 +128,21 @@ pub enum PartialLinkError {
         relocation_index: usize,
         contribution_offset: u64,
         offset: u64,
+    },
+    UnsupportedCommonBinding {
+        input_index: usize,
+        symbol_index: usize,
+        binding: u8,
+    },
+    InvalidCommonAlignment {
+        input_index: usize,
+        symbol_index: usize,
+        alignment: u64,
+    },
+    MultipleStrongDefinitions {
+        name: Vec<u8>,
+        first_input_index: usize,
+        second_input_index: usize,
     },
     TooManySections {
         count: usize,
@@ -232,6 +252,14 @@ impl fmt::Display for PartialLinkError {
                 f,
                 "partial-link input {input_index} symbol {symbol_index} refers to non-allocatable section {section_index}, which is not preserved by the bounded partial-link output"
             ),
+            Self::UnsupportedNondefaultSymbolVisibility {
+                input_index,
+                symbol_index,
+                other,
+            } => write!(
+                f,
+                "partial-link input {input_index} nonlocal symbol {symbol_index} has unsupported st_other/visibility value {other:#x}; bounded canonicalization currently requires default visibility"
+            ),
             Self::UnsupportedExtendedSymbolSectionIndex {
                 input_index,
                 symbol_index,
@@ -289,6 +317,31 @@ impl fmt::Display for PartialLinkError {
                 f,
                 "partial-link input {input_index} RELA section {rela_section_index} relocation {relocation_index} offset {offset:#x} plus contribution offset {contribution_offset:#x} overflows"
             ),
+            Self::UnsupportedCommonBinding {
+                input_index,
+                symbol_index,
+                binding,
+            } => write!(
+                f,
+                "partial-link input {input_index} common symbol {symbol_index} uses unsupported binding {binding}; SHN_COMMON requires STB_GLOBAL in this bounded model"
+            ),
+            Self::InvalidCommonAlignment {
+                input_index,
+                symbol_index,
+                alignment,
+            } => write!(
+                f,
+                "partial-link input {input_index} common symbol {symbol_index} has invalid alignment {alignment}; expected a non-zero power of two"
+            ),
+            Self::MultipleStrongDefinitions {
+                name,
+                first_input_index,
+                second_input_index,
+            } => write!(
+                f,
+                "multiple strong definitions for symbol {:?}: first in partial-link input {first_input_index}, second in input {second_input_index}",
+                String::from_utf8_lossy(name)
+            ),
             Self::TooManySections { count } => write!(
                 f,
                 "partial-link output requires {count} sections, exceeding the non-extended ELF64 section-index range"
@@ -333,13 +386,19 @@ impl PartialLinkError {
             | Self::InvalidSymbolName { input_index, .. }
             | Self::UnsupportedSymbolBinding { input_index, .. }
             | Self::UnsupportedSymbolSection { input_index, .. }
+            | Self::UnsupportedNondefaultSymbolVisibility { input_index, .. }
             | Self::UnsupportedExtendedSymbolSectionIndex { input_index, .. }
             | Self::UnsupportedRelocationTarget { input_index, .. }
             | Self::UnsupportedRelocationSymbolTable { input_index, .. }
             | Self::MissingRelocationSymbol { input_index, .. }
             | Self::SectionContributionOverflow { input_index, .. }
             | Self::SymbolValueOverflow { input_index, .. }
-            | Self::RelocationOffsetOverflow { input_index, .. } => Some(*input_index),
+            | Self::RelocationOffsetOverflow { input_index, .. }
+            | Self::UnsupportedCommonBinding { input_index, .. }
+            | Self::InvalidCommonAlignment { input_index, .. } => Some(*input_index),
+            Self::MultipleStrongDefinitions {
+                second_input_index, ..
+            } => Some(*second_input_index),
             Self::TooManySections { .. }
             | Self::TooManySymbols { .. }
             | Self::StringTableTooLarge
@@ -375,11 +434,21 @@ struct SectionPlacement {
     contribution_offset: u64,
 }
 
+type SymbolSource = (usize, u16, usize);
+
 #[derive(Debug, Clone)]
 struct PendingSymbol {
-    source: (usize, u16, usize),
+    source: SymbolSource,
     name: Vec<u8>,
     symbol: Elf64Symbol,
+}
+
+#[derive(Debug, Clone)]
+struct CanonicalNonlocal {
+    name: Vec<u8>,
+    symbol: Elf64Symbol,
+    representative_source: SymbolSource,
+    sources: Vec<SymbolSource>,
 }
 
 pub fn link_relocatable_objects(
@@ -589,6 +658,13 @@ pub fn link_relocatable_objects(
                     source,
                 })?
                 .to_vec();
+            if binding != STB_LOCAL && symbol.other != 0 {
+                return Err(PartialLinkError::UnsupportedNondefaultSymbolVisibility {
+                    input_index,
+                    symbol_index,
+                    other: symbol.other,
+                });
+            }
             if symbol.section_index == SHN_XINDEX {
                 return Err(PartialLinkError::UnsupportedExtendedSymbolSectionIndex {
                     input_index,
@@ -631,16 +707,15 @@ pub fn link_relocatable_objects(
         }
     }
 
+    let canonical_nonlocals = canonicalize_nonlocal_symbols(nonlocals)?;
     let first_nonlocal = locals
         .len()
         .checked_add(1)
         .ok_or(PartialLinkError::SizeOverflow("symbol count"))?;
-    let mut pending_symbols = locals;
-    pending_symbols.extend(nonlocals);
-
-    let symbol_count = pending_symbols
+    let symbol_count = locals
         .len()
-        .checked_add(1)
+        .checked_add(canonical_nonlocals.len())
+        .and_then(|count| count.checked_add(1))
         .ok_or(PartialLinkError::SizeOverflow("symbol count"))?;
     if symbol_count > u32::MAX as usize {
         return Err(PartialLinkError::TooManySymbols {
@@ -662,17 +737,8 @@ pub fn link_relocatable_objects(
         size: 0,
     });
 
-    for pending in &pending_symbols {
-        let name_offset = if let Some(offset) = string_offsets.get(&pending.name) {
-            *offset
-        } else {
-            let offset =
-                u32::try_from(strtab.len()).map_err(|_| PartialLinkError::StringTableTooLarge)?;
-            strtab.extend_from_slice(&pending.name);
-            strtab.push(0);
-            string_offsets.insert(pending.name.clone(), offset);
-            offset
-        };
+    for pending in &locals {
+        let name_offset = intern_symbol_name(&mut strtab, &mut string_offsets, &pending.name)?;
         let mut symbol = pending.symbol;
         symbol.name_offset = name_offset;
         let output_index =
@@ -680,6 +746,20 @@ pub fn link_relocatable_objects(
                 count: symbol_count,
             })?;
         symbol_maps.insert(pending.source, output_index);
+        output_symbols.push(symbol);
+    }
+
+    for canonical in &canonical_nonlocals {
+        let name_offset = intern_symbol_name(&mut strtab, &mut string_offsets, &canonical.name)?;
+        let mut symbol = canonical.symbol;
+        symbol.name_offset = name_offset;
+        let output_index =
+            u32::try_from(output_symbols.len()).map_err(|_| PartialLinkError::TooManySymbols {
+                count: symbol_count,
+            })?;
+        for source in &canonical.sources {
+            symbol_maps.insert(*source, output_index);
+        }
         output_symbols.push(symbol);
     }
 
@@ -882,6 +962,148 @@ fn section_names(
             Ok(tail[..nul].to_vec())
         })
         .collect()
+}
+
+fn canonicalize_nonlocal_symbols(
+    candidates: Vec<PendingSymbol>,
+) -> Result<Vec<CanonicalNonlocal>, PartialLinkError> {
+    let mut canonical = Vec::<CanonicalNonlocal>::new();
+    let mut by_name = BTreeMap::<Vec<u8>, usize>::new();
+
+    for candidate in candidates {
+        validate_common_candidate(&candidate)?;
+
+        if candidate.name.is_empty() {
+            canonical.push(CanonicalNonlocal {
+                name: candidate.name,
+                symbol: candidate.symbol,
+                representative_source: candidate.source,
+                sources: vec![candidate.source],
+            });
+            continue;
+        }
+
+        let Some(&index) = by_name.get(&candidate.name) else {
+            let index = canonical.len();
+            by_name.insert(candidate.name.clone(), index);
+            canonical.push(CanonicalNonlocal {
+                name: candidate.name,
+                symbol: candidate.symbol,
+                representative_source: candidate.source,
+                sources: vec![candidate.source],
+            });
+            continue;
+        };
+
+        let existing = &mut canonical[index];
+        existing.sources.push(candidate.source);
+        merge_nonlocal_candidate(existing, &candidate)?;
+    }
+
+    Ok(canonical)
+}
+
+fn validate_common_candidate(candidate: &PendingSymbol) -> Result<(), PartialLinkError> {
+    if candidate.symbol.section_index != SHN_COMMON {
+        return Ok(());
+    }
+
+    let binding = candidate.symbol.info >> 4;
+    if binding != STB_GLOBAL {
+        return Err(PartialLinkError::UnsupportedCommonBinding {
+            input_index: candidate.source.0,
+            symbol_index: candidate.source.2,
+            binding,
+        });
+    }
+    let alignment = candidate.symbol.value;
+    if alignment == 0 || !alignment.is_power_of_two() {
+        return Err(PartialLinkError::InvalidCommonAlignment {
+            input_index: candidate.source.0,
+            symbol_index: candidate.source.2,
+            alignment,
+        });
+    }
+    Ok(())
+}
+
+fn merge_nonlocal_candidate(
+    existing: &mut CanonicalNonlocal,
+    candidate: &PendingSymbol,
+) -> Result<(), PartialLinkError> {
+    let existing_binding = existing.symbol.info >> 4;
+    let candidate_binding = candidate.symbol.info >> 4;
+    let existing_undefined = existing.symbol.section_index == SHN_UNDEF;
+    let candidate_undefined = candidate.symbol.section_index == SHN_UNDEF;
+    let existing_common = existing.symbol.section_index == SHN_COMMON;
+    let candidate_common = candidate.symbol.section_index == SHN_COMMON;
+
+    if existing_undefined && candidate_undefined {
+        if existing_binding == STB_WEAK && candidate_binding == STB_GLOBAL {
+            existing.symbol = candidate.symbol;
+            existing.representative_source = candidate.source;
+        }
+        return Ok(());
+    }
+    if existing_undefined {
+        existing.symbol = candidate.symbol;
+        existing.representative_source = candidate.source;
+        return Ok(());
+    }
+    if candidate_undefined {
+        return Ok(());
+    }
+
+    match (existing_common, candidate_common) {
+        (true, true) => {
+            existing.symbol.size = existing.symbol.size.max(candidate.symbol.size);
+            existing.symbol.value = existing.symbol.value.max(candidate.symbol.value);
+        }
+        (true, false) => {
+            if candidate_binding == STB_GLOBAL {
+                existing.symbol = candidate.symbol;
+                existing.representative_source = candidate.source;
+            }
+        }
+        (false, true) => {
+            if existing_binding == STB_WEAK {
+                existing.symbol = candidate.symbol;
+                existing.representative_source = candidate.source;
+            }
+        }
+        (false, false) => match (existing_binding, candidate_binding) {
+            (STB_WEAK, STB_GLOBAL) => {
+                existing.symbol = candidate.symbol;
+                existing.representative_source = candidate.source;
+            }
+            (STB_GLOBAL, STB_GLOBAL) => {
+                return Err(PartialLinkError::MultipleStrongDefinitions {
+                    name: existing.name.clone(),
+                    first_input_index: existing.representative_source.0,
+                    second_input_index: candidate.source.0,
+                });
+            }
+            (STB_GLOBAL, STB_WEAK) | (STB_WEAK, STB_WEAK) => {}
+            _ => unreachable!("nonlocal candidates only use global or weak binding"),
+        },
+    }
+
+    Ok(())
+}
+
+fn intern_symbol_name(
+    table: &mut Vec<u8>,
+    offsets: &mut BTreeMap<Vec<u8>, u32>,
+    name: &[u8],
+) -> Result<u32, PartialLinkError> {
+    if let Some(offset) = offsets.get(name) {
+        return Ok(*offset);
+    }
+    let offset = u32::try_from(table.len()).map_err(|_| PartialLinkError::StringTableTooLarge)?;
+    table.extend_from_slice(name);
+    table.push(0);
+    offsets.insert(name.to_vec(), offset);
+    Ok(offset)
 }
 
 fn align_section_contribution(value: u64, alignment: u64) -> Option<u64> {

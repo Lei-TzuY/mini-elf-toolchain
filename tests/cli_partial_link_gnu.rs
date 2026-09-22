@@ -173,6 +173,55 @@ fn relocation_offsets(path: &Path, relocation_name: &str) -> BTreeSet<u64> {
         .collect()
 }
 
+fn global_nm_records(path: &Path) -> Vec<(String, char, Option<u64>)> {
+    let output = Command::new("nm").arg("-g").arg(path).output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let mut records = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            match fields.as_slice() {
+                [kind, name] => Some(((*name).to_owned(), kind.chars().next()?, None)),
+                [value, kind, name, ..] => Some((
+                    (*name).to_owned(),
+                    kind.chars().next()?,
+                    u64::from_str_radix(value, 16).ok(),
+                )),
+                _ => None,
+            }
+        })
+        .collect::<Vec<_>>();
+    records.sort();
+    records
+}
+
+fn readelf_symbol_record(path: &Path, wanted: &str) -> Vec<String> {
+    let output = Command::new("readelf")
+        .args(["-sW"])
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            if fields.last().copied() != Some(wanted) || fields.len() < 8 {
+                return None;
+            }
+            Some(fields[1..].join(" "))
+        })
+        .collect()
+}
+
 fn build_inputs(dir: &Path) -> (PathBuf, PathBuf) {
     let start = assemble(
         dir,
@@ -598,6 +647,277 @@ helper:
             executable.display()
         );
     }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn global_and_weak_symbols_are_canonicalized_like_gnu_ld_r() {
+    if !have_gnu_toolchain() {
+        return;
+    }
+
+    let dir = temp_dir("resolve-global-weak");
+    let start = assemble(
+        &dir,
+        "resolve-start",
+        r#".section .text
+.globl _start
+.type _start,@function
+_start:
+    mov $60, %rax
+    xor %rdi, %rdi
+    syscall
+    .quad choice
+.size _start, .-_start
+"#,
+    );
+    let weak = assemble(
+        &dir,
+        "resolve-weak",
+        r#".section .text
+.weak choice
+.type choice,@function
+choice:
+    ret
+.size choice, .-choice
+"#,
+    );
+    let strong = assemble(
+        &dir,
+        "resolve-strong",
+        r#".section .text
+.globl choice
+.type choice,@function
+choice:
+    ret
+.size choice, .-choice
+"#,
+    );
+    let ours_partial = dir.join("ours-resolved.o");
+    let gnu_partial = dir.join("gnu-resolved.o");
+
+    let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours_partial)
+        .arg(&start)
+        .arg(&weak)
+        .arg(&strong)
+        .output()
+        .unwrap();
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
+
+    let gnu = Command::new("ld")
+        .args(["-r", "-o"])
+        .arg(&gnu_partial)
+        .arg(&start)
+        .arg(&weak)
+        .arg(&strong)
+        .output()
+        .unwrap();
+    assert!(
+        gnu.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu.stderr)
+    );
+
+    assert_eq!(
+        global_nm_records(&ours_partial),
+        global_nm_records(&gnu_partial)
+    );
+    assert_eq!(
+        global_nm_records(&ours_partial)
+            .iter()
+            .filter(|(name, _, _)| name == "choice")
+            .count(),
+        1
+    );
+    assert!(!global_nm_records(&ours_partial)
+        .iter()
+        .any(|(name, kind, _)| name == "choice" && *kind == 'U'));
+
+    let mini_exe = dir.join("mini-resolved");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&mini_exe)
+        .arg(&ours_partial)
+        .output()
+        .unwrap();
+    assert!(
+        mini.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
+    );
+
+    let gnu_exe = dir.join("gnu-resolved");
+    let gnu_final = Command::new("ld")
+        .args(["-static", "-o"])
+        .arg(&gnu_exe)
+        .arg(&ours_partial)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_final.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_final.stderr)
+    );
+
+    #[cfg(target_os = "linux")]
+    for executable in [&mini_exe, &gnu_exe] {
+        let status = Command::new(executable).status().unwrap();
+        assert!(
+            status.success(),
+            "{} returned {status}",
+            executable.display()
+        );
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn common_symbols_are_merged_like_gnu_ld_r() {
+    if !have_gnu_toolchain() {
+        return;
+    }
+
+    let dir = temp_dir("resolve-common");
+    let small = assemble(&dir, "common-small", ".comm common_sym,8,8\n");
+    let large = assemble(&dir, "common-large", ".comm common_sym,16,16\n");
+    let ours_partial = dir.join("ours-common.o");
+    let gnu_partial = dir.join("gnu-common.o");
+
+    let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours_partial)
+        .arg(&small)
+        .arg(&large)
+        .output()
+        .unwrap();
+    assert!(
+        ours.status.success(),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
+
+    let gnu = Command::new("ld")
+        .args(["-r", "-o"])
+        .arg(&gnu_partial)
+        .arg(&small)
+        .arg(&large)
+        .output()
+        .unwrap();
+    assert!(
+        gnu.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu.stderr)
+    );
+
+    assert_eq!(
+        readelf_symbol_record(&ours_partial, "common_sym"),
+        readelf_symbol_record(&gnu_partial, "common_sym")
+    );
+    assert_eq!(readelf_symbol_record(&ours_partial, "common_sym").len(), 1);
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn multiple_strong_definitions_fail_before_partial_output() {
+    if !have_gnu_toolchain() {
+        return;
+    }
+
+    let dir = temp_dir("resolve-duplicate-strong");
+    let first = assemble(
+        &dir,
+        "strong-first",
+        ".text\n.globl duplicate_symbol\n.type duplicate_symbol,@function\nduplicate_symbol:\n  ret\n.size duplicate_symbol, .-duplicate_symbol\n",
+    );
+    let second = assemble(
+        &dir,
+        "strong-second",
+        ".text\n.globl duplicate_symbol\n.type duplicate_symbol,@function\nduplicate_symbol:\n  nop\n  ret\n.size duplicate_symbol, .-duplicate_symbol\n",
+    );
+    let ours_partial = dir.join("ours-duplicate.o");
+    let gnu_partial = dir.join("gnu-duplicate.o");
+
+    let gnu = Command::new("ld")
+        .args(["-r", "-o"])
+        .arg(&gnu_partial)
+        .arg(&first)
+        .arg(&second)
+        .output()
+        .unwrap();
+    assert!(
+        !gnu.status.success(),
+        "GNU ld -r unexpectedly accepted duplicate strong definitions"
+    );
+
+    let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours_partial)
+        .arg(&first)
+        .arg(&second)
+        .output()
+        .unwrap();
+
+    assert!(!ours.status.success());
+    assert!(ours.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&ours.stderr).contains("multiple strong definitions"),
+        "{}",
+        String::from_utf8_lossy(&ours.stderr)
+    );
+    assert!(!ours_partial.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn nondefault_nonlocal_visibility_is_rejected_without_output() {
+    if !command_reports("as", "GNU assembler") {
+        return;
+    }
+
+    let dir = temp_dir("visibility");
+    let object = assemble(
+        &dir,
+        "hidden",
+        ".text\n.globl hidden_target\n.hidden hidden_target\n.type hidden_target,@function\nhidden_target:\n  ret\n.size hidden_target, .-hidden_target\n",
+    );
+    let output = dir.join("partial.o");
+
+    let symbols = Command::new("readelf")
+        .args(["-sW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(symbols.status.success());
+    assert!(
+        String::from_utf8_lossy(&symbols.stdout).contains("HIDDEN"),
+        "GNU fixture must carry non-default symbol visibility"
+    );
+
+    let result = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&output)
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!result.status.success());
+    assert!(result.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("default visibility"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
 }
