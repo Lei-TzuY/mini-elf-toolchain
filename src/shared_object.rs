@@ -18,8 +18,8 @@ use crate::program_headers::{
     map_runtime_program_headers_with_dynamic, RuntimeDynamicProgramHeader,
 };
 use crate::relocated_sections::{
-    relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld, RelocatedSectionError,
-    RelocatedSectionImage,
+    relocate_allocatable_sections_with_external_got_plt_tls_gd_tls_ld_and_tls_ie,
+    RelocatedSectionError, RelocatedSectionImage,
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
@@ -372,7 +372,7 @@ impl fmt::Display for SharedObjectError {
             ),
             Self::MissingTlsDynamicSymbol { name } => write!(
                 f,
-                "shared object TLSGD symbol {:?} has no defined dynamic-symbol index",
+                "shared object TLS symbol {:?} has no usable dynamic-symbol index",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsGdTargetNotExecutable {
@@ -393,7 +393,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a defined default-visible strong STT_TLS symbol in the output DSO",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a default-visible strong STT_TLS symbol that is either defined in the output DSO or recorded as an external import",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsIeTargetNotExecutable {
@@ -804,19 +804,27 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
     let imports = validate_inputs(inputs, &resolved.definitions)?;
+    let tls_ie_import_symbols = imports
+        .tls_ie_symbols
+        .iter()
+        .filter(|name| imports.symbols.contains_key(*name))
+        .cloned()
+        .collect::<BTreeSet<_>>();
     let mut masked_sites = imports.sites.clone();
     masked_sites.extend(imports.tls_ld_dtpoff_sites.iter().copied());
     let relocation_inputs = mask_import_relocations(inputs, &masked_sites);
 
-    let relocated_output = relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld(
-        &relocation_inputs,
-        page_alignment,
-        page_alignment,
-        &imports.got_symbols,
-        &imports.plt_symbols,
-        &imports.tls_gd_symbols,
-        imports.uses_tls_ld,
-    )
+    let relocated_output =
+        relocate_allocatable_sections_with_external_got_plt_tls_gd_tls_ld_and_tls_ie(
+            &relocation_inputs,
+            page_alignment,
+            page_alignment,
+            &imports.got_symbols,
+            &imports.plt_symbols,
+            &imports.tls_gd_symbols,
+            imports.uses_tls_ld,
+            &tls_ie_import_symbols,
+        )
     .map_err(SharedObjectError::Relocation)?;
     let mut relocated = relocated_output.sections;
     let got_entries = relocated_output.got_entries;
@@ -913,6 +921,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         &imports.tls_ie_symbols,
         &tls_got_entries,
         &export_dynamic_indices,
+        &import_dynamic_indices,
     )?;
     rela_bytes.extend_from_slice(&tls_ie_rela_bytes);
     let jmprel_bytes = build_plt_import_relocation_table(
@@ -1168,8 +1177,9 @@ fn validate_inputs(
                 }
                 if relocation.relocation_type == R_X86_64_GOTTPOFF {
                     let binding = symbol.symbol.info >> 4;
-                    let definition = definitions.get(symbol.name);
-                    let supported_definition = definition.is_some_and(|definition| {
+                    let unresolved = symbol.symbol.section_index == SHN_UNDEF
+                        && !definitions.contains_key(symbol.name);
+                    let supported_definition = definitions.get(symbol.name).is_some_and(|definition| {
                         let definition_binding = definition.symbol.info >> 4;
                         let definition_type = definition.symbol.info & 0x0f;
                         definition_binding == STB_GLOBAL
@@ -1180,7 +1190,7 @@ fn validate_inputs(
                         || binding != STB_GLOBAL
                         || symbol.symbol.other != 0
                         || symbol.name.is_empty()
-                        || !supported_definition
+                        || (!unresolved && !supported_definition)
                     {
                         return Err(SharedObjectError::TlsIeUnsupported {
                             object_index: input.object_index,
@@ -1198,6 +1208,14 @@ fn validate_inputs(
                             target_section_index: table.target_section_index,
                             flags: target.flags,
                         });
+                    }
+                    if unresolved {
+                        record_import_symbol(
+                            &mut import_symbols,
+                            symbol.name,
+                            symbol.symbol.info,
+                            symbol.symbol.size,
+                        )?;
                     }
                     tls_ie_symbols.insert(symbol.name.to_vec());
                     continue;
@@ -1434,7 +1452,8 @@ fn validate_inputs(
                     if symbol_type == STT_TLS {
                         let supported_tls_import = binding == STB_GLOBAL
                             && import_symbols.contains_key(symbol.name)
-                            && tls_gd_symbols.contains(symbol.name);
+                            && (tls_gd_symbols.contains(symbol.name)
+                                || tls_ie_symbols.contains(symbol.name));
                         if !supported_tls_import {
                             return Err(SharedObjectError::TlsImportUnsupported {
                                 object_index: input.object_index,
@@ -1643,6 +1662,7 @@ fn build_tls_ie_relocation_table(
     symbols: &BTreeSet<Vec<u8>>,
     entries: &BTreeMap<Vec<u8>, u64>,
     export_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+    import_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
 ) -> Result<Vec<u8>, SharedObjectError> {
     let capacity = symbols
         .len()
@@ -1657,6 +1677,7 @@ fn build_tls_ie_relocation_table(
             .ok_or_else(|| SharedObjectError::MissingTlsIeEntry { name: name.clone() })?;
         let dynamic_index = export_dynamic_indices
             .get(name)
+            .or_else(|| import_dynamic_indices.get(name))
             .copied()
             .ok_or_else(|| SharedObjectError::MissingTlsDynamicSymbol { name: name.clone() })?;
         let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_TPOFF64);
