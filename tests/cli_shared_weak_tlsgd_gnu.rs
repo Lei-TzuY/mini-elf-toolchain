@@ -220,7 +220,6 @@ fn assert_named_weak_tlsgd_metadata(shared: &Path) {
         "{} dynamic relocations:\n{relocations}",
         shared.display()
     );
-
 }
 
 fn assert_weak_tlsgd_metadata(shared: &Path) {
