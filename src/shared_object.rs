@@ -359,7 +359,7 @@ impl fmt::Display for SharedObjectError {
                 binding,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded shared relocation handling currently permits undefined external imports plus defined default-visible strong STT_OBJECT/STT_FUNC symbols through writable R_X86_64_64 dynamic relocations or ordinary GOTPCREL/GLOB_DAT interposition",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded shared relocation handling currently permits undefined external imports plus defined default-visible strong STT_OBJECT/STT_FUNC symbols through writable R_X86_64_64 dynamic relocations or ordinary GOTPCREL/GLOB_DAT interposition, and defined default-visible strong STT_FUNC PLT32 calls through the synthetic PLT/JUMP_SLOT plane",
                 String::from_utf8_lossy(name)
             ),
             Self::ExternalImportUnsupportedBinding {
