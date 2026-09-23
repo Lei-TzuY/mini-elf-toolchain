@@ -7,6 +7,7 @@ const ET_DYN: u16 = 3;
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const DT_NULL: i64 = 0;
+const DT_NEEDED: i64 = 1;
 const DT_HASH: i64 = 4;
 const DT_GNU_HASH: i64 = 0x6fff_fef5;
 const DT_STRTAB: i64 = 5;
@@ -25,6 +26,7 @@ const STV_HIDDEN: u8 = 2;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DynamicProviderMetadata {
     pub soname: Vec<u8>,
+    pub needed: Vec<Vec<u8>>,
     pub exports: BTreeMap<Vec<u8>, BTreeSet<u8>>,
 }
 
@@ -118,6 +120,21 @@ pub fn inspect_dynamic_provider(
         return Err(malformed("provider DT_SONAME is empty"));
     }
 
+    let mut needed = Vec::new();
+    for entry in entries.iter().filter(|entry| entry.tag == DT_NEEDED) {
+        let name = dynamic_string(
+            file,
+            strtab_offset,
+            strsz,
+            entry.value,
+            "provider DT_NEEDED",
+        )?;
+        if name.is_empty() {
+            return Err(malformed("provider DT_NEEDED is empty"));
+        }
+        needed.push(name);
+    }
+
     let sysv_symbol_count = match sysv_hash_address {
         Some(address) => Some(validate_sysv_hash_metadata(&headers, file, address)?),
         None => None,
@@ -192,7 +209,11 @@ pub fn inspect_dynamic_provider(
         }
     }
 
-    Ok(DynamicProviderMetadata { soname, exports })
+    Ok(DynamicProviderMetadata {
+        soname,
+        needed,
+        exports,
+    })
 }
 
 fn program_headers(
