@@ -39,6 +39,15 @@ fn temp_dir(label: &str) -> PathBuf {
     path
 }
 
+fn jump_slot_offset(readelf_output: &str, symbol: &str) -> u64 {
+    readelf_output
+        .lines()
+        .find(|line| line.contains("R_X86_64_JUMP_SLOT") && line.contains(symbol))
+        .and_then(|line| line.split_whitespace().next())
+        .and_then(|value| u64::from_str_radix(value, 16).ok())
+        .expect("expected loader-visible JUMP_SLOT relocation offset")
+}
+
 fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
     let asm = dir.join(format!("{stem}.s"));
     let object = dir.join(format!("{stem}.o"));
@@ -158,6 +167,7 @@ call_host_direct:
             .any(|line| line.contains("R_X86_64_JUMP_SLOT") && line.contains("host_function")),
         "{relocations}"
     );
+    let host_jump_slot = jump_slot_offset(&relocations, "host_function");
 
     #[cfg(target_os = "linux")]
     {
@@ -165,28 +175,44 @@ call_host_direct:
         let consumer = dir.join("consumer");
         fs::write(
             &source,
-            r#"#include <dlfcn.h>
+            format!(
+                r#"#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <link.h>
 #include <stdint.h>
 
 static uint64_t host_calls;
 
-uint64_t host_function(uint64_t value) {
+uint64_t host_function(uint64_t value) {{
     host_calls += 1;
     return value + host_calls;
-}
+}}
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv) {{
     if (argc != 2) return 70;
     void *handle = dlopen(argv[1], RTLD_LAZY | RTLD_LOCAL);
     if (!handle) return 71;
     uint64_t (*call_host_direct)(void) =
         (uint64_t (*)(void))dlsym(handle, "call_host_direct");
     if (!call_host_direct) return 72;
+
+    struct link_map *map = 0;
+    if (dlinfo(handle, RTLD_DI_LINKMAP, &map) != 0 || !map) return 76;
+    uintptr_t *slot = (uintptr_t *)(map->l_addr + UINT64_C(0x{host_jump_slot:x}));
+    uintptr_t before = *slot;
+    if (before == (uintptr_t)&host_function) return 77;
+
     if (call_host_direct() != UINT64_C(42)) return 73;
+    uintptr_t after_first = *slot;
+    if (after_first != (uintptr_t)&host_function) return 78;
+
     if (call_host_direct() != UINT64_C(43)) return 74;
+    if (*slot != after_first) return 79;
+
     return dlclose(handle) == 0 ? 0 : 75;
-}
-"#,
+}}
+"#
+            ),
         )
         .unwrap();
         let compile = Command::new("cc")
@@ -202,7 +228,11 @@ int main(int argc, char **argv) {
             String::from_utf8_lossy(&compile.stderr)
         );
 
-        let status = Command::new(&consumer).arg(&shared).status().unwrap();
+        let status = Command::new(&consumer)
+            .env_remove("LD_BIND_NOW")
+            .arg(&shared)
+            .status()
+            .unwrap();
         assert!(status.success(), "PLT/JUMP_SLOT consumer returned {status}");
     }
 
