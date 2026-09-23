@@ -18,8 +18,9 @@ use crate::permission_layout::{
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, STB_GLOBAL, STB_WEAK};
 use crate::x86_64_relocations::{
-    is_static_got_entry_type, is_static_tls_gotpcrel_type, is_tls_gd_relocation_type,
-    is_tls_ld_relocation_type, R_X86_64_PLT32,
+    is_static_got_entry_type, is_static_tls_gotpcrel_type,
+    is_tls_desc_address_relocation_type, is_tls_gd_relocation_type, is_tls_ld_relocation_type,
+    R_X86_64_PLT32,
 };
 
 const SHT_PROGBITS: u32 = 1;
@@ -28,6 +29,7 @@ const GOT_SECTION_INDEX: u16 = 1;
 const GOT_ENTRY_SIZE: u64 = 8;
 const TLS_GD_ENTRY_SIZE: u64 = 16;
 const TLS_LD_ENTRY_SIZE: u64 = 16;
+const TLS_DESC_ENTRY_SIZE: u64 = 16;
 const GOT_ALIGNMENT: u64 = 8;
 const PLT_OBJECT_INDEX: usize = usize::MAX - 4;
 const PLT_SECTION_INDEX: u16 = 1;
@@ -45,6 +47,7 @@ const STT_TLS: u8 = 6;
 pub struct TlsSyntheticRequests<'a> {
     pub tls_gd_symbols: &'a BTreeSet<Vec<u8>>,
     pub tls_ld_enabled: bool,
+    pub tls_desc_symbols: &'a BTreeSet<Vec<u8>>,
     pub external_tls_got_symbols: &'a BTreeSet<Vec<u8>>,
 }
 
@@ -81,6 +84,7 @@ pub struct RelocatedSectionsOutput {
     pub tls_got_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_gd_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_ld_entry: Option<u64>,
+    pub tls_desc_entries: BTreeMap<Vec<u8>, u64>,
     pub plt_entries: BTreeMap<Vec<u8>, u64>,
     pub plt_got_entries: BTreeMap<Vec<u8>, u64>,
     pub plt_got_base: Option<u64>,
@@ -397,6 +401,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld(
         TlsSyntheticRequests {
             tls_gd_symbols,
             tls_ld_enabled,
+            tls_desc_symbols: &BTreeSet::new(),
             external_tls_got_symbols: &BTreeSet::new(),
         },
     )
@@ -412,6 +417,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     let tls_gd_symbols = tls.tls_gd_symbols;
     let tls_ld_enabled = tls.tls_ld_enabled;
+    let tls_desc_symbols = tls.tls_desc_symbols;
     let external_tls_got_symbols = tls.external_tls_got_symbols;
     for (position, input) in inputs.iter().enumerate() {
         if input.object_index != position {
@@ -470,6 +476,14 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
     {
         return Err(RelocatedSectionError::MissingTlsLdRelocation);
     }
+    if !tls_desc_symbols.is_empty() {
+        let observed_tls_desc = collect_tls_desc_symbols(inputs)?;
+        for name in tls_desc_symbols {
+            if !observed_tls_desc.contains(name) {
+                return Err(RelocatedSectionError::MissingTlsGdSymbol { name: name.clone() });
+            }
+        }
+    }
     let got_symbol_count = got_symbols.len().checked_add(tls_got_symbols.len()).ok_or(
         RelocatedSectionError::GotSizeOverflow {
             symbol_count: usize::MAX,
@@ -483,13 +497,21 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
             symbol_count: tls_gd_symbols.len(),
         })?;
     let tls_ld_size = if tls_ld_enabled { TLS_LD_ENTRY_SIZE } else { 0 };
+    let tls_desc_size = u64::try_from(tls_desc_symbols.len())
+        .ok()
+        .and_then(|count| count.checked_mul(TLS_DESC_ENTRY_SIZE))
+        .ok_or(RelocatedSectionError::GotSizeOverflow {
+            symbol_count: tls_desc_symbols.len(),
+        })?;
     let got_size = fixed_got_size
         .checked_add(tls_gd_size)
         .and_then(|size| size.checked_add(tls_ld_size))
+        .and_then(|size| size.checked_add(tls_desc_size))
         .ok_or(RelocatedSectionError::GotSizeOverflow {
             symbol_count: got_symbol_count
                 .saturating_add(tls_gd_symbols.len().saturating_mul(2))
-                .saturating_add(if tls_ld_enabled { 2 } else { 0 }),
+                .saturating_add(if tls_ld_enabled { 2 } else { 0 })
+                .saturating_add(tls_desc_symbols.len().saturating_mul(2)),
         })?;
 
     validate_external_plt_symbols(inputs, external_plt_symbols)?;
@@ -565,6 +587,16 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
     } else {
         None
     };
+    let tls_desc_entries = tls_desc_entry_addresses(
+        &layout,
+        tls_desc_symbols,
+        fixed_got_size
+            .checked_add(tls_gd_size)
+            .and_then(|offset| offset.checked_add(tls_ld_size))
+            .ok_or(RelocatedSectionError::GotSizeOverflow {
+                symbol_count: tls_desc_symbols.len(),
+            })?,
+    )?;
     let plt_entries = synthetic_entry_addresses(
         &layout,
         PLT_OBJECT_INDEX,
@@ -585,6 +617,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
     let tls_got_entries_output = tls_got_entries.clone();
     let tls_gd_entries_output = tls_gd_entries.clone();
     let tls_ld_entry_output = tls_ld_entry;
+    let tls_desc_entries_output = tls_desc_entries.clone();
     let plt_entries_output = plt_entries.clone();
     let plt_got_entries_output = plt_got_entries.clone();
 
@@ -595,6 +628,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
             got_entries,
             tls_got_entries,
             tls_gd_entries,
+            tls_desc_entries,
             tls_ld_entry,
             unresolved_tls_got_symbols: external_tls_got_symbols.clone(),
             unresolved_got_symbols: external_got_symbols.clone(),
@@ -694,6 +728,10 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
             bytes.extend_from_slice(&0_u64.to_le_bytes());
         }
         if tls_ld_enabled {
+            bytes.extend_from_slice(&0_u64.to_le_bytes());
+            bytes.extend_from_slice(&0_u64.to_le_bytes());
+        }
+        for _ in tls_desc_symbols {
             bytes.extend_from_slice(&0_u64.to_le_bytes());
             bytes.extend_from_slice(&0_u64.to_le_bytes());
         }
@@ -836,6 +874,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
         tls_got_entries: tls_got_entries_output,
         tls_gd_entries: tls_gd_entries_output,
         tls_ld_entry: tls_ld_entry_output,
+        tls_desc_entries: tls_desc_entries_output,
         plt_entries: plt_entries_output,
         plt_got_entries: plt_got_entries_output,
         plt_got_base,
@@ -1243,6 +1282,117 @@ fn collect_tls_gd_symbols(
     }
 
     Ok(names)
+}
+
+fn collect_tls_desc_symbols(
+    inputs: &[LinkerInputObject<'_>],
+) -> Result<BTreeSet<Vec<u8>>, RelocatedSectionError> {
+    let mut names = BTreeSet::new();
+
+    for input in inputs {
+        for table in &input.object.rela_tables {
+            let relocations = table
+                .relocations
+                .iter()
+                .filter(|relocation| {
+                    is_tls_desc_address_relocation_type(relocation.relocation_type)
+                })
+                .collect::<Vec<_>>();
+            if relocations.is_empty() {
+                continue;
+            }
+            let symbol_table = input
+                .object
+                .symbol_tables
+                .iter()
+                .find(|candidate| candidate.section_index == table.symbol_table_index)
+                .ok_or(RelocatedSectionError::MissingGotSymbolMetadata {
+                    object_index: input.object_index,
+                    rela_section_index: table.section_index,
+                    symbol_index: relocations[0].symbol_index,
+                })?;
+            let symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                symbol_table,
+                input.object_index,
+            )
+            .map_err(|source| {
+                RelocatedSectionError::Symbols(LinkSymbolError::ObjectSymbols {
+                    object_index: input.object_index,
+                    source,
+                })
+            })?;
+            for relocation in relocations {
+                let symbol = symbols
+                    .iter()
+                    .find(|symbol| symbol.symbol_index == relocation.symbol_index as usize)
+                    .ok_or(RelocatedSectionError::MissingGotSymbolMetadata {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                    })?;
+                let binding = symbol.symbol.info >> 4;
+                if binding != STB_GLOBAL && binding != STB_WEAK {
+                    return Err(RelocatedSectionError::UnsupportedGotBinding {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                        binding,
+                    });
+                }
+                let symbol_type = symbol.symbol.info & 0x0f;
+                if symbol_type != STT_TLS {
+                    return Err(RelocatedSectionError::NonTlsGotSymbol {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                        symbol_type,
+                    });
+                }
+                if symbol.name.is_empty() {
+                    return Err(RelocatedSectionError::MissingGotSymbolMetadata {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                    });
+                }
+                names.insert(symbol.name.to_vec());
+            }
+        }
+    }
+
+    Ok(names)
+}
+
+fn tls_desc_entry_addresses(
+    layout: &[LaidOutSection],
+    symbols: &BTreeSet<Vec<u8>>,
+    base_offset: u64,
+) -> Result<BTreeMap<Vec<u8>, u64>, RelocatedSectionError> {
+    if symbols.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let got_layout = matching_layout(layout, GOT_OBJECT_INDEX, GOT_SECTION_INDEX).ok_or(
+        RelocatedSectionError::MissingLayout {
+            object_index: GOT_OBJECT_INDEX,
+            section_index: GOT_SECTION_INDEX,
+        },
+    )?;
+    let mut entries = BTreeMap::new();
+    for (entry_index, name) in symbols.iter().enumerate() {
+        let descriptor_offset = u64::try_from(entry_index)
+            .ok()
+            .and_then(|index| index.checked_mul(TLS_DESC_ENTRY_SIZE))
+            .and_then(|offset| base_offset.checked_add(offset))
+            .ok_or(RelocatedSectionError::GotAddressOverflow { entry_index })?;
+        let address = got_layout
+            .address
+            .checked_add(descriptor_offset)
+            .ok_or(RelocatedSectionError::GotAddressOverflow { entry_index })?;
+        entries.insert(name.clone(), address);
+    }
+    Ok(entries)
 }
 
 fn tls_gd_entry_addresses(
