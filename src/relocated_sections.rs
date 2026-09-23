@@ -18,9 +18,8 @@ use crate::permission_layout::{
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, STB_GLOBAL, STB_WEAK};
 use crate::x86_64_relocations::{
-    is_static_got_entry_type, is_static_tls_gotpcrel_type,
-    is_tls_desc_address_relocation_type, is_tls_gd_relocation_type, is_tls_ld_relocation_type,
-    R_X86_64_PLT32,
+    is_static_got_entry_type, is_static_tls_gotpcrel_type, is_tls_desc_address_relocation_type,
+    is_tls_gd_relocation_type, is_tls_ld_relocation_type, R_X86_64_PLT32,
 };
 
 const SHT_PROGBITS: u32 = 1;
