@@ -205,21 +205,6 @@ fn transitive_named_version_provider_keeps_root_needed_and_leaf_verneed() {
     );
     assert!(dynamic.contains("VERNEED"), "{dynamic}");
 
-    let versions = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym-needed"))
-        .arg(&consumer)
-        .output()
-        .unwrap();
-    assert!(
-        versions.status.success(),
-        "{}",
-        String::from_utf8_lossy(&versions.stderr)
-    );
-    let versions = String::from_utf8_lossy(&versions.stdout);
-    assert!(
-        versions.contains("requirement=libdeep.so:VERS_1"),
-        "{versions}"
-    );
-
     #[cfg(target_os = "linux")]
     {
         let source = dir.join("runner.c");
@@ -264,6 +249,21 @@ int main(int argc, char **argv) {
             "transitive named-version consumer returned {status}"
         );
     }
+
+    let versions = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym-needed"))
+        .arg(&consumer)
+        .output()
+        .unwrap();
+    assert!(
+        versions.status.success(),
+        "{}",
+        String::from_utf8_lossy(&versions.stderr)
+    );
+    let versions = String::from_utf8_lossy(&versions.stdout);
+    assert!(
+        versions.contains("requirement=libdeep.so:VERS_1"),
+        "{versions}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
