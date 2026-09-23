@@ -1,8 +1,10 @@
 use crate::executable_writer::ExecutableImage;
+use crate::gnu_stack::{gnu_stack_policy, GnuStackPolicy};
 use crate::linker_input::LinkerInputObject;
 use crate::program_headers::{
     map_runtime_program_headers, map_runtime_program_headers_with_dynamic,
-    RuntimeDynamicProgramHeader,
+    map_runtime_program_headers_with_dynamic_and_stack, map_runtime_program_headers_with_stack,
+    RuntimeDynamicProgramHeader, RuntimeStackProgramHeader,
 };
 
 pub use crate::static_link_core::{StaticLinkError, StaticLinkOutput};
@@ -19,7 +21,8 @@ pub fn link_static_executable(
         page_alignment,
         entry_symbol,
     )?;
-    map_runtime_program_headers(image).map_err(StaticLinkError::Write)
+    let stack = gnu_stack_policy(inputs).map_err(StaticLinkError::GnuStack)?;
+    map_static_program_headers(image, None, stack).map_err(StaticLinkError::Write)
 }
 
 pub fn link_static_position_independent_executable_with_map(
@@ -33,18 +36,13 @@ pub fn link_static_position_independent_executable_with_map(
         entry_symbol,
     )?;
     let mut output = artifact.output;
-    output.image = if let Some(dynamic) = artifact.dynamic {
-        map_runtime_program_headers_with_dynamic(
-            output.image,
-            RuntimeDynamicProgramHeader {
-                address: dynamic.address,
-                size: dynamic.size,
-            },
-        )
-    } else {
-        map_runtime_program_headers(output.image)
-    }
-    .map_err(StaticLinkError::Write)?;
+    let stack = gnu_stack_policy(inputs).map_err(StaticLinkError::GnuStack)?;
+    let dynamic = artifact.dynamic.map(|dynamic| RuntimeDynamicProgramHeader {
+        address: dynamic.address,
+        size: dynamic.size,
+    });
+    output.image =
+        map_static_program_headers(output.image, dynamic, stack).map_err(StaticLinkError::Write)?;
     synchronize_link_map_segments(&mut output);
     Ok(output)
 }
@@ -61,10 +59,36 @@ pub fn link_static_executable_with_map(
         page_alignment,
         entry_symbol,
     )?;
-    output.image = map_runtime_program_headers(output.image).map_err(StaticLinkError::Write)?;
+    let stack = gnu_stack_policy(inputs).map_err(StaticLinkError::GnuStack)?;
+    output.image =
+        map_static_program_headers(output.image, None, stack).map_err(StaticLinkError::Write)?;
 
     synchronize_link_map_segments(&mut output);
     Ok(output)
+}
+
+fn map_static_program_headers(
+    image: ExecutableImage,
+    dynamic: Option<RuntimeDynamicProgramHeader>,
+    stack: Option<GnuStackPolicy>,
+) -> Result<ExecutableImage, crate::executable_writer::ExecutableWriteError> {
+    match (dynamic, stack) {
+        (Some(dynamic), Some(stack)) => map_runtime_program_headers_with_dynamic_and_stack(
+            image,
+            dynamic,
+            RuntimeStackProgramHeader {
+                executable: stack.executable,
+            },
+        ),
+        (Some(dynamic), None) => map_runtime_program_headers_with_dynamic(image, dynamic),
+        (None, Some(stack)) => map_runtime_program_headers_with_stack(
+            image,
+            RuntimeStackProgramHeader {
+                executable: stack.executable,
+            },
+        ),
+        (None, None) => map_runtime_program_headers(image),
+    }
 }
 
 fn synchronize_link_map_segments(output: &mut StaticLinkOutput) {
