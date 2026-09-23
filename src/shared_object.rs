@@ -64,7 +64,16 @@ const DT_RUNPATH: i64 = 29;
 const DT_FLAGS: i64 = 30;
 const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
+const DT_VERSYM: i64 = 0x6fff_fff0;
 const DT_RELACOUNT: i64 = 0x6fff_fff9;
+const DT_VERNEED: i64 = 0x6fff_fffe;
+const DT_VERNEEDNUM: i64 = 0x6fff_ffff;
+const VER_NEED_CURRENT: u16 = 1;
+const VERSYM_GLOBAL: u16 = 1;
+const VERSYM_FIRST_VERSION: u16 = 2;
+const VERSYM_INDEX_MASK: u16 = 0x7fff;
+const ELF64_VERNEED_SIZE: usize = 16;
+const ELF64_VERNAUX_SIZE: usize = 16;
 const DF_STATIC_TLS: u64 = 0x10;
 
 #[derive(Debug)]
@@ -94,6 +103,20 @@ pub enum SharedObjectError {
         name: Vec<u8>,
         first_type: u8,
         second_type: u8,
+    },
+    MalformedVersionedImportName {
+        name: Vec<u8>,
+    },
+    UnsupportedVersionedImportType {
+        name: Vec<u8>,
+        symbol_type: u8,
+    },
+    InvalidVersionRequirement {
+        name: Vec<u8>,
+        version: Vec<u8>,
+    },
+    VersionRequirementProviderMissing {
+        provider: Vec<u8>,
     },
     ExternalImportUnsupportedType {
         object_index: usize,
@@ -328,6 +351,27 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object import {:?} is referenced with conflicting ELF symbol types {first_type} and {second_type}",
                 String::from_utf8_lossy(name)
+            ),
+            Self::MalformedVersionedImportName { name } => write!(
+                f,
+                "shared object external import {:?} has malformed GNU version syntax; bounded named-version imports require name@VERSION",
+                String::from_utf8_lossy(name)
+            ),
+            Self::UnsupportedVersionedImportType { name, symbol_type } => write!(
+                f,
+                "shared object external import {:?} requests a GNU symbol version with ELF symbol type {symbol_type}; bounded named-version imports currently require STT_OBJECT",
+                String::from_utf8_lossy(name)
+            ),
+            Self::InvalidVersionRequirement { name, version } => write!(
+                f,
+                "shared object version requirement {:?}@{:?} does not match a planned external import",
+                String::from_utf8_lossy(name),
+                String::from_utf8_lossy(version)
+            ),
+            Self::VersionRequirementProviderMissing { provider } => write!(
+                f,
+                "shared object version requirement names provider {:?}, but that provider is not present in DT_NEEDED",
+                String::from_utf8_lossy(provider)
             ),
             Self::ExternalImportUnsupportedType {
                 object_index,
@@ -655,6 +699,10 @@ impl std::error::Error for SharedObjectError {
             | Self::PreemptibleRelativeTarget { .. }
             | Self::ExternalImportUnsupportedBinding { .. }
             | Self::ConflictingImportSymbolType { .. }
+            | Self::MalformedVersionedImportName { .. }
+            | Self::UnsupportedVersionedImportType { .. }
+            | Self::InvalidVersionRequirement { .. }
+            | Self::VersionRequirementProviderMissing { .. }
             | Self::ExternalImportUnsupportedType { .. }
             | Self::ExternalImportTargetNotWritable { .. }
             | Self::ExternalImportRelocationOutOfBounds { .. }
