@@ -717,13 +717,24 @@ fn resolve_needed_dependencies(
             NeededSpec::Name(name) => name.clone(),
             NeededSpec::Provider(path) => {
                 let root_path = PathBuf::from(path);
-                let (provider, closure_exports) =
-                    inspect_provider_closure(&root_path, search_paths)?;
-                let matched = imports.iter().any(|(name, symbol_type)| {
-                    closure_exports
-                        .get(name)
-                        .is_some_and(|types| types.contains(symbol_type))
-                });
+                let root_file = read_provider_file(&root_path, "shared dependency provider")?;
+                let provider = inspect_dynamic_provider(&root_file).map_err(|error| {
+                    CliError::Failure(format!(
+                        "{}: cannot inspect shared dependency provider: {error}",
+                        root_path.display()
+                    ))
+                })?;
+                let direct_match = provider_matches_imports(&provider.exports, imports);
+                let matched = if direct_match {
+                    true
+                } else {
+                    inspect_transitive_provider_exports(
+                        &root_path,
+                        &provider,
+                        search_paths,
+                        imports,
+                    )?
+                };
                 if !matched {
                     return Err(CliError::Failure(format!(
                         "{}: provider SONAME {:?} and its checked transitive dependency closure export none of the consumer's bounded external imports",
@@ -742,25 +753,24 @@ fn resolve_needed_dependencies(
     Ok(names)
 }
 
-fn inspect_provider_closure(
-    root_path: &Path,
-    search_paths: &[PathBuf],
-) -> Result<
-    (
-        mini_elf_toolchain::dynamic_provider::DynamicProviderMetadata,
-        std::collections::BTreeMap<Vec<u8>, std::collections::BTreeSet<u8>>,
-    ),
-    CliError,
-> {
-    use std::collections::{BTreeMap, BTreeSet, VecDeque};
+fn provider_matches_imports(
+    exports: &std::collections::BTreeMap<Vec<u8>, std::collections::BTreeSet<u8>>,
+    imports: &std::collections::BTreeMap<Vec<u8>, u8>,
+) -> bool {
+    imports.iter().any(|(name, symbol_type)| {
+        exports
+            .get(name)
+            .is_some_and(|types| types.contains(symbol_type))
+    })
+}
 
-    let root_file = read_provider_file(root_path, "shared dependency provider")?;
-    let root = inspect_dynamic_provider(&root_file).map_err(|error| {
-        CliError::Failure(format!(
-            "{}: cannot inspect shared dependency provider: {error}",
-            root_path.display()
-        ))
-    })?;
+fn inspect_transitive_provider_exports(
+    root_path: &Path,
+    root: &mini_elf_toolchain::dynamic_provider::DynamicProviderMetadata,
+    search_paths: &[PathBuf],
+    imports: &std::collections::BTreeMap<Vec<u8>, u8>,
+) -> Result<bool, CliError> {
+    use std::collections::{BTreeSet, VecDeque};
 
     let root_canonical = fs::canonicalize(root_path).map_err(|error| {
         CliError::Failure(format!(
@@ -771,8 +781,10 @@ fn inspect_provider_closure(
     let mut visited = BTreeSet::new();
     visited.insert(root_canonical);
 
-    let mut exports = root.exports.clone();
-    let root_parent = root_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let root_parent = root_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let mut queue = VecDeque::new();
     for needed in &root.needed {
         queue.push_back((needed.clone(), root_parent.clone()));
@@ -800,12 +812,8 @@ fn inspect_provider_closure(
                 String::from_utf8_lossy(&needed)
             ))
         })?;
-
-        for (name, types) in &provider.exports {
-            exports
-                .entry(name.clone())
-                .or_insert_with(BTreeSet::new)
-                .extend(types.iter().copied());
+        if provider_matches_imports(&provider.exports, imports) {
+            return Ok(true);
         }
 
         let parent = dependency_path
@@ -817,7 +825,7 @@ fn inspect_provider_closure(
         }
     }
 
-    Ok((root, exports))
+    Ok(false)
 }
 
 fn resolve_transitive_provider_path(
