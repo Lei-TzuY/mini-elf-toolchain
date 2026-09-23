@@ -27,6 +27,7 @@ use crate::tls::{
     compute_static_tls_layout, inject_static_tls_program_header, StaticTlsLayout,
     StaticTlsLayoutError, StaticTlsProgramHeaderError,
 };
+use crate::version_script::VersionScript;
 use crate::x86_64_relocations::{
     apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_DTPMOD64, R_X86_64_DTPOFF32,
     R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPC32_TLSDESC, R_X86_64_GOTPCREL,
@@ -118,6 +119,13 @@ pub enum SharedObjectError {
     },
     MultipleDefaultVersionAliases {
         name: Vec<u8>,
+    },
+    VersionScriptExplicitAliasUnsupported {
+        name: Vec<u8>,
+    },
+    VersionScriptUnknownSymbol {
+        name: Vec<u8>,
+        version: Vec<u8>,
     },
     ConflictingDynamicExportName {
         name: Vec<u8>,
@@ -381,6 +389,17 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object dynamic name {:?} has more than one default/unversioned export; bounded producer versioning permits at most one default alias per canonical name",
                 String::from_utf8_lossy(name)
+            ),
+            Self::VersionScriptExplicitAliasUnsupported { name } => write!(
+                f,
+                "shared object definition {:?} uses explicit GNU .symver syntax; bounded --version-script does not compose with explicit @/@@ producer aliases",
+                String::from_utf8_lossy(name)
+            ),
+            Self::VersionScriptUnknownSymbol { name, version } => write!(
+                f,
+                "version script assigns undefined/non-exportable symbol {:?} to version {:?}",
+                String::from_utf8_lossy(name),
+                String::from_utf8_lossy(version)
             ),
             Self::ConflictingDynamicExportName { name } => write!(
                 f,
@@ -732,6 +751,8 @@ impl std::error::Error for SharedObjectError {
             | Self::MalformedVersionedImportName { .. }
             | Self::MalformedVersionedExportName { .. }
             | Self::MultipleDefaultVersionAliases { .. }
+            | Self::VersionScriptExplicitAliasUnsupported { .. }
+            | Self::VersionScriptUnknownSymbol { .. }
             | Self::ConflictingDynamicExportName { .. }
             | Self::UnsupportedVersionedImportType { .. }
             | Self::InvalidVersionRequirement { .. }
@@ -1056,6 +1077,43 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
     version_requirements: &[SharedVersionRequirement],
     checked_version_providers: &[Vec<u8>],
 ) -> Result<ExecutableImage, SharedObjectError> {
+    link_shared_object_with_version_script_and_checked_providers(
+        inputs,
+        page_alignment,
+        SharedObjectLinkOptions {
+            needed,
+            soname,
+            runpath,
+            version_requirements,
+            checked_version_providers,
+            version_script: None,
+        },
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SharedObjectLinkOptions<'a> {
+    pub needed: &'a [Vec<u8>],
+    pub soname: Option<&'a [u8]>,
+    pub runpath: Option<&'a [u8]>,
+    pub version_requirements: &'a [SharedVersionRequirement],
+    pub checked_version_providers: &'a [Vec<u8>],
+    pub version_script: Option<&'a VersionScript>,
+}
+
+pub fn link_shared_object_with_version_script_and_checked_providers(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    options: SharedObjectLinkOptions<'_>,
+) -> Result<ExecutableImage, SharedObjectError> {
+    let SharedObjectLinkOptions {
+        needed,
+        soname,
+        runpath,
+        version_requirements,
+        checked_version_providers,
+        version_script,
+    } = options;
     validate_needed_names(needed)?;
     validate_needed_names(checked_version_providers)?;
     validate_soname(soname)?;
@@ -1134,35 +1192,65 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
         &layout,
     )?;
 
-    let exports = resolved
-        .definitions
-        .values()
-        .map(|definition| {
-            let absolute_value = final_symbol_address(definition, &layout)
-                .map_err(SharedObjectError::SymbolAddress)?;
-            let symbol_type = definition.symbol.info & 0x0f;
-            let value = if symbol_type == STT_TLS {
-                tls_export_value(definition, absolute_value, tls_layout)?
+    let mut matched_script_symbols = BTreeSet::new();
+    let mut exports = Vec::new();
+    for definition in resolved.definitions.values() {
+        let identity = if let Some(script) = version_script {
+            if definition.name.contains(&b'@') {
+                return Err(SharedObjectError::VersionScriptExplicitAliasUnsupported {
+                    name: definition.name.clone(),
+                });
+            }
+            if let Some(version) = script.version_for(&definition.name) {
+                matched_script_symbols.insert(definition.name.clone());
+                ExportIdentity {
+                    dynamic_name: definition.name.clone(),
+                    version: Some(version.to_vec()),
+                    is_default_version: true,
+                }
+            } else if script.localize_unlisted() {
+                continue;
             } else {
-                absolute_value
-            };
-            let identity = parse_export_identity(&definition.name)?;
-            Ok(ExportSymbol {
-                linker_name: definition.name.clone(),
-                dynamic_name: identity.dynamic_name,
-                version: identity.version,
-                is_default_version: identity.is_default_version,
-                info: definition.symbol.info,
-                section_index: if definition.symbol.section_index == SHN_ABS {
-                    SHN_ABS
-                } else {
-                    1
-                },
-                value,
-                size: definition.symbol.size,
-            })
-        })
-        .collect::<Result<Vec<_>, SharedObjectError>>()?;
+                parse_export_identity(&definition.name)?
+            }
+        } else {
+            parse_export_identity(&definition.name)?
+        };
+
+        let absolute_value =
+            final_symbol_address(definition, &layout).map_err(SharedObjectError::SymbolAddress)?;
+        let symbol_type = definition.symbol.info & 0x0f;
+        let value = if symbol_type == STT_TLS {
+            tls_export_value(definition, absolute_value, tls_layout)?
+        } else {
+            absolute_value
+        };
+        exports.push(ExportSymbol {
+            linker_name: definition.name.clone(),
+            dynamic_name: identity.dynamic_name,
+            version: identity.version,
+            is_default_version: identity.is_default_version,
+            info: definition.symbol.info,
+            section_index: if definition.symbol.section_index == SHN_ABS {
+                SHN_ABS
+            } else {
+                1
+            },
+            value,
+            size: definition.symbol.size,
+        });
+    }
+
+    if let Some(script) = version_script {
+        for (name, version) in script.assignments() {
+            if !matched_script_symbols.contains(name) {
+                return Err(SharedObjectError::VersionScriptUnknownSymbol {
+                    name: name.to_vec(),
+                    version: version.to_vec(),
+                });
+            }
+        }
+    }
     if exports.is_empty() {
         return Err(SharedObjectError::NoExports);
     }
