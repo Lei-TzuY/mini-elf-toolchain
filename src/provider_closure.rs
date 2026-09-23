@@ -3,14 +3,26 @@ use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProviderClosurePathError {
-    InvalidDependencyNameUtf8 { name: Vec<u8> },
+    InvalidDependencyNameUtf8 {
+        name: Vec<u8>,
+    },
     EmptyDependencyName,
-    DependencyNameContainsSeparator { name: String },
-    InvalidRunpathUtf8 { runpath: Vec<u8> },
+    DependencyNameContainsSeparator {
+        name: String,
+    },
+    InvalidRunpathUtf8 {
+        runpath: Vec<u8>,
+    },
     EmptyRunpath,
-    EmptyRunpathEntry { runpath: String },
-    UnsupportedRunpathToken { entry: String },
-    RelativeRunpathEntry { entry: String },
+    EmptyRunpathEntry {
+        runpath: String,
+    },
+    UnsupportedRunpathToken {
+        entry: String,
+    },
+    RelativeRunpathEntry {
+        entry: String,
+    },
     DependencyNotFound {
         name: String,
         directories: Vec<PathBuf>,
@@ -121,11 +133,10 @@ pub fn expand_provider_runpath(
     runpath: &[u8],
     provider_directory: &Path,
 ) -> Result<Vec<PathBuf>, ProviderClosurePathError> {
-    let runpath = std::str::from_utf8(runpath).map_err(|_| {
-        ProviderClosurePathError::InvalidRunpathUtf8 {
+    let runpath =
+        std::str::from_utf8(runpath).map_err(|_| ProviderClosurePathError::InvalidRunpathUtf8 {
             runpath: runpath.to_vec(),
-        }
-    })?;
+        })?;
     if runpath.is_empty() {
         return Err(ProviderClosurePathError::EmptyRunpath);
     }
