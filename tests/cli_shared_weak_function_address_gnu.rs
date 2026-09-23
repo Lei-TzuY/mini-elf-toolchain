@@ -323,7 +323,6 @@ int main(int argc, char **argv) {
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 fn unversioned_weak_function_addresses_zero_or_bind_without_provider() {
     if !have_tools() {
