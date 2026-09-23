@@ -865,9 +865,7 @@ fn resolve_transitive_provider_path(
         }
     }
 
-    let mut message = format!(
-        "cannot resolve transitive shared provider dependency '{name}'"
-    );
+    let mut message = format!("cannot resolve transitive shared provider dependency '{name}'");
     if directories.is_empty() {
         message.push_str("; no bounded provider search directories are available");
     } else {
@@ -881,10 +879,7 @@ fn resolve_transitive_provider_path(
 
 fn read_provider_file(path: &Path, role: &str) -> Result<Vec<u8>, CliError> {
     fs::read(path).map_err(|error| {
-        CliError::Failure(format!(
-            "{}: cannot read {role}: {error}",
-            path.display()
-        ))
+        CliError::Failure(format!("{}: cannot read {role}: {error}", path.display()))
     })
 }
 
