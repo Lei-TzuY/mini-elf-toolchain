@@ -14,7 +14,9 @@ use mini_elf_toolchain::ordered_inputs::{
 use mini_elf_toolchain::partial_link::{
     link_relocatable_objects_with_forced_undefined, PartialLinkInput,
 };
-use mini_elf_toolchain::shared_object::{link_shared_object_with_needed, shared_import_names};
+use mini_elf_toolchain::shared_object::{
+    link_shared_object_with_needed, shared_import_requirements,
+};
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
 };
@@ -618,7 +620,7 @@ struct LinkFilesOptions<'a> {
 
 fn resolve_needed_dependencies(
     specs: &[NeededSpec],
-    imports: &std::collections::BTreeSet<Vec<u8>>,
+    imports: &std::collections::BTreeMap<Vec<u8>, u8>,
 ) -> Result<Vec<Vec<u8>>, CliError> {
     let mut seen = std::collections::BTreeSet::new();
     let mut names = Vec::new();
@@ -634,7 +636,12 @@ fn resolve_needed_dependencies(
                         path.to_string_lossy()
                     ))
                 })?;
-                let matched = imports.iter().any(|name| provider.exports.contains(name));
+                let matched = imports.iter().any(|(name, symbol_type)| {
+                    provider
+                        .exports
+                        .get(name)
+                        .is_some_and(|types| types.contains(symbol_type))
+                });
                 if !matched {
                     return Err(CliError::Failure(format!(
                         "{}: provider SONAME {:?} exports none of the consumer's bounded external imports",
@@ -686,7 +693,7 @@ fn link_files(
     )
     .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     if options.shared_object {
-        let imports = shared_import_names(&prepared.objects)
+        let imports = shared_import_requirements(&prepared.objects)
             .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         let needed = resolve_needed_dependencies(options.needed, &imports)?;
         let image =
