@@ -1,5 +1,5 @@
 use mini_elf_toolchain::archive::{Archive, ArchiveMemberKind};
-use mini_elf_toolchain::dynamic_provider::inspect_dynamic_provider;
+use mini_elf_toolchain::dynamic_provider::{inspect_dynamic_provider, DynamicProviderMetadata};
 use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::forced_undefined::{
     extract_forced_undefined_arguments, ForcedUndefinedArgumentError,
@@ -17,7 +17,8 @@ use mini_elf_toolchain::partial_link::{
     link_relocatable_objects_with_forced_undefined, PartialLinkInput,
 };
 use mini_elf_toolchain::shared_object::{
-    link_shared_object_with_needed_soname_and_runpath, shared_import_requirements,
+    link_shared_object_with_needed_soname_runpath_and_versions, shared_import_requirements,
+    SharedImportRequirement, SharedVersionRequirement,
 };
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
@@ -772,13 +773,20 @@ struct LinkFilesOptions<'a> {
     forced_undefined: &'a [Vec<u8>],
 }
 
+struct ResolvedNeededDependencies {
+    names: Vec<Vec<u8>>,
+    version_requirements: Vec<SharedVersionRequirement>,
+}
+
 fn resolve_needed_dependencies(
     specs: &[NeededSpec],
-    imports: &std::collections::BTreeMap<Vec<u8>, u8>,
+    imports: &[SharedImportRequirement],
     search_paths: &[PathBuf],
-) -> Result<Vec<Vec<u8>>, CliError> {
+) -> Result<ResolvedNeededDependencies, CliError> {
     let mut seen = std::collections::BTreeSet::new();
     let mut names = Vec::new();
+    let mut version_requirements =
+        std::collections::BTreeMap::<Vec<u8>, SharedVersionRequirement>::new();
 
     for spec in specs {
         let name = match spec {
@@ -792,7 +800,12 @@ fn resolve_needed_dependencies(
                         root_path.display()
                     ))
                 })?;
-                let direct_match = provider_matches_imports(&provider.exports, imports);
+
+                let direct_matches = imports
+                    .iter()
+                    .filter(|import| provider_matches_import(&provider, import))
+                    .collect::<Vec<_>>();
+                let direct_match = !direct_matches.is_empty();
                 let matched = if direct_match {
                     true
                 } else {
@@ -810,6 +823,20 @@ fn resolve_needed_dependencies(
                         String::from_utf8_lossy(&provider.soname)
                     )));
                 }
+
+                for import in direct_matches {
+                    let Some(version) = import.version.as_ref() else {
+                        continue;
+                    };
+                    version_requirements
+                        .entry(import.linker_name.clone())
+                        .or_insert_with(|| SharedVersionRequirement {
+                            linker_name: import.linker_name.clone(),
+                            provider: provider.soname.clone(),
+                            version: version.clone(),
+                        });
+                }
+
                 provider.soname
             }
         };
@@ -818,25 +845,59 @@ fn resolve_needed_dependencies(
         }
     }
 
-    Ok(names)
+    for import in imports {
+        let Some(version) = import.version.as_ref() else {
+            continue;
+        };
+        if !version_requirements.contains_key(&import.linker_name) {
+            return Err(CliError::Failure(format!(
+                "versioned shared import {:?}@{:?} requires a directly checked provider exporting the requested symbol version",
+                String::from_utf8_lossy(&import.name),
+                String::from_utf8_lossy(version)
+            )));
+        }
+    }
+
+    Ok(ResolvedNeededDependencies {
+        names,
+        version_requirements: version_requirements.into_values().collect(),
+    })
 }
 
-fn provider_matches_imports(
-    exports: &std::collections::BTreeMap<Vec<u8>, std::collections::BTreeSet<u8>>,
-    imports: &std::collections::BTreeMap<Vec<u8>, u8>,
+fn provider_matches_import(
+    provider: &DynamicProviderMetadata,
+    import: &SharedImportRequirement,
 ) -> bool {
-    imports.iter().any(|(name, symbol_type)| {
-        exports
-            .get(name)
-            .is_some_and(|types| types.contains(symbol_type))
+    match &import.version {
+        Some(version) => provider
+            .versioned_exports
+            .get(&(import.name.clone(), version.clone()))
+            .is_some_and(|types| types.contains(&import.symbol_type)),
+        None => provider
+            .exports
+            .get(&import.name)
+            .is_some_and(|types| types.contains(&import.symbol_type)),
+    }
+}
+
+fn provider_matches_unversioned_imports(
+    provider: &DynamicProviderMetadata,
+    imports: &[SharedImportRequirement],
+) -> bool {
+    imports.iter().any(|import| {
+        import.version.is_none()
+            && provider
+                .exports
+                .get(&import.name)
+                .is_some_and(|types| types.contains(&import.symbol_type))
     })
 }
 
 fn inspect_transitive_provider_exports(
     root_path: &Path,
-    root: &mini_elf_toolchain::dynamic_provider::DynamicProviderMetadata,
+    root: &DynamicProviderMetadata,
     search_paths: &[PathBuf],
-    imports: &std::collections::BTreeMap<Vec<u8>, u8>,
+    imports: &[SharedImportRequirement],
 ) -> Result<bool, CliError> {
     use std::collections::{BTreeSet, VecDeque};
 
@@ -884,7 +945,7 @@ fn inspect_transitive_provider_exports(
                 String::from_utf8_lossy(&needed)
             ))
         })?;
-        if provider_matches_imports(&provider.exports, imports) {
+        if provider_matches_unversioned_imports(&provider, imports) {
             return Ok(true);
         }
 
@@ -1051,12 +1112,13 @@ fn link_files(
             .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         let needed =
             resolve_needed_dependencies(options.needed, &imports, options.provider_search_paths)?;
-        let image = link_shared_object_with_needed_soname_and_runpath(
+        let image = link_shared_object_with_needed_soname_runpath_and_versions(
             &prepared.objects,
             DEFAULT_PAGE_ALIGNMENT,
-            &needed,
+            &needed.names,
             options.soname,
             options.runpath,
+            &needed.version_requirements,
         )
         .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         fs::write(output, &image.bytes)
