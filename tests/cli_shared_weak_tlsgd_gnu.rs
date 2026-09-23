@@ -135,9 +135,9 @@ fn assert_weak_tlsgd_metadata(shared: &Path) {
         shared.display()
     );
     assert!(
-        relocations.lines().any(|line| {
-            line.contains("R_X86_64_JUMP_SLOT") && line.contains("__tls_get_addr")
-        }),
+        relocations
+            .lines()
+            .any(|line| { line.contains("R_X86_64_JUMP_SLOT") && line.contains("__tls_get_addr") }),
         "{} dynamic relocations:\n{relocations}",
         shared.display()
     );
@@ -407,9 +407,7 @@ read_provider_tls:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("TLS import")
-            || stderr.contains("version")
-            || stderr.contains("weak"),
+        stderr.contains("TLS import") || stderr.contains("version") || stderr.contains("weak"),
         "{stderr}"
     );
     assert!(!output.exists());
