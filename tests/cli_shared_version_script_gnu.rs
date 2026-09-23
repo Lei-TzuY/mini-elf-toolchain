@@ -256,11 +256,7 @@ actual_value:
 ",
     );
     let script = dir.join("provider.map");
-    fs::write(
-        &script,
-        "VERS_1 { global: missing_value; local: *; };\n",
-    )
-    .unwrap();
+    fs::write(&script, "VERS_1 { global: missing_value; local: *; };\n").unwrap();
     let output = dir.join("must-not-exist.so");
 
     let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
@@ -337,11 +333,7 @@ impl_value:
 "#,
     );
     let script = dir.join("provider.map");
-    fs::write(
-        &script,
-        "VERS_1 { global: public_value; local: *; };\n",
-    )
-    .unwrap();
+    fs::write(&script, "VERS_1 { global: public_value; local: *; };\n").unwrap();
     let output = dir.join("must-not-exist.so");
 
     let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
