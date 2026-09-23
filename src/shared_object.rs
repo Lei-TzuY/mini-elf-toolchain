@@ -1340,8 +1340,7 @@ fn build_dynamic_metadata(
         let jmprel_size =
             u64::try_from(jmprel_bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
         debug_assert_eq!(jmprel_bytes.len() % ELF64_RELA_SIZE, 0);
-        let plt_got_address =
-            plt_got_address.ok_or(SharedObjectError::MetadataTooLarge)?;
+        let plt_got_address = plt_got_address.ok_or(SharedObjectError::MetadataTooLarge)?;
         entries.extend_from_slice(&[
             (DT_PLTGOT, plt_got_address),
             (DT_JMPREL, jmprel_address),
