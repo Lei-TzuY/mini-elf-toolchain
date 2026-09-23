@@ -1656,7 +1656,7 @@ fn validate_inputs(
                         && !definitions.contains_key(symbol.name);
                     if unresolved {
                         let binding = symbol.symbol.info >> 4;
-                        if binding != STB_GLOBAL {
+                        if binding != STB_GLOBAL && binding != STB_WEAK {
                             return Err(SharedObjectError::TlsImportUnsupported {
                                 object_index: input.object_index,
                                 symbol_index: symbol.symbol_index,
@@ -1974,11 +1974,15 @@ fn validate_inputs(
                 if symbol.symbol.section_index == SHN_UNDEF && !symbol.name.is_empty() {
                     let symbol_type = symbol.symbol.info & 0x0f;
                     if symbol_type == STT_TLS {
-                        let supported_tls_import = binding == STB_GLOBAL
-                            && import_symbols.contains_key(symbol.name)
-                            && (tls_gd_symbols.contains(symbol.name)
-                                || tls_ie_symbols.contains(symbol.name)
-                                || tls_desc_symbols.contains(symbol.name));
+                        let supported_tls_model =
+                            (binding == STB_GLOBAL
+                                && (tls_gd_symbols.contains(symbol.name)
+                                    || tls_ie_symbols.contains(symbol.name)
+                                    || tls_desc_symbols.contains(symbol.name)))
+                                || (binding == STB_WEAK
+                                    && tls_gd_symbols.contains(symbol.name));
+                        let supported_tls_import =
+                            import_symbols.contains_key(symbol.name) && supported_tls_model;
                         if !supported_tls_import {
                             return Err(SharedObjectError::TlsImportUnsupported {
                                 object_index: input.object_index,
