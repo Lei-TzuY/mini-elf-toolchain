@@ -75,7 +75,9 @@ fn shared_object_binds_external_function_for_got_call_and_direct_pointer() {
 call_host:
     mov host_function@GOTPCREL(%rip), %rax
     mov $41, %edi
+    sub $8, %rsp
     call *%rax
+    add $8, %rsp
     ret
 .size call_host, .-call_host
 
