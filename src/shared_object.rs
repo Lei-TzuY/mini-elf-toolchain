@@ -498,7 +498,7 @@ impl fmt::Display for SharedObjectError {
             ),
             Self::MissingPltGotEntry { name } => write!(
                 f,
-                "shared object external PLT import {:?} has no synthetic PLT-GOT slot",
+                "shared object PLT symbol {:?} has no synthetic PLT-GOT slot",
                 String::from_utf8_lossy(name)
             ),
             Self::MissingTlsGdEntry { name } => write!(
