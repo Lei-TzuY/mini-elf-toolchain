@@ -5,25 +5,36 @@ use crate::elf64::SHT_NOBITS;
 use crate::executable_pipeline::ExecutableSectionInput;
 use crate::layout::LaidOutSection;
 use crate::link_context::{
-    build_link_context_with_got_entry_maps_and_unresolved_got, LinkContextBuildError,
+    build_link_context_with_got_entry_maps_and_unresolved_got,
+    build_link_context_with_got_plt_maps_and_unresolved, LinkContextBuildError,
     LinkContextRelocationError,
 };
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
 use crate::linker_input::{LinkerInputError, LinkerInputObject};
-use crate::load_segments::{SHF_ALLOC, SHF_WRITE};
+use crate::load_segments::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE};
 use crate::object_symbols::named_symbols_from_table;
 use crate::permission_layout::{
     layout_sections_by_permissions, PermissionLayoutError, PermissionLayoutInput,
 };
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, STB_GLOBAL, STB_WEAK};
-use crate::x86_64_relocations::{is_static_got_entry_type, is_static_tls_gotpcrel_type};
+use crate::x86_64_relocations::{
+    is_static_got_entry_type, is_static_tls_gotpcrel_type, R_X86_64_PLT32,
+};
 
 const SHT_PROGBITS: u32 = 1;
 const GOT_OBJECT_INDEX: usize = usize::MAX - 1;
 const GOT_SECTION_INDEX: u16 = 1;
 const GOT_ENTRY_SIZE: u64 = 8;
 const GOT_ALIGNMENT: u64 = 8;
+const PLT_OBJECT_INDEX: usize = usize::MAX - 4;
+const PLT_SECTION_INDEX: u16 = 1;
+const PLT_GOT_OBJECT_INDEX: usize = usize::MAX - 5;
+const PLT_GOT_SECTION_INDEX: u16 = 1;
+const PLT_ENTRY_SIZE: u64 = 16;
+const PLT_ALIGNMENT: u64 = 16;
+const PLT_GOT_ENTRY_SIZE: u64 = 8;
+const PLT_GOT_ALIGNMENT: u64 = 8;
 const STT_TLS: u8 = 6;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +68,8 @@ pub struct RelocatedSectionsOutput {
     pub sections: Vec<RelocatedSectionImage>,
     pub got_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_got_entries: BTreeMap<Vec<u8>, u64>,
+    pub plt_entries: BTreeMap<Vec<u8>, u64>,
+    pub plt_got_entries: BTreeMap<Vec<u8>, u64>,
 }
 
 #[derive(Debug)]
@@ -101,6 +114,17 @@ pub enum RelocatedSectionError {
     },
     MissingExternalGotSymbol {
         name: Vec<u8>,
+    },
+    MissingExternalPltSymbol {
+        name: Vec<u8>,
+    },
+    PltSizeOverflow {
+        symbol_count: usize,
+    },
+    PltDisplacementOutOfRange {
+        name: Vec<u8>,
+        stub_address: u64,
+        slot_address: u64,
     },
     RelocationAgainstMemoryOnlySection {
         object_index: usize,
@@ -180,6 +204,24 @@ impl fmt::Display for RelocatedSectionError {
                 "requested external GOT symbol {:?} has no synthetic GOT relocation",
                 String::from_utf8_lossy(name)
             ),
+            Self::MissingExternalPltSymbol { name } => write!(
+                f,
+                "requested external PLT symbol {:?} has no PLT32 relocation",
+                String::from_utf8_lossy(name)
+            ),
+            Self::PltSizeOverflow { symbol_count } => write!(
+                f,
+                "synthetic PLT/PLT-GOT size overflows u64 for {symbol_count} unique symbols"
+            ),
+            Self::PltDisplacementOutOfRange {
+                name,
+                stub_address,
+                slot_address,
+            } => write!(
+                f,
+                "synthetic PLT stub for {:?} at {stub_address:#x} cannot reach PLT-GOT slot {slot_address:#x} with signed disp32",
+                String::from_utf8_lossy(name)
+            ),
             Self::RelocationAgainstMemoryOnlySection {
                 object_index,
                 section_index,
@@ -218,6 +260,9 @@ impl std::error::Error for RelocatedSectionError {
             | Self::GotAddressOverflow { .. }
             | Self::MissingGotSymbolAddress { .. }
             | Self::MissingExternalGotSymbol { .. }
+            | Self::MissingExternalPltSymbol { .. }
+            | Self::PltSizeOverflow { .. }
+            | Self::PltDisplacementOutOfRange { .. }
             | Self::RelocationAgainstMemoryOnlySection { .. } => None,
         }
     }
@@ -250,6 +295,22 @@ pub fn relocate_allocatable_sections_with_external_got(
     start_address: u64,
     page_alignment: u64,
     external_got_symbols: &BTreeSet<Vec<u8>>,
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    relocate_allocatable_sections_with_external_got_and_plt(
+        inputs,
+        start_address,
+        page_alignment,
+        external_got_symbols,
+        &BTreeSet::new(),
+    )
+}
+
+pub fn relocate_allocatable_sections_with_external_got_and_plt(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    external_got_symbols: &BTreeSet<Vec<u8>>,
+    external_plt_symbols: &BTreeSet<Vec<u8>>,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     for (position, input) in inputs.iter().enumerate() {
         if input.object_index != position {
@@ -290,6 +351,10 @@ pub fn relocate_allocatable_sections_with_external_got(
     )?;
     let got_size = got_size(got_symbol_count)?;
 
+    validate_external_plt_symbols(inputs, external_plt_symbols)?;
+    let plt_size = synthetic_table_size(external_plt_symbols.len(), PLT_ENTRY_SIZE)?;
+    let plt_got_size = synthetic_table_size(external_plt_symbols.len(), PLT_GOT_ENTRY_SIZE)?;
+
     let mut layout_inputs = sections
         .iter()
         .map(|section| section.permission_layout_input())
@@ -312,20 +377,54 @@ pub fn relocate_allocatable_sections_with_external_got(
             flags: SHF_ALLOC | SHF_WRITE,
         });
     }
+    if plt_size != 0 {
+        layout_inputs.push(PermissionLayoutInput {
+            object_index: PLT_OBJECT_INDEX,
+            section_index: PLT_SECTION_INDEX,
+            size: plt_size,
+            alignment: PLT_ALIGNMENT,
+            flags: SHF_ALLOC | SHF_EXECINSTR,
+        });
+        layout_inputs.push(PermissionLayoutInput {
+            object_index: PLT_GOT_OBJECT_INDEX,
+            section_index: PLT_GOT_SECTION_INDEX,
+            size: plt_got_size,
+            alignment: PLT_GOT_ALIGNMENT,
+            flags: SHF_ALLOC | SHF_WRITE,
+        });
+    }
 
     let layout = layout_sections_by_permissions(start_address, page_alignment, layout_inputs)
         .map_err(RelocatedSectionError::Layout)?;
     let got_entries = got_entry_addresses(&layout, &got_symbols, 0)?;
     let tls_got_entries = got_entry_addresses(&layout, &tls_got_symbols, got_symbols.len())?;
+    let plt_entries = synthetic_entry_addresses(
+        &layout,
+        PLT_OBJECT_INDEX,
+        PLT_SECTION_INDEX,
+        external_plt_symbols,
+        PLT_ENTRY_SIZE,
+    )?;
+    let plt_got_entries = synthetic_entry_addresses(
+        &layout,
+        PLT_GOT_OBJECT_INDEX,
+        PLT_GOT_SECTION_INDEX,
+        external_plt_symbols,
+        PLT_GOT_ENTRY_SIZE,
+    )?;
     let got_entries_output = got_entries.clone();
     let tls_got_entries_output = tls_got_entries.clone();
+    let plt_entries_output = plt_entries.clone();
+    let plt_got_entries_output = plt_got_entries.clone();
 
-    let context = build_link_context_with_got_entry_maps_and_unresolved_got(
+    let context = build_link_context_with_got_plt_maps_and_unresolved(
         &validated_objects,
         &layout,
         got_entries,
         tls_got_entries,
         external_got_symbols.clone(),
+        plt_entries,
+        external_plt_symbols.clone(),
     )
     .map_err(RelocatedSectionError::LinkContext)?;
 
@@ -426,11 +525,185 @@ pub fn relocate_allocatable_sections_with_external_got(
         });
     }
 
+    if plt_size != 0 {
+        let plt_layout = matching_layout(&layout, PLT_OBJECT_INDEX, PLT_SECTION_INDEX).ok_or(
+            RelocatedSectionError::MissingLayout {
+                object_index: PLT_OBJECT_INDEX,
+                section_index: PLT_SECTION_INDEX,
+            },
+        )?;
+        let mut plt_bytes = Vec::with_capacity(plt_size as usize);
+        for name in external_plt_symbols {
+            let stub_address = plt_entries_output[name];
+            let slot_address = plt_got_entries_output[name];
+            let next_ip = stub_address
+                .checked_add(6)
+                .ok_or(RelocatedSectionError::PltDisplacementOutOfRange {
+                    name: name.clone(),
+                    stub_address,
+                    slot_address,
+                })?;
+            let displacement = i128::from(slot_address) - i128::from(next_ip);
+            let displacement = i32::try_from(displacement).map_err(|_| {
+                RelocatedSectionError::PltDisplacementOutOfRange {
+                    name: name.clone(),
+                    stub_address,
+                    slot_address,
+                }
+            })?;
+            plt_bytes.extend_from_slice(&[0xff, 0x25]);
+            plt_bytes.extend_from_slice(&displacement.to_le_bytes());
+            plt_bytes.extend_from_slice(&[0x90; 10]);
+        }
+        relocated.push(RelocatedSectionImage {
+            object_index: PLT_OBJECT_INDEX,
+            section_index: PLT_SECTION_INDEX,
+            section_type: SHT_PROGBITS,
+            flags: SHF_ALLOC | SHF_EXECINSTR,
+            address: plt_layout.address,
+            size: plt_size,
+            alignment: PLT_ALIGNMENT,
+            bytes: plt_bytes,
+        });
+
+        let plt_got_layout = matching_layout(
+            &layout,
+            PLT_GOT_OBJECT_INDEX,
+            PLT_GOT_SECTION_INDEX,
+        )
+        .ok_or(RelocatedSectionError::MissingLayout {
+            object_index: PLT_GOT_OBJECT_INDEX,
+            section_index: PLT_GOT_SECTION_INDEX,
+        })?;
+        relocated.push(RelocatedSectionImage {
+            object_index: PLT_GOT_OBJECT_INDEX,
+            section_index: PLT_GOT_SECTION_INDEX,
+            section_type: SHT_PROGBITS,
+            flags: SHF_ALLOC | SHF_WRITE,
+            address: plt_got_layout.address,
+            size: plt_got_size,
+            alignment: PLT_GOT_ALIGNMENT,
+            bytes: vec![0; plt_got_size as usize],
+        });
+    }
+
     Ok(RelocatedSectionsOutput {
         sections: relocated,
         got_entries: got_entries_output,
         tls_got_entries: tls_got_entries_output,
+        plt_entries: plt_entries_output,
+        plt_got_entries: plt_got_entries_output,
     })
+}
+
+fn validate_external_plt_symbols(
+    inputs: &[LinkerInputObject<'_>],
+    external_plt_symbols: &BTreeSet<Vec<u8>>,
+) -> Result<(), RelocatedSectionError> {
+    if external_plt_symbols.is_empty() {
+        return Ok(());
+    }
+
+    let mut observed = BTreeSet::new();
+    for input in inputs {
+        for table in &input.object.rela_tables {
+            let plt_relocations = table
+                .relocations
+                .iter()
+                .filter(|relocation| relocation.relocation_type == R_X86_64_PLT32)
+                .collect::<Vec<_>>();
+            if plt_relocations.is_empty() {
+                continue;
+            }
+            let symbol_table = input
+                .object
+                .symbol_tables
+                .iter()
+                .find(|candidate| candidate.section_index == table.symbol_table_index)
+                .ok_or(RelocatedSectionError::MissingGotSymbolMetadata {
+                    object_index: input.object_index,
+                    rela_section_index: table.section_index,
+                    symbol_index: plt_relocations[0].symbol_index,
+                })?;
+            let symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                symbol_table,
+                input.object_index,
+            )
+            .map_err(|source| {
+                RelocatedSectionError::Symbols(LinkSymbolError::ObjectSymbols {
+                    object_index: input.object_index,
+                    source,
+                })
+            })?;
+            for relocation in plt_relocations {
+                let symbol = symbols
+                    .iter()
+                    .find(|symbol| symbol.symbol_index == relocation.symbol_index as usize)
+                    .ok_or(RelocatedSectionError::MissingGotSymbolMetadata {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        symbol_index: relocation.symbol_index,
+                    })?;
+                if external_plt_symbols.contains(symbol.name) {
+                    observed.insert(symbol.name.to_vec());
+                }
+            }
+        }
+    }
+
+    for name in external_plt_symbols {
+        if !observed.contains(name) {
+            return Err(RelocatedSectionError::MissingExternalPltSymbol {
+                name: name.clone(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn synthetic_table_size(
+    symbol_count: usize,
+    entry_size: u64,
+) -> Result<u64, RelocatedSectionError> {
+    u64::try_from(symbol_count)
+        .ok()
+        .and_then(|count| count.checked_mul(entry_size))
+        .ok_or(RelocatedSectionError::PltSizeOverflow { symbol_count })
+}
+
+fn synthetic_entry_addresses(
+    layout: &[LaidOutSection],
+    object_index: usize,
+    section_index: u16,
+    symbols: &BTreeSet<Vec<u8>>,
+    entry_size: u64,
+) -> Result<BTreeMap<Vec<u8>, u64>, RelocatedSectionError> {
+    if symbols.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let section = matching_layout(layout, object_index, section_index).ok_or(
+        RelocatedSectionError::MissingLayout {
+            object_index,
+            section_index,
+        },
+    )?;
+    let mut entries = BTreeMap::new();
+    for (entry_index, name) in symbols.iter().enumerate() {
+        let offset = u64::try_from(entry_index)
+            .ok()
+            .and_then(|index| index.checked_mul(entry_size))
+            .ok_or(RelocatedSectionError::PltSizeOverflow {
+                symbol_count: symbols.len(),
+            })?;
+        let address = section
+            .address
+            .checked_add(offset)
+            .ok_or(RelocatedSectionError::GotAddressOverflow { entry_index })?;
+        entries.insert(name.clone(), address);
+    }
+    Ok(entries)
 }
 
 fn collect_static_got_symbols(
