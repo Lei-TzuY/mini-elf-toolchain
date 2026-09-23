@@ -537,12 +537,11 @@ fn link_files(
         .iter()
         .map(|input| loaded.paths[input.file_index].clone())
         .collect::<Vec<_>>();
-    let prepared =
-        prepare_ordered_link_inputs_with_forced_undefined(
-            &ordered_inputs,
-            options.forced_undefined,
-        )
-            .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
+    let prepared = prepare_ordered_link_inputs_with_forced_undefined(
+        &ordered_inputs,
+        options.forced_undefined,
+    )
+    .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     if options.shared_object {
         let image = link_shared_object(&prepared.objects, DEFAULT_PAGE_ALIGNMENT)
             .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
