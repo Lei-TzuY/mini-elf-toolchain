@@ -150,7 +150,7 @@ where
         if (position_independent || shared_object) && contains_image_base_argument(&raw_remaining) {
             return Err(CliError::Usage(format!(
                 "{} cannot be combined with --image-base",
-                if options.shared_object { "--shared" } else { "--pie" }
+                if shared_object { "--shared" } else { "--pie" }
             )));
         }
         let forced =
@@ -544,7 +544,7 @@ fn link_files(
             options.forced_undefined,
         )
             .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
-    if shared_object {
+    if options.shared_object {
         let image = link_shared_object(&prepared.objects, DEFAULT_PAGE_ALIGNMENT)
             .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         fs::write(output, &image.bytes)
