@@ -2097,7 +2097,7 @@ fn validate_inputs(
                 let symbol_type = symbol.symbol.info & 0x0f;
                 let protected_definition = symbol.symbol.other == STV_PROTECTED
                     && binding == STB_GLOBAL
-                    && matches!(symbol_type, STT_OBJECT | STT_FUNC)
+                    && matches!(symbol_type, STT_OBJECT | STT_FUNC | STT_TLS)
                     && symbol.symbol.section_index != SHN_UNDEF
                     && symbol.symbol.section_index != SHN_ABS;
                 if symbol.symbol.other != 0 && !protected_definition {
