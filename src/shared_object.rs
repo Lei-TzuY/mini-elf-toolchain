@@ -40,6 +40,7 @@ const STT_FUNC: u8 = 2;
 const GLOBAL_OFFSET_TABLE_SYMBOL: &[u8] = b"_GLOBAL_OFFSET_TABLE_";
 
 const DT_NULL: i64 = 0;
+const DT_NEEDED: i64 = 1;
 const DT_PLTRELSZ: i64 = 2;
 const DT_HASH: i64 = 4;
 const DT_STRTAB: i64 = 5;
@@ -154,6 +155,10 @@ pub enum SharedObjectError {
         other: u8,
     },
     NoExports,
+    InvalidNeededName {
+        dependency_index: usize,
+        empty: bool,
+    },
     Relocation(RelocatedSectionError),
     RuntimeRelative(PieRuntimeError),
     SymbolAddress(FinalSymbolAddressError),
@@ -321,6 +326,18 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object first slice requires at least one defined default-visible global/weak export"
             ),
+            Self::InvalidNeededName {
+                dependency_index,
+                empty,
+            } => write!(
+                f,
+                "shared object dependency {dependency_index} {}",
+                if *empty {
+                    "has an empty DT_NEEDED name"
+                } else {
+                    "contains an embedded NUL byte"
+                }
+            ),
             Self::Relocation(source) => {
                 write!(f, "cannot lay out shared object sections: {source}")
             }
@@ -367,6 +384,7 @@ impl std::error::Error for SharedObjectError {
             | Self::UndefinedNonlocal { .. }
             | Self::NondefaultVisibility { .. }
             | Self::NoExports
+            | Self::InvalidNeededName { .. }
             | Self::AddressOverflow
             | Self::MetadataTooLarge => None,
         }
@@ -415,6 +433,15 @@ pub fn link_shared_object(
     inputs: &[LinkerInputObject<'_>],
     page_alignment: u64,
 ) -> Result<ExecutableImage, SharedObjectError> {
+    link_shared_object_with_needed(inputs, page_alignment, &[])
+}
+
+pub fn link_shared_object_with_needed(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    needed_names: &[Vec<u8>],
+) -> Result<ExecutableImage, SharedObjectError> {
+    validate_needed_names(needed_names)?;
     let validated = inputs
         .iter()
         .map(LinkerInputObject::validated_object)
@@ -514,6 +541,7 @@ pub fn link_shared_object(
         &rela_bytes,
         relative_relocation_count,
         &jmprel_bytes,
+        needed_names,
     )?;
     let dynamic_address = metadata_address
         .checked_add(metadata.dynamic_offset)
@@ -563,6 +591,24 @@ pub fn link_shared_object(
         },
     )
     .map_err(SharedObjectError::Write)
+}
+
+fn validate_needed_names(needed_names: &[Vec<u8>]) -> Result<(), SharedObjectError> {
+    for (dependency_index, name) in needed_names.iter().enumerate() {
+        if name.is_empty() {
+            return Err(SharedObjectError::InvalidNeededName {
+                dependency_index,
+                empty: true,
+            });
+        }
+        if name.contains(&0) {
+            return Err(SharedObjectError::InvalidNeededName {
+                dependency_index,
+                empty: false,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn validate_inputs(
@@ -1016,6 +1062,7 @@ fn build_dynamic_metadata(
     rela_bytes: &[u8],
     relative_relocation_count: usize,
     jmprel_bytes: &[u8],
+    needed_names: &[Vec<u8>],
 ) -> Result<DynamicMetadata, SharedObjectError> {
     let symbol_count = exports
         .len()
@@ -1056,6 +1103,14 @@ fn build_dynamic_metadata(
         dynstr.extend_from_slice(&import.name);
         dynstr.push(0);
     }
+    let mut needed_name_offsets = Vec::with_capacity(needed_names.len());
+    for name in needed_names {
+        let offset =
+            u32::try_from(dynstr.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        needed_name_offsets.push(offset);
+        dynstr.extend_from_slice(name);
+        dynstr.push(0);
+    }
 
     let dynstr_offset = dynsym_offset
         .checked_add(dynsym_size)
@@ -1085,7 +1140,8 @@ fn build_dynamic_metadata(
     let has_relocations = !rela_bytes.is_empty();
     let has_plt_relocations = !jmprel_bytes.is_empty();
     let dynamic_entry_count = 5usize
-        .checked_add(if has_relocations { 3 } else { 0 })
+        .checked_add(needed_names.len())
+        .and_then(|count| count.checked_add(if has_relocations { 3 } else { 0 }))
         .and_then(|count| count.checked_add(usize::from(relative_relocation_count != 0)))
         .and_then(|count| count.checked_add(if has_plt_relocations { 4 } else { 0 }))
         .and_then(|count| count.checked_add(1))
@@ -1136,13 +1192,17 @@ fn build_dynamic_metadata(
     let hash_address = checked_metadata_address(base_address, hash_offset)?;
     let dynsym_address = checked_metadata_address(base_address, dynsym_offset)?;
     let dynstr_address = checked_metadata_address(base_address, dynstr_offset)?;
-    let mut entries = vec![
+    let mut entries = needed_name_offsets
+        .iter()
+        .map(|offset| (DT_NEEDED, u64::from(*offset)))
+        .collect::<Vec<_>>();
+    entries.extend_from_slice(&[
         (DT_HASH, hash_address),
         (DT_STRTAB, dynstr_address),
         (DT_SYMTAB, dynsym_address),
         (DT_STRSZ, dynstr.len() as u64),
         (DT_SYMENT, ELF64_SYMBOL_SIZE as u64),
-    ];
+    ]);
     if has_relocations {
         let rela_address = checked_metadata_address(base_address, rela_offset)?;
         let rela_size =
