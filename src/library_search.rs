@@ -52,11 +52,7 @@ impl fmt::Display for LibrarySearchError {
                 filename,
                 search_paths,
             } => {
-                write!(
-                    f,
-                    "cannot find static library '{}'",
-                    filename.to_string_lossy()
-                )?;
+                write!(f, "cannot find library '{}'", filename.to_string_lossy())?;
                 if search_paths.is_empty() {
                     write!(f, "; no -L search directories were provided")
                 } else {
@@ -78,6 +74,105 @@ impl std::error::Error for LibrarySearchError {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedLibraryResolution {
+    pub arguments: Vec<OsString>,
+    pub providers: Vec<PathBuf>,
+}
+
+enum SharedLibraryChoice {
+    Provider(PathBuf),
+    Static(PathBuf),
+}
+
+pub fn resolve_shared_library_arguments(
+    arguments: &[OsString],
+) -> Result<SharedLibraryResolution, LibrarySearchError> {
+    let flatten_nested_groups = archive_group_markers_balanced(arguments);
+    let mut search_paths = Vec::new();
+    let mut resolved = Vec::with_capacity(arguments.len());
+    let mut providers = Vec::new();
+    let mut index = 0usize;
+    let mut group_depth = 0usize;
+
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if is_start_group(argument) {
+            if !flatten_nested_groups || group_depth == 0 {
+                resolved.push(OsString::from(START_GROUP));
+            }
+            group_depth += 1;
+            index += 1;
+            continue;
+        }
+        if is_end_group(argument) {
+            if !flatten_nested_groups {
+                resolved.push(OsString::from(END_GROUP));
+            } else if group_depth > 0 {
+                group_depth -= 1;
+                if group_depth == 0 {
+                    resolved.push(OsString::from(END_GROUP));
+                }
+            } else {
+                resolved.push(OsString::from(END_GROUP));
+            }
+            index += 1;
+            continue;
+        }
+        if argument == "-L" || argument == "--library-path" {
+            let path = arguments
+                .get(index + 1)
+                .ok_or(LibrarySearchError::MissingSearchPath)?;
+            add_search_path(path, &mut search_paths)?;
+            index += 2;
+            continue;
+        }
+        if let Some(path) = strip_os_prefix(argument, "--library-path=") {
+            add_search_path(&path, &mut search_paths)?;
+            index += 1;
+            continue;
+        }
+        if let Some(path) = strip_os_prefix(argument, "-L") {
+            add_search_path(&path, &mut search_paths)?;
+            index += 1;
+            continue;
+        }
+
+        let library_name = if argument == "-l" || argument == "--library" {
+            let name = arguments
+                .get(index + 1)
+                .ok_or(LibrarySearchError::MissingLibraryName)?
+                .clone();
+            index += 2;
+            Some(name)
+        } else if let Some(name) = strip_os_prefix(argument, "--library=") {
+            index += 1;
+            Some(name)
+        } else if let Some(name) = strip_os_prefix(argument, "-l") {
+            index += 1;
+            Some(name)
+        } else {
+            None
+        };
+
+        if let Some(name) = library_name {
+            match resolve_shared_library(&name, &search_paths)? {
+                SharedLibraryChoice::Provider(path) => providers.push(path),
+                SharedLibraryChoice::Static(path) => resolved.push(path.into_os_string()),
+            }
+            continue;
+        }
+
+        resolved.push(argument.clone());
+        index += 1;
+    }
+
+    Ok(SharedLibraryResolution {
+        arguments: resolved,
+        providers,
+    })
 }
 
 pub fn resolve_static_library_arguments(
@@ -200,6 +295,59 @@ fn add_search_path(
     Ok(())
 }
 
+fn resolve_shared_library(
+    name: &OsStr,
+    search_paths: &[PathBuf],
+) -> Result<SharedLibraryChoice, LibrarySearchError> {
+    if name.is_empty() {
+        return Err(LibrarySearchError::EmptyLibraryName);
+    }
+
+    if let Some(exact) = strip_os_prefix(name, ":") {
+        if exact.is_empty() {
+            return Err(LibrarySearchError::EmptyLibraryName);
+        }
+        for directory in search_paths {
+            let candidate = directory.join(Path::new(&exact));
+            if candidate.is_file() {
+                let is_provider = exact.to_str().is_some_and(|name| name.contains(".so"));
+                return Ok(if is_provider {
+                    SharedLibraryChoice::Provider(candidate)
+                } else {
+                    SharedLibraryChoice::Static(candidate)
+                });
+            }
+        }
+        return Err(LibrarySearchError::LibraryNotFound {
+            filename: exact,
+            search_paths: search_paths.to_vec(),
+        });
+    }
+
+    let mut shared_filename = OsString::from("lib");
+    shared_filename.push(name);
+    shared_filename.push(".so");
+    let mut static_filename = OsString::from("lib");
+    static_filename.push(name);
+    static_filename.push(".a");
+
+    for directory in search_paths {
+        let shared = directory.join(Path::new(&shared_filename));
+        if shared.is_file() {
+            return Ok(SharedLibraryChoice::Provider(shared));
+        }
+        let static_archive = directory.join(Path::new(&static_filename));
+        if static_archive.is_file() {
+            return Ok(SharedLibraryChoice::Static(static_archive));
+        }
+    }
+
+    Err(LibrarySearchError::LibraryNotFound {
+        filename: shared_filename,
+        search_paths: search_paths.to_vec(),
+    })
+}
+
 fn resolve_library(name: &OsStr, search_paths: &[PathBuf]) -> Result<OsString, LibrarySearchError> {
     if name.is_empty() {
         return Err(LibrarySearchError::EmptyLibraryName);
@@ -249,7 +397,9 @@ fn strip_os_prefix(value: &OsStr, prefix: &str) -> Option<OsString> {
 
 #[cfg(test)]
 mod tests {
-    use super::{resolve_static_library_arguments, LibrarySearchError};
+    use super::{
+        resolve_shared_library_arguments, resolve_static_library_arguments, LibrarySearchError,
+    };
     use std::ffi::OsString;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -559,5 +709,55 @@ mod tests {
             resolve_static_library_arguments(&[OsString::from("--library=:")]),
             Err(LibrarySearchError::EmptyLibraryName)
         ));
+    }
+    #[test]
+    fn shared_search_prefers_so_then_falls_back_to_a_per_directory() {
+        let first = temp_dir();
+        let second = temp_dir();
+        fs::write(first.join("libfoo.a"), b"archive").expect("write static foo");
+        fs::write(second.join("libfoo.so"), b"shared").expect("write shared foo");
+        fs::write(first.join("libbar.so"), b"shared").expect("write shared bar");
+
+        let result = resolve_shared_library_arguments(&[
+            OsString::from("-L"),
+            first.as_os_str().to_os_string(),
+            OsString::from("-L"),
+            second.as_os_str().to_os_string(),
+            OsString::from("-lfoo"),
+            OsString::from("-lbar"),
+        ])
+        .expect("resolve shared libraries");
+
+        assert_eq!(
+            result.arguments,
+            vec![first.join("libfoo.a").into_os_string()]
+        );
+        assert_eq!(result.providers, vec![first.join("libbar.so")]);
+
+        fs::remove_dir_all(first).expect("remove first temp directory");
+        fs::remove_dir_all(second).expect("remove second temp directory");
+    }
+
+    #[test]
+    fn shared_exact_so_becomes_provider_and_exact_a_stays_input() {
+        let directory = temp_dir();
+        fs::write(directory.join("custom.so.1"), b"shared").expect("write shared exact");
+        fs::write(directory.join("custom.a"), b"archive").expect("write static exact");
+
+        let result = resolve_shared_library_arguments(&[
+            OsString::from("-L"),
+            directory.as_os_str().to_os_string(),
+            OsString::from("-l:custom.so.1"),
+            OsString::from("-l:custom.a"),
+        ])
+        .expect("resolve exact shared/static libraries");
+
+        assert_eq!(
+            result.arguments,
+            vec![directory.join("custom.a").into_os_string()]
+        );
+        assert_eq!(result.providers, vec![directory.join("custom.so.1")]);
+
+        fs::remove_dir_all(directory).expect("remove temp directory");
     }
 }
