@@ -290,6 +290,67 @@ fn needed_from_rejects_provider_that_satisfies_no_consumer_import() {
 }
 
 #[test]
+fn needed_from_rejects_same_name_with_incompatible_symbol_type() {
+    if !have_tools() {
+        return;
+    }
+
+    let dir = temp_dir("wrong-type");
+    let object_provider = assemble(
+        &dir,
+        "wrong-type-provider",
+        r#".section .data
+.globl provider_function
+.type provider_function,@object
+provider_function:
+    .quad 42
+.size provider_function, .-provider_function
+"#,
+    );
+    let provider = dir.join("libwrongtype.so");
+    let link = Command::new("ld")
+        .args([
+            "-shared",
+            "--hash-style=sysv",
+            "-soname",
+            "libwrongtype.so",
+            "-o",
+        ])
+        .arg(&provider)
+        .arg(&object_provider)
+        .output()
+        .unwrap();
+    assert!(
+        link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&link.stderr)
+    );
+
+    let object = build_consumer_object(&dir);
+    let output = dir.join("must-not-exist.so");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--shared")
+        .arg("--needed-from")
+        .arg(&provider)
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(
+        stderr.contains("exports none") && stderr.contains("libwrongtype.so"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn needed_from_rejects_malformed_provider_before_output() {
     if !command_reports("as", "GNU assembler") {
         return;
