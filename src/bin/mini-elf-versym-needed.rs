@@ -46,8 +46,14 @@ mod checked {
             .map_err(|error| format!("{display}: {error}"))?;
         let requirement_names = version_requirement_names(&entries, &program_headers, &file)
             .map_err(|error| format!("{display}: {error}"))?;
-        validate_requirement_dependencies(input, &entries, &program_headers, &file, &requirement_names)
-            .map_err(|error| format!("{display}: {error}"))?;
+        validate_requirement_dependencies(
+            input,
+            &entries,
+            &program_headers,
+            &file,
+            &requirement_names,
+        )
+        .map_err(|error| format!("{display}: {error}"))?;
 
         for index in definition_names.keys() {
             if requirement_names.contains_key(index) {
@@ -161,9 +167,9 @@ mod checked {
         }
 
         let runpath = match unique_tag_value(entries, DT_RUNPATH_X, "DT_RUNPATH")? {
-            Some(offset) => Some(
-                dynamic_string(file, strtab_offset, strsz, offset, "DT_RUNPATH")?.into_bytes(),
-            ),
+            Some(offset) => {
+                Some(dynamic_string(file, strtab_offset, strsz, offset, "DT_RUNPATH")?.into_bytes())
+            }
             None => None,
         };
 
@@ -187,13 +193,8 @@ mod checked {
         }
 
         while let Some((needed, provider_directory, runpath)) = queue.pop_front() {
-            let path = resolve_provider_path(
-                &needed,
-                &provider_directory,
-                runpath.as_deref(),
-                &[],
-            )
-            .map_err(|error| error.to_string())?;
+            let path = resolve_provider_path(&needed, &provider_directory, runpath.as_deref(), &[])
+                .map_err(|error| error.to_string())?;
             let canonical = std::fs::canonicalize(&path).map_err(|error| {
                 format!(
                     "{}: cannot canonicalize checked version-provider dependency {:?}: {error}",
