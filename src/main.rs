@@ -150,7 +150,7 @@ where
         if (position_independent || shared_object) && contains_image_base_argument(&raw_remaining) {
             return Err(CliError::Usage(format!(
                 "{} cannot be combined with --image-base",
-                if shared_object { "--shared" } else { "--pie" }
+                if options.shared_object { "--shared" } else { "--pie" }
             )));
         }
         let forced =
@@ -229,16 +229,15 @@ where
         if remaining.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
-        return link_files(
-            &output,
-            map_output.as_ref(),
-            &entry_symbol,
-            image_base.image_base,
+        let options = LinkFilesOptions {
+            map_output: map_output.as_ref(),
+            entry_symbol: &entry_symbol,
+            image_base: image_base.image_base,
             position_independent,
             shared_object,
-            &forced.symbols,
-            &remaining,
-        );
+            forced_undefined: &forced.symbols,
+        };
+        return link_files(&output, &options, &remaining);
     }
 
     Err(CliError::Usage(format!(
@@ -270,7 +269,7 @@ fn extract_pie_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>),
 
     for argument in arguments {
         if argument == "--pie" {
-            if position_independent {
+            if options.position_independent {
                 return Err(CliError::Usage("duplicate --pie option".to_owned()));
             }
             position_independent = true;
@@ -438,7 +437,10 @@ fn partial_files(
         .map(|input| loaded.paths[input.file_index].clone())
         .collect::<Vec<_>>();
     let prepared =
-        prepare_ordered_link_inputs_with_forced_undefined(&ordered_inputs, forced_undefined)
+        prepare_ordered_link_inputs_with_forced_undefined(
+            &ordered_inputs,
+            options.forced_undefined,
+        )
             .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     let inputs = prepared
         .objects
@@ -500,14 +502,18 @@ struct LoadedLinkInputSequence {
     sequence: Vec<LoadedLinkInputRef>,
 }
 
-fn link_files(
-    output: &OsString,
-    map_output: Option<&OsString>,
-    entry_symbol: &OsString,
+struct LinkFilesOptions<'a> {
+    map_output: Option<&'a OsString>,
+    entry_symbol: &'a OsString,
     image_base: u64,
     position_independent: bool,
     shared_object: bool,
-    forced_undefined: &[Vec<u8>],
+    forced_undefined: &'a [Vec<u8>],
+}
+
+fn link_files(
+    output: &OsString,
+    options: &LinkFilesOptions<'_>,
     paths: &[OsString],
 ) -> Result<String, CliError> {
     let loaded = load_link_input_sequence(paths)?;
@@ -548,8 +554,8 @@ fn link_files(
         ));
     }
 
-    let entry_symbol = entry_symbol.to_string_lossy();
-    let linked = if position_independent {
+    let entry_symbol = options.entry_symbol.to_string_lossy();
+    let linked = if options.position_independent {
         link_static_position_independent_executable_with_map(
             &prepared.objects,
             DEFAULT_PAGE_ALIGNMENT,
@@ -558,7 +564,7 @@ fn link_files(
     } else {
         link_static_executable_with_map(
             &prepared.objects,
-            image_base,
+            options.image_base,
             DEFAULT_PAGE_ALIGNMENT,
             entry_symbol.as_bytes(),
         )
@@ -569,7 +575,7 @@ fn link_files(
         .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
     set_executable_permissions(output)?;
 
-    if let Some(map_output) = map_output {
+    if let Some(map_output) = options.map_output {
         fs::write(map_output, linked.link_map.render()).map_err(|error| {
             CliError::Failure(format!("{}: {error}", map_output.to_string_lossy()))
         })?;
