@@ -151,7 +151,7 @@ exported_value:
     assert!(!dynamic_text.contains("NEEDED"));
 
     let dynamic_symbols = Command::new("readelf")
-        .args(["--dyn-syms", "-W"])
+        .arg("-sDW")
         .arg(&shared)
         .output()
         .unwrap();
