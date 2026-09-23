@@ -226,19 +226,20 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_tlsgd_weak_import_remains_fail_closed() {
+fn shared_tlsgd_weak_hidden_import_remains_fail_closed() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("weak-undefined");
+    let dir = temp_dir("weak-hidden");
     let object = assemble(
         &dir,
-        "weak-undefined",
+        "weak-hidden",
         r#".section .text
 .globl read_external_tls
 .type read_external_tls,@function
 .weak external_tls
+.hidden external_tls
 .type external_tls,@tls_object
 read_external_tls:
     leaq external_tls@tlsgd(%rip), %rdi
@@ -262,7 +263,7 @@ read_external_tls:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("TLS import") || stderr.contains("undefined TLS"),
+        stderr.contains("visibility") || stderr.contains("TLS import"),
         "{stderr}"
     );
     assert!(!output.exists());
