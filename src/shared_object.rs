@@ -428,9 +428,9 @@ struct DynamicMetadata {
     dynamic_size: u64,
 }
 
-pub fn shared_import_names(
+pub fn shared_import_requirements(
     inputs: &[LinkerInputObject<'_>],
-) -> Result<BTreeSet<Vec<u8>>, SharedObjectError> {
+) -> Result<BTreeMap<Vec<u8>, u8>, SharedObjectError> {
     let validated = inputs
         .iter()
         .map(LinkerInputObject::validated_object)
@@ -438,7 +438,11 @@ pub fn shared_import_names(
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
     let plan = validate_inputs(inputs, &resolved.definitions)?;
-    Ok(plan.symbols.into_keys().collect())
+    Ok(plan
+        .symbols
+        .into_iter()
+        .map(|(name, symbol)| (name, symbol.info & 0x0f))
+        .collect())
 }
 
 pub fn link_shared_object(
