@@ -446,6 +446,14 @@ struct DynamicNames<'a> {
     runpath: Option<&'a [u8]>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DynamicRelocations<'a> {
+    rela: &'a [u8],
+    relative_count: usize,
+    jmprel: &'a [u8],
+    plt_got_address: Option<u64>,
+}
+
 #[derive(Debug)]
 struct DynamicMetadata {
     bytes: Vec<u8>,
@@ -607,10 +615,12 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
             soname,
             runpath,
         },
-        &rela_bytes,
-        relative_relocation_count,
-        &jmprel_bytes,
-        plt_got_base,
+        DynamicRelocations {
+            rela: &rela_bytes,
+            relative_count: relative_relocation_count,
+            jmprel: &jmprel_bytes,
+            plt_got_address: plt_got_base,
+        },
     )?;
     let dynamic_address = metadata_address
         .checked_add(metadata.dynamic_offset)
@@ -1147,11 +1157,12 @@ fn build_dynamic_metadata(
     exports: &[ExportSymbol],
     imports: &BTreeMap<Vec<u8>, ImportSymbol>,
     names: DynamicNames<'_>,
-    rela_bytes: &[u8],
-    relative_relocation_count: usize,
-    jmprel_bytes: &[u8],
-    plt_got_address: Option<u64>,
+    relocations: DynamicRelocations<'_>,
 ) -> Result<DynamicMetadata, SharedObjectError> {
+    let rela_bytes = relocations.rela;
+    let relative_relocation_count = relocations.relative_count;
+    let jmprel_bytes = relocations.jmprel;
+    let plt_got_address = relocations.plt_got_address;
     let symbol_count = exports
         .len()
         .checked_add(imports.len())
