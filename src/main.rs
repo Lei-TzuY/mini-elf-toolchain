@@ -1,4 +1,5 @@
 use mini_elf_toolchain::archive::{Archive, ArchiveMemberKind};
+use mini_elf_toolchain::dynamic_provider::inspect_dynamic_provider;
 use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::forced_undefined::{
     extract_forced_undefined_arguments, ForcedUndefinedArgumentError,
@@ -13,7 +14,9 @@ use mini_elf_toolchain::ordered_inputs::{
 use mini_elf_toolchain::partial_link::{
     link_relocatable_objects_with_forced_undefined, PartialLinkInput,
 };
-use mini_elf_toolchain::shared_object::link_shared_object_with_needed;
+use mini_elf_toolchain::shared_object::{
+    link_shared_object_with_needed, shared_import_requirements,
+};
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
 };
@@ -32,7 +35,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [--needed <soname>|--needed=<soname>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -143,9 +146,18 @@ where
         let (position_independent, raw_remaining) = extract_pie_argument(&raw_remaining)?;
         let (shared_object, raw_remaining) = extract_shared_argument(&raw_remaining)?;
         let needed = extract_needed_arguments(&raw_remaining)?;
-        if !shared_object && !needed.names.is_empty() {
+        if !shared_object && !needed.specs.is_empty() {
+            let provider_requested = needed
+                .specs
+                .iter()
+                .any(|spec| matches!(spec, NeededSpec::Provider(_)));
             return Err(CliError::Usage(
-                "--needed is only supported with --shared".to_owned(),
+                if provider_requested {
+                    "--needed-from is only supported with --shared"
+                } else {
+                    "--needed is only supported with --shared"
+                }
+                .to_owned(),
             ));
         }
         let raw_remaining = needed.arguments;
@@ -242,7 +254,7 @@ where
             image_base: image_base.image_base,
             position_independent,
             shared_object,
-            needed: &needed.names,
+            needed: &needed.specs,
             forced_undefined: &forced.symbols,
         };
         return link_files(&output, &options, &remaining);
@@ -319,47 +331,28 @@ fn extract_shared_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString
     Ok((shared, remaining))
 }
 
+#[derive(Debug, Clone)]
+enum NeededSpec {
+    Name(Vec<u8>),
+    Provider(OsString),
+}
+
 struct NeededArguments {
-    names: Vec<Vec<u8>>,
+    specs: Vec<NeededSpec>,
     arguments: Vec<OsString>,
 }
 
 fn extract_needed_arguments(arguments: &[OsString]) -> Result<NeededArguments, CliError> {
-    let mut names = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
+    let mut specs = Vec::new();
     let mut remaining = Vec::with_capacity(arguments.len());
     let mut index = 0usize;
 
     while index < arguments.len() {
         let argument = &arguments[index];
-        let value = if argument == "--needed" {
+        if argument == "--needed" {
             let value = arguments.get(index + 1).ok_or_else(|| {
                 CliError::Usage("missing dependency name after --needed".to_owned())
             })?;
-            index += 2;
-            Some(value)
-        } else if let Some(value) = argument
-            .to_str()
-            .and_then(|argument| argument.strip_prefix("--needed="))
-        {
-            if value.is_empty() {
-                return Err(CliError::Usage(
-                    "dependency name after --needed= cannot be empty".to_owned(),
-                ));
-            }
-            index += 1;
-            let bytes = value.as_bytes().to_vec();
-            if seen.insert(bytes.clone()) {
-                names.push(bytes);
-            }
-            continue;
-        } else {
-            remaining.push(argument.clone());
-            index += 1;
-            None
-        };
-
-        if let Some(value) = value {
             let value = value.to_str().ok_or_else(|| {
                 CliError::Usage("dependency name after --needed must be valid UTF-8".to_owned())
             })?;
@@ -373,15 +366,56 @@ fn extract_needed_arguments(arguments: &[OsString]) -> Result<NeededArguments, C
                     "dependency name after --needed cannot contain NUL".to_owned(),
                 ));
             }
-            let bytes = value.as_bytes().to_vec();
-            if seen.insert(bytes.clone()) {
-                names.push(bytes);
-            }
+            specs.push(NeededSpec::Name(value.as_bytes().to_vec()));
+            index += 2;
+            continue;
         }
+        if let Some(value) = argument
+            .to_str()
+            .and_then(|argument| argument.strip_prefix("--needed="))
+        {
+            if value.is_empty() {
+                return Err(CliError::Usage(
+                    "dependency name after --needed= cannot be empty".to_owned(),
+                ));
+            }
+            specs.push(NeededSpec::Name(value.as_bytes().to_vec()));
+            index += 1;
+            continue;
+        }
+        if argument == "--needed-from" {
+            let path = arguments.get(index + 1).ok_or_else(|| {
+                CliError::Usage("missing provider path after --needed-from".to_owned())
+            })?;
+            if path.is_empty() {
+                return Err(CliError::Usage(
+                    "provider path after --needed-from cannot be empty".to_owned(),
+                ));
+            }
+            specs.push(NeededSpec::Provider(path.clone()));
+            index += 2;
+            continue;
+        }
+        if let Some(path) = argument
+            .to_str()
+            .and_then(|argument| argument.strip_prefix("--needed-from="))
+        {
+            if path.is_empty() {
+                return Err(CliError::Usage(
+                    "provider path after --needed-from= cannot be empty".to_owned(),
+                ));
+            }
+            specs.push(NeededSpec::Provider(OsString::from(path)));
+            index += 1;
+            continue;
+        }
+
+        remaining.push(argument.clone());
+        index += 1;
     }
 
     Ok(NeededArguments {
-        names,
+        specs,
         arguments: remaining,
     })
 }
@@ -580,8 +614,50 @@ struct LinkFilesOptions<'a> {
     image_base: u64,
     position_independent: bool,
     shared_object: bool,
-    needed: &'a [Vec<u8>],
+    needed: &'a [NeededSpec],
     forced_undefined: &'a [Vec<u8>],
+}
+
+fn resolve_needed_dependencies(
+    specs: &[NeededSpec],
+    imports: &std::collections::BTreeMap<Vec<u8>, u8>,
+) -> Result<Vec<Vec<u8>>, CliError> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut names = Vec::new();
+
+    for spec in specs {
+        let name = match spec {
+            NeededSpec::Name(name) => name.clone(),
+            NeededSpec::Provider(path) => {
+                let file = read_file(path)?;
+                let provider = inspect_dynamic_provider(&file).map_err(|error| {
+                    CliError::Failure(format!(
+                        "{}: cannot inspect shared dependency provider: {error}",
+                        path.to_string_lossy()
+                    ))
+                })?;
+                let matched = imports.iter().any(|(name, symbol_type)| {
+                    provider
+                        .exports
+                        .get(name)
+                        .is_some_and(|types| types.contains(symbol_type))
+                });
+                if !matched {
+                    return Err(CliError::Failure(format!(
+                        "{}: provider SONAME {:?} exports none of the consumer's bounded external imports",
+                        path.to_string_lossy(),
+                        String::from_utf8_lossy(&provider.soname)
+                    )));
+                }
+                provider.soname
+            }
+        };
+        if seen.insert(name.clone()) {
+            names.push(name);
+        }
+    }
+
+    Ok(names)
 }
 
 fn link_files(
@@ -617,12 +693,14 @@ fn link_files(
     )
     .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     if options.shared_object {
-        let image = link_shared_object_with_needed(
-            &prepared.objects,
-            DEFAULT_PAGE_ALIGNMENT,
-            options.needed,
-        )
-        .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
+        let imports = shared_import_requirements(&prepared.objects)
+            .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
+        let needed = resolve_needed_dependencies(options.needed, &imports)?;
+        let image =
+            link_shared_object_with_needed(&prepared.objects, DEFAULT_PAGE_ALIGNMENT, &needed)
+                .map_err(|error| {
+                    CliError::Failure(format!("shared object link failed: {error}"))
+                })?;
         fs::write(output, &image.bytes)
             .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
         return Ok(format!(

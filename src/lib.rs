@@ -5,6 +5,7 @@ pub mod archive_extract;
 pub mod archive_index;
 pub mod archive_lazy;
 pub mod archive_writer;
+pub mod dynamic_provider;
 pub mod elf64;
 pub mod executable_pipeline;
 pub mod executable_writer;
