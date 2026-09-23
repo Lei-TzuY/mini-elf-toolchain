@@ -1,5 +1,5 @@
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::layout::LaidOutSection;
 use crate::link_relocations::{
@@ -19,6 +19,7 @@ pub struct LinkContext<'a> {
     global_addresses: BTreeMap<Vec<u8>, u64>,
     got_entries: BTreeMap<Vec<u8>, u64>,
     tls_got_entries: BTreeMap<Vec<u8>, u64>,
+    unresolved_got_symbols: BTreeSet<Vec<u8>>,
     layout: Vec<LaidOutSection>,
 }
 
@@ -114,6 +115,22 @@ pub fn build_link_context_with_got_entry_maps<'a>(
     got_entries: BTreeMap<Vec<u8>, u64>,
     tls_got_entries: BTreeMap<Vec<u8>, u64>,
 ) -> Result<LinkContext<'a>, LinkContextBuildError> {
+    build_link_context_with_got_entry_maps_and_unresolved_got(
+        objects,
+        layout,
+        got_entries,
+        tls_got_entries,
+        BTreeSet::new(),
+    )
+}
+
+pub fn build_link_context_with_got_entry_maps_and_unresolved_got<'a>(
+    objects: &[ValidatedObject<'a>],
+    layout: &[LaidOutSection],
+    got_entries: BTreeMap<Vec<u8>, u64>,
+    tls_got_entries: BTreeMap<Vec<u8>, u64>,
+    unresolved_got_symbols: BTreeSet<Vec<u8>>,
+) -> Result<LinkContext<'a>, LinkContextBuildError> {
     let mut symbols_by_object = Vec::with_capacity(objects.len());
 
     for (object_index, object) in objects.iter().enumerate() {
@@ -144,6 +161,7 @@ pub fn build_link_context_with_got_entry_maps<'a>(
         global_addresses,
         got_entries,
         tls_got_entries,
+        unresolved_got_symbols,
         layout: layout.to_vec(),
     })
 }
@@ -194,6 +212,7 @@ impl LinkContext<'_> {
                 definitions: &self.definitions,
                 got_entries: &self.got_entries,
                 tls_got_entries: &self.tls_got_entries,
+                unresolved_got_symbols: &self.unresolved_got_symbols,
             },
             &self.layout,
         )
