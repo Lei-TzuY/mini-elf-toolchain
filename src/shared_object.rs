@@ -74,7 +74,6 @@ const DT_VERNEED: i64 = 0x6fff_fffe;
 const DT_VERNEEDNUM: i64 = 0x6fff_ffff;
 const VER_DEF_CURRENT: u16 = 1;
 const VER_NEED_CURRENT: u16 = 1;
-const VER_FLG_WEAK: u16 = 0x2;
 const VERSYM_GLOBAL: u16 = 1;
 const VERSYM_FIRST_VERSION: u16 = 2;
 const VERSYM_HIDDEN: u16 = 0x8000;
@@ -1696,13 +1695,6 @@ fn validate_inputs(
                                 name: symbol.name.to_vec(),
                             });
                         }
-                        if binding == STB_WEAK && parse_import_identity(symbol.name)?.1.is_some() {
-                            return Err(SharedObjectError::TlsImportUnsupported {
-                                object_index: input.object_index,
-                                symbol_index: symbol.symbol_index,
-                                name: symbol.name.to_vec(),
-                            });
-                        }
                         if symbol.symbol.other != 0 {
                             return Err(SharedObjectError::NondefaultVisibility {
                                 object_index: input.object_index,
@@ -2676,23 +2668,6 @@ fn build_version_metadata(
         }
     }
 
-    let mut weak_requirement_groups = group_keys
-        .iter()
-        .cloned()
-        .map(|key| (key, true))
-        .collect::<BTreeMap<_, _>>();
-    for (linker_name, key) in &requirement_by_linker {
-        let import = imports.get(linker_name).ok_or_else(|| {
-            SharedObjectError::InvalidVersionRequirement {
-                name: linker_name.clone(),
-                version: key.1.clone(),
-            }
-        })?;
-        if import.info >> 4 != STB_WEAK {
-            weak_requirement_groups.insert(key.clone(), false);
-        }
-    }
-
     if local_versions.is_empty() && group_keys.is_empty() {
         return Ok(VersionMetadata {
             versym: Vec::new(),
@@ -2900,16 +2875,7 @@ fn build_version_metadata(
 
         for (version_index, (version, index)) in versions.iter().enumerate() {
             verneed.extend_from_slice(&sysv_elf_hash(version).to_le_bytes());
-            let flags = if weak_requirement_groups
-                .get(&(provider.clone(), version.clone()))
-                .copied()
-                .unwrap_or(false)
-            {
-                VER_FLG_WEAK
-            } else {
-                0
-            };
-            verneed.extend_from_slice(&flags.to_le_bytes());
+            verneed.extend_from_slice(&0_u16.to_le_bytes());
             verneed.extend_from_slice(&index.to_le_bytes());
             verneed.extend_from_slice(
                 &version_offsets
