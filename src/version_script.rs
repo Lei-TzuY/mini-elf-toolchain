@@ -144,7 +144,9 @@ impl fmt::Display for VersionScriptError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ContainsNul => write!(f, "version script contains NUL"),
-            Self::UnterminatedBlockComment => write!(f, "version script has unterminated block comment"),
+            Self::UnterminatedBlockComment => {
+                write!(f, "version script has unterminated block comment")
+            }
             Self::UnexpectedEnd { expected } => {
                 write!(f, "version script ended while expecting {expected}")
             }
@@ -324,8 +326,7 @@ fn tokenize(input: &[u8]) -> Result<Vec<Token>, VersionScriptError> {
         }
 
         if input[index..].starts_with(b"//") || input[index] == b'#' {
-            while index < input.len() && input[index] != b'
-' {
+            while index < input.len() && input[index] != b'\n' {
                 index += 1;
             }
             continue;
