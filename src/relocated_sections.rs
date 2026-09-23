@@ -5,7 +5,8 @@ use crate::elf64::SHT_NOBITS;
 use crate::executable_pipeline::ExecutableSectionInput;
 use crate::layout::LaidOutSection;
 use crate::link_context::{
-    build_link_context_with_got_entry_maps, LinkContextBuildError, LinkContextRelocationError,
+    build_link_context_with_got_entry_maps_and_unresolved_got, LinkContextBuildError,
+    LinkContextRelocationError,
 };
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
 use crate::linker_input::{LinkerInputError, LinkerInputObject};
@@ -98,6 +99,9 @@ pub enum RelocatedSectionError {
     MissingGotSymbolAddress {
         name: Vec<u8>,
     },
+    MissingExternalGotSymbol {
+        name: Vec<u8>,
+    },
     RelocationAgainstMemoryOnlySection {
         object_index: usize,
         section_index: u16,
@@ -171,6 +175,11 @@ impl fmt::Display for RelocatedSectionError {
                 "synthetic GOT symbol {:?} has no resolved final address",
                 String::from_utf8_lossy(name)
             ),
+            Self::MissingExternalGotSymbol { name } => write!(
+                f,
+                "requested external GOT symbol {:?} has no synthetic GOT relocation",
+                String::from_utf8_lossy(name)
+            ),
             Self::RelocationAgainstMemoryOnlySection {
                 object_index,
                 section_index,
@@ -208,6 +217,7 @@ impl std::error::Error for RelocatedSectionError {
             | Self::GotSizeOverflow { .. }
             | Self::GotAddressOverflow { .. }
             | Self::MissingGotSymbolAddress { .. }
+            | Self::MissingExternalGotSymbol { .. }
             | Self::RelocationAgainstMemoryOnlySection { .. } => None,
         }
     }
@@ -226,6 +236,20 @@ pub fn relocate_allocatable_sections_with_metadata(
     inputs: &[LinkerInputObject<'_>],
     start_address: u64,
     page_alignment: u64,
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    relocate_allocatable_sections_with_external_got(
+        inputs,
+        start_address,
+        page_alignment,
+        &BTreeSet::new(),
+    )
+}
+
+pub fn relocate_allocatable_sections_with_external_got(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    external_got_symbols: &BTreeSet<Vec<u8>>,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     for (position, input) in inputs.iter().enumerate() {
         if input.object_index != position {
@@ -253,6 +277,11 @@ pub fn relocate_allocatable_sections_with_metadata(
         .map_err(RelocatedSectionError::Symbols)?
         .common_section;
     let got_symbols = collect_static_got_symbols(inputs)?;
+    for name in external_got_symbols {
+        if !got_symbols.iter().any(|candidate| candidate == name) {
+            return Err(RelocatedSectionError::MissingExternalGotSymbol { name: name.clone() });
+        }
+    }
     let tls_got_symbols = collect_static_tls_got_symbols(inputs)?;
     let got_symbol_count = got_symbols.len().checked_add(tls_got_symbols.len()).ok_or(
         RelocatedSectionError::GotSizeOverflow {
@@ -291,11 +320,12 @@ pub fn relocate_allocatable_sections_with_metadata(
     let got_entries_output = got_entries.clone();
     let tls_got_entries_output = tls_got_entries.clone();
 
-    let context = build_link_context_with_got_entry_maps(
+    let context = build_link_context_with_got_entry_maps_and_unresolved_got(
         &validated_objects,
         &layout,
         got_entries,
         tls_got_entries,
+        external_got_symbols.clone(),
     )
     .map_err(RelocatedSectionError::LinkContext)?;
 
@@ -368,6 +398,10 @@ pub fn relocate_allocatable_sections_with_metadata(
         )?;
         let mut bytes = Vec::with_capacity(got_size as usize);
         for name in &got_symbols {
+            if external_got_symbols.contains(name) {
+                bytes.extend_from_slice(&0_u64.to_le_bytes());
+                continue;
+            }
             let address = context
                 .global_addresses()
                 .get(name)
