@@ -52,11 +52,7 @@ impl fmt::Display for LibrarySearchError {
                 filename,
                 search_paths,
             } => {
-                write!(
-                    f,
-                    "cannot find library '{}'",
-                    filename.to_string_lossy()
-                )?;
+                write!(f, "cannot find library '{}'", filename.to_string_lossy())?;
                 if search_paths.is_empty() {
                     write!(f, "; no -L search directories were provided")
                 } else {
@@ -314,9 +310,7 @@ fn resolve_shared_library(
         for directory in search_paths {
             let candidate = directory.join(Path::new(&exact));
             if candidate.is_file() {
-                let is_provider = exact
-                    .to_str()
-                    .is_some_and(|name| name.contains(".so"));
+                let is_provider = exact.to_str().is_some_and(|name| name.contains(".so"));
                 return Ok(if is_provider {
                     SharedLibraryChoice::Provider(candidate)
                 } else {
@@ -766,5 +760,4 @@ mod tests {
 
         fs::remove_dir_all(directory).expect("remove temp directory");
     }
-
 }
