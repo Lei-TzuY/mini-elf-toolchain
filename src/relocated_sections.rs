@@ -536,13 +536,13 @@ pub fn relocate_allocatable_sections_with_external_got_and_plt(
         for name in external_plt_symbols {
             let stub_address = plt_entries_output[name];
             let slot_address = plt_got_entries_output[name];
-            let next_ip = stub_address
-                .checked_add(6)
-                .ok_or(RelocatedSectionError::PltDisplacementOutOfRange {
+            let next_ip = stub_address.checked_add(6).ok_or(
+                RelocatedSectionError::PltDisplacementOutOfRange {
                     name: name.clone(),
                     stub_address,
                     slot_address,
-                })?;
+                },
+            )?;
             let displacement = i128::from(slot_address) - i128::from(next_ip);
             let displacement = i32::try_from(displacement).map_err(|_| {
                 RelocatedSectionError::PltDisplacementOutOfRange {
@@ -566,15 +566,11 @@ pub fn relocate_allocatable_sections_with_external_got_and_plt(
             bytes: plt_bytes,
         });
 
-        let plt_got_layout = matching_layout(
-            &layout,
-            PLT_GOT_OBJECT_INDEX,
-            PLT_GOT_SECTION_INDEX,
-        )
-        .ok_or(RelocatedSectionError::MissingLayout {
-            object_index: PLT_GOT_OBJECT_INDEX,
-            section_index: PLT_GOT_SECTION_INDEX,
-        })?;
+        let plt_got_layout = matching_layout(&layout, PLT_GOT_OBJECT_INDEX, PLT_GOT_SECTION_INDEX)
+            .ok_or(RelocatedSectionError::MissingLayout {
+                object_index: PLT_GOT_OBJECT_INDEX,
+                section_index: PLT_GOT_SECTION_INDEX,
+            })?;
         relocated.push(RelocatedSectionImage {
             object_index: PLT_GOT_OBJECT_INDEX,
             section_index: PLT_GOT_SECTION_INDEX,
@@ -655,9 +651,7 @@ fn validate_external_plt_symbols(
 
     for name in external_plt_symbols {
         if !observed.contains(name) {
-            return Err(RelocatedSectionError::MissingExternalPltSymbol {
-                name: name.clone(),
-            });
+            return Err(RelocatedSectionError::MissingExternalPltSymbol { name: name.clone() });
         }
     }
     Ok(())
