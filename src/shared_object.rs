@@ -74,6 +74,7 @@ const VER_DEF_CURRENT: u16 = 1;
 const VER_NEED_CURRENT: u16 = 1;
 const VERSYM_GLOBAL: u16 = 1;
 const VERSYM_FIRST_VERSION: u16 = 2;
+const VERSYM_HIDDEN: u16 = 0x8000;
 const VERSYM_INDEX_MASK: u16 = 0x7fff;
 const ELF64_VERDEF_SIZE: usize = 20;
 const ELF64_VERDAUX_SIZE: usize = 8;
@@ -115,7 +116,7 @@ pub enum SharedObjectError {
     MalformedVersionedExportName {
         name: Vec<u8>,
     },
-    UnsupportedNondefaultVersionedExport {
+    MultipleDefaultVersionAliases {
         name: Vec<u8>,
     },
     ConflictingDynamicExportName {
@@ -376,9 +377,9 @@ impl fmt::Display for SharedObjectError {
                 "shared object export {:?} has malformed GNU version syntax; bounded producer versions require name@@VERSION",
                 String::from_utf8_lossy(name)
             ),
-            Self::UnsupportedNondefaultVersionedExport { name } => write!(
+            Self::MultipleDefaultVersionAliases { name } => write!(
                 f,
-                "shared object export {:?} uses a non-default GNU version alias; bounded producer versions currently require name@@VERSION",
+                "shared object dynamic name {:?} has more than one default/unversioned export; bounded producer versioning permits at most one default alias per canonical name",
                 String::from_utf8_lossy(name)
             ),
             Self::ConflictingDynamicExportName { name } => write!(
@@ -730,7 +731,7 @@ impl std::error::Error for SharedObjectError {
             | Self::ConflictingImportSymbolType { .. }
             | Self::MalformedVersionedImportName { .. }
             | Self::MalformedVersionedExportName { .. }
-            | Self::UnsupportedNondefaultVersionedExport { .. }
+            | Self::MultipleDefaultVersionAliases { .. }
             | Self::ConflictingDynamicExportName { .. }
             | Self::UnsupportedVersionedImportType { .. }
             | Self::InvalidVersionRequirement { .. }
@@ -784,30 +785,38 @@ struct ExportSymbol {
     linker_name: Vec<u8>,
     dynamic_name: Vec<u8>,
     version: Option<Vec<u8>>,
+    is_default_version: bool,
     info: u8,
     section_index: u16,
     value: u64,
     size: u64,
 }
 
-fn parse_export_identity(name: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>), SharedObjectError> {
+fn parse_export_identity(
+    name: &[u8],
+) -> Result<(Vec<u8>, Option<Vec<u8>>, bool), SharedObjectError> {
     let Some(first_at) = name.iter().position(|byte| *byte == b'@') else {
-        return Ok((name.to_vec(), None));
+        return Ok((name.to_vec(), None, true));
     };
-    let suffix = &name[first_at..];
-    if !suffix.starts_with(b"@@") {
-        return Err(SharedObjectError::UnsupportedNondefaultVersionedExport {
-            name: name.to_vec(),
-        });
-    }
     let base = &name[..first_at];
-    let version = &name[first_at + 2..];
+    let suffix = &name[first_at..];
+    let (version, is_default_version) = if let Some(version) = suffix.strip_prefix(b"@@") {
+        (version, true)
+    } else if let Some(version) = suffix.strip_prefix(b"@") {
+        (version, false)
+    } else {
+        unreachable!("suffix starts at an @ byte");
+    };
     if base.is_empty() || version.is_empty() || version.contains(&b'@') {
         return Err(SharedObjectError::MalformedVersionedExportName {
             name: name.to_vec(),
         });
     }
-    Ok((base.to_vec(), Some(version.to_vec())))
+    Ok((
+        base.to_vec(),
+        Some(version.to_vec()),
+        is_default_version,
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1128,11 +1137,13 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
             } else {
                 absolute_value
             };
-            let (dynamic_name, version) = parse_export_identity(&definition.name)?;
+            let (dynamic_name, version, is_default_version) =
+                parse_export_identity(&definition.name)?;
             Ok(ExportSymbol {
                 linker_name: definition.name.clone(),
                 dynamic_name,
                 version,
+                is_default_version,
                 info: definition.symbol.info,
                 section_index: if definition.symbol.section_index == SHN_ABS {
                     SHN_ABS
@@ -1147,10 +1158,21 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
     if exports.is_empty() {
         return Err(SharedObjectError::NoExports);
     }
-    let mut dynamic_export_names = BTreeSet::new();
+    let mut dynamic_export_identities = BTreeSet::new();
+    let mut default_dynamic_names = BTreeSet::new();
     for export in &exports {
-        if !dynamic_export_names.insert(export.dynamic_name.clone()) {
+        if !dynamic_export_identities.insert((
+            export.dynamic_name.clone(),
+            export.version.clone(),
+        )) {
             return Err(SharedObjectError::ConflictingDynamicExportName {
+                name: export.dynamic_name.clone(),
+            });
+        }
+        if export.is_default_version
+            && !default_dynamic_names.insert(export.dynamic_name.clone())
+        {
+            return Err(SharedObjectError::MultipleDefaultVersionAliases {
                 name: export.dynamic_name.clone(),
             });
         }
@@ -2421,10 +2443,13 @@ fn build_version_metadata(
         let Some(version) = export.version.as_ref() else {
             continue;
         };
-        let index = local_indices
+        let mut index = local_indices
             .get(version)
             .copied()
             .ok_or(SharedObjectError::MetadataTooLarge)?;
+        if !export.is_default_version {
+            index |= VERSYM_HIDDEN;
+        }
         put_u16(&mut versym, (offset + 1) * 2, index);
     }
 
