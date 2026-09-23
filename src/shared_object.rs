@@ -66,12 +66,17 @@ const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
 const DT_VERSYM: i64 = 0x6fff_fff0;
 const DT_RELACOUNT: i64 = 0x6fff_fff9;
+const DT_VERDEF: i64 = 0x6fff_fffc;
+const DT_VERDEFNUM: i64 = 0x6fff_fffd;
 const DT_VERNEED: i64 = 0x6fff_fffe;
 const DT_VERNEEDNUM: i64 = 0x6fff_ffff;
+const VER_DEF_CURRENT: u16 = 1;
 const VER_NEED_CURRENT: u16 = 1;
 const VERSYM_GLOBAL: u16 = 1;
 const VERSYM_FIRST_VERSION: u16 = 2;
 const VERSYM_INDEX_MASK: u16 = 0x7fff;
+const ELF64_VERDEF_SIZE: usize = 20;
+const ELF64_VERDAUX_SIZE: usize = 8;
 const ELF64_VERNEED_SIZE: usize = 16;
 const ELF64_VERNAUX_SIZE: usize = 16;
 const DF_STATIC_TLS: u64 = 0x10;
@@ -105,6 +110,15 @@ pub enum SharedObjectError {
         second_type: u8,
     },
     MalformedVersionedImportName {
+        name: Vec<u8>,
+    },
+    MalformedVersionedExportName {
+        name: Vec<u8>,
+    },
+    UnsupportedNondefaultVersionedExport {
+        name: Vec<u8>,
+    },
+    ConflictingDynamicExportName {
         name: Vec<u8>,
     },
     UnsupportedVersionedImportType {
@@ -355,6 +369,21 @@ impl fmt::Display for SharedObjectError {
             Self::MalformedVersionedImportName { name } => write!(
                 f,
                 "shared object external import {:?} has malformed GNU version syntax; bounded named-version imports require name@VERSION",
+                String::from_utf8_lossy(name)
+            ),
+            Self::MalformedVersionedExportName { name } => write!(
+                f,
+                "shared object export {:?} has malformed GNU version syntax; bounded producer versions require name@@VERSION",
+                String::from_utf8_lossy(name)
+            ),
+            Self::UnsupportedNondefaultVersionedExport { name } => write!(
+                f,
+                "shared object export {:?} uses a non-default GNU version alias; bounded producer versions currently require name@@VERSION",
+                String::from_utf8_lossy(name)
+            ),
+            Self::ConflictingDynamicExportName { name } => write!(
+                f,
+                "shared object exports more than one symbol as dynamic name {:?}; bounded producer versioning requires unique canonical dynamic export names",
                 String::from_utf8_lossy(name)
             ),
             Self::UnsupportedVersionedImportType { name, symbol_type } => write!(
@@ -700,6 +729,9 @@ impl std::error::Error for SharedObjectError {
             | Self::ExternalImportUnsupportedBinding { .. }
             | Self::ConflictingImportSymbolType { .. }
             | Self::MalformedVersionedImportName { .. }
+            | Self::MalformedVersionedExportName { .. }
+            | Self::UnsupportedNondefaultVersionedExport { .. }
+            | Self::ConflictingDynamicExportName { .. }
             | Self::UnsupportedVersionedImportType { .. }
             | Self::InvalidVersionRequirement { .. }
             | Self::VersionRequirementProviderMissing { .. }
@@ -749,11 +781,35 @@ impl std::error::Error for SharedObjectError {
 
 #[derive(Debug, Clone)]
 struct ExportSymbol {
-    name: Vec<u8>,
+    linker_name: Vec<u8>,
+    dynamic_name: Vec<u8>,
+    version: Option<Vec<u8>>,
     info: u8,
     section_index: u16,
     value: u64,
     size: u64,
+}
+
+fn parse_export_identity(
+    name: &[u8],
+) -> Result<(Vec<u8>, Option<Vec<u8>>), SharedObjectError> {
+    let Some(first_at) = name.iter().position(|byte| *byte == b'@') else {
+        return Ok((name.to_vec(), None));
+    };
+    let suffix = &name[first_at..];
+    if !suffix.starts_with(b"@@") {
+        return Err(SharedObjectError::UnsupportedNondefaultVersionedExport {
+            name: name.to_vec(),
+        });
+    }
+    let base = &name[..first_at];
+    let version = &name[first_at + 2..];
+    if base.is_empty() || version.is_empty() || version.contains(&b'@') {
+        return Err(SharedObjectError::MalformedVersionedExportName {
+            name: name.to_vec(),
+        });
+    }
+    Ok((base.to_vec(), Some(version.to_vec())))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
