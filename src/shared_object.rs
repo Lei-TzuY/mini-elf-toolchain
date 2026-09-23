@@ -1857,15 +1857,14 @@ fn validate_inputs(
 
                 if symbol.symbol.section_index != SHN_UNDEF || definitions.contains_key(symbol.name)
                 {
-                    let supported_definition =
-                        !symbol.name.is_empty()
-                            && definitions.get(symbol.name).is_some_and(|definition| {
-                                let definition_binding = definition.symbol.info >> 4;
-                                let definition_type = definition.symbol.info & 0x0f;
-                                definition_binding == STB_GLOBAL
-                                    && matches!(definition_type, STT_OBJECT | STT_FUNC)
-                                    && definition.symbol.other == 0
-                            });
+                    let supported_definition = !symbol.name.is_empty()
+                        && definitions.get(symbol.name).is_some_and(|definition| {
+                            let definition_binding = definition.symbol.info >> 4;
+                            let definition_type = definition.symbol.info & 0x0f;
+                            definition_binding == STB_GLOBAL
+                                && matches!(definition_type, STT_OBJECT | STT_FUNC)
+                                && definition.symbol.other == 0
+                        });
                     if is_got_import && supported_definition {
                         got_symbols.insert(symbol.name.to_vec());
                         continue;
@@ -1978,13 +1977,15 @@ fn validate_inputs(
                 }
 
                 if target.flags & SHF_ALLOC == 0 || target.flags & SHF_WRITE == 0 {
-                    return Err(SharedObjectError::DynamicSymbolRelocationTargetNotWritable {
-                        object_index: input.object_index,
-                        rela_section_index: table.section_index,
-                        relocation_index,
-                        target_section_index: table.target_section_index,
-                        flags: target.flags,
-                    });
+                    return Err(
+                        SharedObjectError::DynamicSymbolRelocationTargetNotWritable {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                            target_section_index: table.target_section_index,
+                            flags: target.flags,
+                        },
+                    );
                 }
                 symbol_relocation_sites.insert(DynamicSymbolRelocationSite {
                     object_index: input.object_index,
