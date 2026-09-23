@@ -147,12 +147,7 @@ pub fn inspect_dynamic_provider(
         hash_size,
         "provider DT_HASH table",
     )?;
-    validate_sysv_hash_table(
-        file,
-        hash_offset,
-        bucket_count,
-        symbol_count,
-    )?;
+    validate_sysv_hash_table(file, hash_offset, bucket_count, symbol_count)?;
 
     let dynsym_size = symbol_count
         .checked_mul(syment)
