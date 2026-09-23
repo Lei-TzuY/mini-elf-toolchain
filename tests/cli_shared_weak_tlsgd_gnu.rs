@@ -338,3 +338,81 @@ int main(int argc, char **argv) {{
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn versioned_weak_tlsgd_remains_fail_closed_with_matching_provider() {
+    if !have_tools() {
+        return;
+    }
+
+    let dir = temp_dir("versioned-boundary");
+    let provider_object = assemble(
+        &dir,
+        "provider",
+        r#".section .tdata,"awT",@progbits
+.align 8
+.globl provider_tls
+.type provider_tls,@tls_object
+provider_tls:
+    .quad 0x55
+.size provider_tls, .-provider_tls
+"#,
+    );
+    let map = dir.join("provider.map");
+    fs::write(&map, "VERS_1 { global: provider_tls; local: *; };\n").unwrap();
+    let provider = dir.join("libprovider.so");
+    let provider_link = Command::new("ld")
+        .args(["-shared", "--hash-style=sysv", "--soname=libprovider.so"])
+        .arg(format!("--version-script={}", map.display()))
+        .args(["-o"])
+        .arg(&provider)
+        .arg(&provider_object)
+        .output()
+        .unwrap();
+    assert!(
+        provider_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&provider_link.stderr)
+    );
+
+    let consumer = assemble(
+        &dir,
+        "versioned-consumer",
+        r#".section .note.GNU-stack,"",@progbits
+.text
+.globl read_provider_tls
+.type read_provider_tls,@function
+.weak provider_tls
+.type provider_tls,@tls_object
+.symver provider_tls,provider_tls@VERS_1
+read_provider_tls:
+    leaq provider_tls@tlsgd(%rip), %rdi
+    call __tls_get_addr@PLT
+    mov (%rax), %rax
+    ret
+.size read_provider_tls, .-read_provider_tls
+"#,
+    );
+    let output = dir.join("must-not-exist.so");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .args(["--shared", "--needed-from"])
+        .arg(&provider)
+        .arg(&consumer)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(
+        stderr.contains("TLS import")
+            || stderr.contains("version")
+            || stderr.contains("weak"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
