@@ -258,3 +258,125 @@ imported_pointer:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn shared_relative_prefix_and_external_import_compose_under_loader() {
+    if !have_tools() {
+        return;
+    }
+
+    let dir = temp_dir("mixed");
+    let object = assemble(
+        &dir,
+        "mixed",
+        r#".section .data
+.align 8
+.local local_value
+.type local_value,@object
+local_value:
+    .quad 0x1122334455667788
+.size local_value, .-local_value
+
+.globl internal_pointer
+.type internal_pointer,@object
+internal_pointer:
+    .quad local_value
+.size internal_pointer, .-internal_pointer
+
+.globl imported_pointer
+.type imported_pointer,@object
+.extern host_value
+.type host_value,@object
+imported_pointer:
+    .quad host_value
+.size imported_pointer, .-imported_pointer
+"#,
+    );
+
+    let shared = dir.join("libmixed.so");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&shared)
+        .arg("--shared")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        mini.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
+    );
+
+    let dynamic = Command::new("readelf")
+        .args(["-dW"])
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(dynamic.status.success());
+    let dynamic = String::from_utf8_lossy(&dynamic.stdout);
+    assert!(dynamic.contains("RELACOUNT") && dynamic.contains("1"), "{dynamic}");
+
+    let relocations = Command::new("readelf")
+        .args(["-rW", "--use-dynamic"])
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(relocations.status.success());
+    let relocations = String::from_utf8_lossy(&relocations.stdout);
+    let relative = relocations
+        .find("R_X86_64_RELATIVE")
+        .expect("mixed DSO must contain a relative relocation");
+    let import = relocations
+        .find("R_X86_64_64")
+        .expect("mixed DSO must contain an external symbol relocation");
+    assert!(
+        relative < import,
+        "DT_RELACOUNT requires RELATIVE entries to form the relocation prefix: {relocations}"
+    );
+    assert!(relocations.contains("host_value"), "{relocations}");
+
+    #[cfg(target_os = "linux")]
+    {
+        let source = dir.join("consumer.c");
+        let consumer = dir.join("consumer");
+        fs::write(
+            &source,
+            r#"#include <dlfcn.h>
+#include <stdint.h>
+
+uint64_t host_value = UINT64_C(0x8877665544332211);
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 40;
+    void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return 41;
+    uint64_t **internal = (uint64_t **)dlsym(handle, "internal_pointer");
+    uint64_t **external = (uint64_t **)dlsym(handle, "imported_pointer");
+    if (!internal || !external) return 42;
+    if (**internal != UINT64_C(0x1122334455667788)) return 43;
+    if (*external != &host_value) return 44;
+    if (**external != UINT64_C(0x8877665544332211)) return 45;
+    return dlclose(handle) == 0 ? 0 : 46;
+}
+"#,
+        )
+        .unwrap();
+        let compile = Command::new("cc")
+            .args(["-rdynamic", "-o"])
+            .arg(&consumer)
+            .arg(&source)
+            .arg("-ldl")
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+
+        let status = Command::new(&consumer).arg(&shared).status().unwrap();
+        assert!(status.success(), "mixed dlopen consumer returned {status}");
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
