@@ -66,7 +66,8 @@ impl VersionScript {
                                         prefix: symbol,
                                     });
                                 }
-                                cursor.expect(TokenKind::Semi, "';' after global prefix pattern")?;
+                                cursor
+                                    .expect(TokenKind::Semi, "';' after global prefix pattern")?;
                                 if prefix_patterns
                                     .insert(symbol.clone(), version.clone())
                                     .is_some()
@@ -157,10 +158,7 @@ impl VersionScript {
             .map(|(symbol, version)| (symbol.as_slice(), version.as_slice()))
     }
 
-    pub fn resolve_version(
-        &self,
-        symbol: &[u8],
-    ) -> Result<Option<&[u8]>, VersionScriptMatchError> {
+    pub fn resolve_version(&self, symbol: &[u8]) -> Result<Option<&[u8]>, VersionScriptMatchError> {
         if let Some(version) = self.assignments.get(symbol) {
             return Ok(Some(version.as_slice()));
         }
@@ -589,10 +587,9 @@ mod tests {
         );
         assert_eq!(script.resolve_version(b"private").unwrap(), None);
 
-        let conflicting = VersionScript::parse(
-            b"VERS_A { global: api_*; }; VERS_B { global: api_v*; };",
-        )
-        .unwrap();
+        let conflicting =
+            VersionScript::parse(b"VERS_A { global: api_*; }; VERS_B { global: api_v*; };")
+                .unwrap();
         assert!(matches!(
             conflicting.resolve_version(b"api_v2"),
             Err(super::VersionScriptMatchError::MultiplePrefixVersions { .. })
