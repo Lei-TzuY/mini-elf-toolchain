@@ -150,7 +150,7 @@ fn build_outputs(dir: &Path, object: &Path) -> (PathBuf, PathBuf) {
 
     let gnu = dir.join("libgnu-defined-weak-tls.so");
     let gnu_link = Command::new("ld")
-        .args(["-shared", "--hash-style=sysv", "-o"])
+        .args(["-shared", "--hash-style=sysv", "--no-relax", "-o"])
         .arg(&gnu)
         .arg(object)
         .output()
