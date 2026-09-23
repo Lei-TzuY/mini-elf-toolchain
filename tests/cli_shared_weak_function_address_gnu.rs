@@ -191,7 +191,7 @@ fn weak_named_version_function_addresses_match_gnu_and_zero_when_runtime_definit
         String::from_utf8_lossy(&gnu_link.stderr)
     );
 
-    for shared in [&mini, &gnu] {
+    for (label, shared) in [("mini", &mini), ("gnu", &gnu)] {
         let symbols = Command::new("readelf")
             .arg("-sDW")
             .arg(shared)
@@ -203,7 +203,7 @@ fn weak_named_version_function_addresses_match_gnu_and_zero_when_runtime_definit
             symbols.lines().any(|line| line.contains("WEAK")
                 && line.contains("UND")
                 && line.contains("provider_function@VERS_1")),
-            "{symbols}"
+            "{label} dynamic symbols:\n{symbols}"
         );
 
         let relocations = Command::new("readelf")
@@ -217,7 +217,7 @@ fn weak_named_version_function_addresses_match_gnu_and_zero_when_runtime_definit
             relocations.contains("R_X86_64_64")
                 && relocations.contains("R_X86_64_GLOB_DAT")
                 && relocations.contains("provider_function@VERS_1"),
-            "{relocations}"
+            "{label} dynamic relocations:\n{relocations}"
         );
 
         let versions = Command::new("readelf")
@@ -227,8 +227,14 @@ fn weak_named_version_function_addresses_match_gnu_and_zero_when_runtime_definit
             .unwrap();
         assert!(versions.status.success());
         let versions = String::from_utf8_lossy(&versions.stdout);
-        assert!(versions.contains("libprovider.so"), "{versions}");
-        assert!(versions.contains("VERS_1"), "{versions}");
+        assert!(
+            versions.contains("libprovider.so"),
+            "{label} version metadata:\n{versions}"
+        );
+        assert!(
+            versions.contains("VERS_1"),
+            "{label} version metadata:\n{versions}"
+        );
     }
 
     #[cfg(target_os = "linux")]
