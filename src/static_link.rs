@@ -7,6 +7,7 @@ use crate::program_headers::{
     RuntimeDynamicProgramHeader, RuntimeStackProgramHeader,
 };
 
+pub use crate::gnu_stack::GnuStackPolicyError;
 pub use crate::static_link_core::{StaticLinkError, StaticLinkOutput};
 
 pub fn link_static_executable(
