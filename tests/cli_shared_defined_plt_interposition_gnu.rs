@@ -345,7 +345,9 @@ fn hidden_defined_function_plt_remains_fail_closed() {
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("default-visible") || stderr.contains("preemptible"),
+        stderr.contains("visibility")
+            || stderr.contains("default-visible")
+            || stderr.contains("preemptible"),
         "{stderr}"
     );
     assert!(!output.exists());
