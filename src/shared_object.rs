@@ -13,10 +13,6 @@ use crate::load_segments::{
 };
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
 use crate::permission_layout::SHF_TLS;
-use crate::tls::{
-    compute_static_tls_layout, inject_static_tls_program_header, StaticTlsLayout,
-    StaticTlsLayoutError, StaticTlsProgramHeaderError,
-};
 use crate::pie_runtime::{build_relative_relocation_table, PieRuntimeError};
 use crate::program_headers::{
     map_runtime_program_headers_with_dynamic, RuntimeDynamicProgramHeader,
@@ -27,6 +23,10 @@ use crate::relocated_sections::{
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
+use crate::tls::{
+    compute_static_tls_layout, inject_static_tls_program_header, StaticTlsLayout,
+    StaticTlsLayoutError, StaticTlsProgramHeaderError,
+};
 use crate::x86_64_relocations::{
     R_X86_64_64, R_X86_64_GLOB_DAT, R_X86_64_GOTPCREL, R_X86_64_JUMP_SLOT, R_X86_64_PLT32,
 };
@@ -656,8 +656,8 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
                 .map_err(SharedObjectError::TlsInput)?,
         );
     }
-    let tls_layout =
-        compute_static_tls_layout(&input_sections, &layout).map_err(SharedObjectError::TlsLayout)?;
+    let tls_layout = compute_static_tls_layout(&input_sections, &layout)
+        .map_err(SharedObjectError::TlsLayout)?;
 
     let exports = resolved
         .definitions
