@@ -205,8 +205,7 @@ pub fn inspect_dynamic_provider(
         provider_version_metadata(&entries, &headers, file, symbol_count, strtab_offset, strsz)?;
 
     let mut exports = BTreeMap::<Vec<u8>, BTreeSet<u8>>::new();
-    let mut versioned_exports =
-        BTreeMap::<(Vec<u8>, Vec<u8>), BTreeSet<u8>>::new();
+    let mut versioned_exports = BTreeMap::<(Vec<u8>, Vec<u8>), BTreeSet<u8>>::new();
     for symbol_index in 0..symbol_count {
         let relative = symbol_index
             .checked_mul(syment)
@@ -246,10 +245,7 @@ pub fn inspect_dynamic_provider(
             && !name.is_empty()
         {
             if version_allows_unversioned {
-                exports
-                    .entry(name.clone())
-                    .or_default()
-                    .insert(info & 0x0f);
+                exports.entry(name.clone()).or_default().insert(info & 0x0f);
             }
             if let Some(version_name) = version_name {
                 versioned_exports
