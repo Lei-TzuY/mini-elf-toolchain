@@ -707,6 +707,7 @@ struct LinkFilesOptions<'a> {
 fn resolve_needed_dependencies(
     specs: &[NeededSpec],
     imports: &std::collections::BTreeMap<Vec<u8>, u8>,
+    search_paths: &[PathBuf],
 ) -> Result<Vec<Vec<u8>>, CliError> {
     let mut seen = std::collections::BTreeSet::new();
     let mut names = Vec::new();
@@ -715,23 +716,18 @@ fn resolve_needed_dependencies(
         let name = match spec {
             NeededSpec::Name(name) => name.clone(),
             NeededSpec::Provider(path) => {
-                let file = read_file(path)?;
-                let provider = inspect_dynamic_provider(&file).map_err(|error| {
-                    CliError::Failure(format!(
-                        "{}: cannot inspect shared dependency provider: {error}",
-                        path.to_string_lossy()
-                    ))
-                })?;
+                let root_path = PathBuf::from(path);
+                let (provider, closure_exports) =
+                    inspect_provider_closure(&root_path, search_paths)?;
                 let matched = imports.iter().any(|(name, symbol_type)| {
-                    provider
-                        .exports
+                    closure_exports
                         .get(name)
                         .is_some_and(|types| types.contains(symbol_type))
                 });
                 if !matched {
                     return Err(CliError::Failure(format!(
-                        "{}: provider SONAME {:?} exports none of the consumer's bounded external imports",
-                        path.to_string_lossy(),
+                        "{}: provider SONAME {:?} and its checked transitive dependency closure export none of the consumer's bounded external imports",
+                        root_path.display(),
                         String::from_utf8_lossy(&provider.soname)
                     )));
                 }
@@ -744,6 +740,144 @@ fn resolve_needed_dependencies(
     }
 
     Ok(names)
+}
+
+fn inspect_provider_closure(
+    root_path: &Path,
+    search_paths: &[PathBuf],
+) -> Result<
+    (
+        mini_elf_toolchain::dynamic_provider::DynamicProviderMetadata,
+        std::collections::BTreeMap<Vec<u8>, std::collections::BTreeSet<u8>>,
+    ),
+    CliError,
+> {
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+    let root_file = read_provider_file(root_path, "shared dependency provider")?;
+    let root = inspect_dynamic_provider(&root_file).map_err(|error| {
+        CliError::Failure(format!(
+            "{}: cannot inspect shared dependency provider: {error}",
+            root_path.display()
+        ))
+    })?;
+
+    let root_canonical = fs::canonicalize(root_path).map_err(|error| {
+        CliError::Failure(format!(
+            "{}: cannot canonicalize shared dependency provider: {error}",
+            root_path.display()
+        ))
+    })?;
+    let mut visited = BTreeSet::new();
+    visited.insert(root_canonical);
+
+    let mut exports = root.exports.clone();
+    let root_parent = root_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let mut queue = VecDeque::new();
+    for needed in &root.needed {
+        queue.push_back((needed.clone(), root_parent.clone()));
+    }
+
+    while let Some((needed, provider_directory)) = queue.pop_front() {
+        let dependency_path =
+            resolve_transitive_provider_path(&needed, &provider_directory, search_paths)?;
+        let canonical = fs::canonicalize(&dependency_path).map_err(|error| {
+            CliError::Failure(format!(
+                "{}: cannot canonicalize transitive shared provider dependency {:?}: {error}",
+                dependency_path.display(),
+                String::from_utf8_lossy(&needed)
+            ))
+        })?;
+        if !visited.insert(canonical) {
+            continue;
+        }
+
+        let file = read_provider_file(&dependency_path, "transitive shared provider dependency")?;
+        let provider = inspect_dynamic_provider(&file).map_err(|error| {
+            CliError::Failure(format!(
+                "{}: cannot inspect transitive shared provider dependency {:?}: {error}",
+                dependency_path.display(),
+                String::from_utf8_lossy(&needed)
+            ))
+        })?;
+
+        for (name, types) in &provider.exports {
+            exports
+                .entry(name.clone())
+                .or_insert_with(BTreeSet::new)
+                .extend(types.iter().copied());
+        }
+
+        let parent = dependency_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        for child in &provider.needed {
+            queue.push_back((child.clone(), parent.clone()));
+        }
+    }
+
+    Ok((root, exports))
+}
+
+fn resolve_transitive_provider_path(
+    name: &[u8],
+    provider_directory: &Path,
+    search_paths: &[PathBuf],
+) -> Result<PathBuf, CliError> {
+    let name = std::str::from_utf8(name).map_err(|_| {
+        CliError::Failure(format!(
+            "transitive shared provider dependency name {:?} is not valid UTF-8",
+            String::from_utf8_lossy(name)
+        ))
+    })?;
+    if name.is_empty() {
+        return Err(CliError::Failure(
+            "transitive shared provider dependency name is empty".to_owned(),
+        ));
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err(CliError::Failure(format!(
+            "transitive shared provider dependency '{name}' contains a path separator; bounded closure resolution accepts SONAME-style filenames only"
+        )));
+    }
+
+    let mut directories = Vec::with_capacity(search_paths.len() + 1);
+    directories.push(provider_directory.to_path_buf());
+    for path in search_paths {
+        if !directories.iter().any(|candidate| candidate == path) {
+            directories.push(path.clone());
+        }
+    }
+
+    for directory in &directories {
+        let candidate = directory.join(name);
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+    }
+
+    let mut message = format!(
+        "cannot resolve transitive shared provider dependency '{name}'"
+    );
+    if directories.is_empty() {
+        message.push_str("; no bounded provider search directories are available");
+    } else {
+        message.push_str(" in");
+        for directory in directories {
+            message.push_str(&format!(" '{}'", directory.display()));
+        }
+    }
+    Err(CliError::Failure(message))
+}
+
+fn read_provider_file(path: &Path, role: &str) -> Result<Vec<u8>, CliError> {
+    fs::read(path).map_err(|error| {
+        CliError::Failure(format!(
+            "{}: cannot read {role}: {error}",
+            path.display()
+        ))
+    })
 }
 
 fn link_files(
