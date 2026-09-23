@@ -226,19 +226,19 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_tlsgd_remains_bounded_to_defined_tls_symbols() {
+fn shared_tlsgd_weak_import_remains_fail_closed() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("undefined");
+    let dir = temp_dir("weak-undefined");
     let object = assemble(
         &dir,
-        "undefined",
+        "weak-undefined",
         r#".section .text
 .globl read_external_tls
 .type read_external_tls,@function
-.extern external_tls
+.weak external_tls
 .type external_tls,@tls_object
 read_external_tls:
     leaq external_tls@tlsgd(%rip), %rdi
