@@ -821,12 +821,14 @@ fn build_import_relocation_table(
 fn build_dynamic_metadata(
     base_address: u64,
     exports: &[ExportSymbol],
+    imports: &BTreeMap<Vec<u8>, ImportSymbol>,
     rela_bytes: &[u8],
     relative_relocation_count: usize,
 ) -> Result<DynamicMetadata, SharedObjectError> {
     let symbol_count = exports
         .len()
-        .checked_add(1)
+        .checked_add(imports.len())
+        .and_then(|count| count.checked_add(1))
         .ok_or(SharedObjectError::MetadataTooLarge)?;
     let symbol_count_u32 =
         u32::try_from(symbol_count).map_err(|_| SharedObjectError::MetadataTooLarge)?;
@@ -846,14 +848,23 @@ fn build_dynamic_metadata(
         .ok_or(SharedObjectError::MetadataTooLarge)?;
 
     let mut dynstr = vec![0_u8];
-    let mut name_offsets = Vec::with_capacity(exports.len());
+    let mut export_name_offsets = Vec::with_capacity(exports.len());
     for export in exports {
         let offset =
             u32::try_from(dynstr.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
-        name_offsets.push(offset);
+        export_name_offsets.push(offset);
         dynstr.extend_from_slice(&export.name);
         dynstr.push(0);
     }
+    let mut import_name_offsets = Vec::with_capacity(imports.len());
+    for import in imports.values() {
+        let offset =
+            u32::try_from(dynstr.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        import_name_offsets.push(offset);
+        dynstr.extend_from_slice(&import.name);
+        dynstr.push(0);
+    }
+
     let dynstr_offset = dynsym_offset
         .checked_add(dynsym_size)
         .ok_or(SharedObjectError::MetadataTooLarge)?;
@@ -872,11 +883,12 @@ fn build_dynamic_metadata(
     )
     .ok_or(SharedObjectError::MetadataTooLarge)?;
 
-    let dynamic_entry_count = if relative_relocation_count == 0 {
-        6usize
-    } else {
-        10usize
-    };
+    let has_relocations = !rela_bytes.is_empty();
+    let dynamic_entry_count = 5usize
+        .checked_add(if has_relocations { 3 } else { 0 })
+        .and_then(|count| count.checked_add(usize::from(relative_relocation_count != 0)))
+        .and_then(|count| count.checked_add(1))
+        .ok_or(SharedObjectError::MetadataTooLarge)?;
     let dynamic_size = dynamic_entry_count
         .checked_mul(ELF64_DYNAMIC_SIZE)
         .ok_or(SharedObjectError::MetadataTooLarge)?;
@@ -899,12 +911,22 @@ fn build_dynamic_metadata(
 
     for (index, export) in exports.iter().enumerate() {
         let offset = dynsym_offset + (index + 1) * ELF64_SYMBOL_SIZE;
-        put_u32(&mut bytes, offset, name_offsets[index]);
+        put_u32(&mut bytes, offset, export_name_offsets[index]);
         bytes[offset + 4] = export.info;
         bytes[offset + 5] = 0;
         put_u16(&mut bytes, offset + 6, export.section_index);
         put_u64(&mut bytes, offset + 8, export.value);
         put_u64(&mut bytes, offset + 16, export.size);
+    }
+    for (index, import) in imports.values().enumerate() {
+        let symbol_index = 1 + exports.len() + index;
+        let offset = dynsym_offset + symbol_index * ELF64_SYMBOL_SIZE;
+        put_u32(&mut bytes, offset, import_name_offsets[index]);
+        bytes[offset + 4] = import.info;
+        bytes[offset + 5] = 0;
+        put_u16(&mut bytes, offset + 6, SHN_UNDEF);
+        put_u64(&mut bytes, offset + 8, 0);
+        put_u64(&mut bytes, offset + 16, import.size);
     }
     bytes[dynstr_offset..dynstr_offset + dynstr.len()].copy_from_slice(&dynstr);
     bytes[rela_offset..rela_offset + rela_bytes.len()].copy_from_slice(rela_bytes);
@@ -919,24 +941,25 @@ fn build_dynamic_metadata(
         (DT_STRSZ, dynstr.len() as u64),
         (DT_SYMENT, ELF64_SYMBOL_SIZE as u64),
     ];
-    if relative_relocation_count != 0 {
+    if has_relocations {
         let rela_address = checked_metadata_address(base_address, rela_offset)?;
         let rela_size =
             u64::try_from(rela_bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
-        let rela_count = u64::try_from(relative_relocation_count)
-            .map_err(|_| SharedObjectError::MetadataTooLarge)?;
-        debug_assert_eq!(
-            rela_bytes.len(),
-            relative_relocation_count * ELF64_RELA_SIZE
-        );
+        debug_assert_eq!(rela_bytes.len() % ELF64_RELA_SIZE, 0);
+        debug_assert!(relative_relocation_count <= rela_bytes.len() / ELF64_RELA_SIZE);
         entries.extend_from_slice(&[
             (DT_RELA, rela_address),
             (DT_RELASZ, rela_size),
             (DT_RELAENT, ELF64_RELA_SIZE as u64),
-            (DT_RELACOUNT, rela_count),
         ]);
+        if relative_relocation_count != 0 {
+            let rela_count = u64::try_from(relative_relocation_count)
+                .map_err(|_| SharedObjectError::MetadataTooLarge)?;
+            entries.push((DT_RELACOUNT, rela_count));
+        }
     }
     entries.push((DT_NULL, 0));
+
     for (index, (tag, value)) in entries.into_iter().enumerate() {
         let offset = dynamic_offset + index * ELF64_DYNAMIC_SIZE;
         put_i64(&mut bytes, offset, tag);
