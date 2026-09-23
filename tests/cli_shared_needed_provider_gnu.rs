@@ -58,6 +58,40 @@ fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
     object
 }
 
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn corrupt_first_sysv_hash_bucket(path: &Path) {
+    let mut bytes = fs::read(path).unwrap();
+    let shoff = read_u64(&bytes, 40) as usize;
+    let shentsize = read_u16(&bytes, 58) as usize;
+    let shnum = read_u16(&bytes, 60) as usize;
+    let mut hash_offset = None;
+
+    for index in 0..shnum {
+        let section = shoff + index * shentsize;
+        if read_u32(&bytes, section + 4) == 5 {
+            hash_offset = Some(read_u64(&bytes, section + 24) as usize);
+            break;
+        }
+    }
+
+    let hash_offset = hash_offset.expect("GNU SysV-hash provider must contain SHT_HASH");
+    let symbol_count = read_u32(&bytes, hash_offset + 4);
+    assert!(symbol_count != 0);
+    bytes[hash_offset + 8..hash_offset + 12].copy_from_slice(&symbol_count.to_le_bytes());
+    fs::write(path, bytes).unwrap();
+}
+
 fn build_provider(
     dir: &Path,
     stem: &str,
@@ -283,6 +317,46 @@ fn needed_from_rejects_provider_that_satisfies_no_consumer_import() {
     assert!(
         stderr.contains("exports none") && stderr.contains("libunrelated.so"),
         "{stderr}"
+    );
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn needed_from_rejects_malformed_sysv_hash_topology() {
+    if !have_tools() {
+        return;
+    }
+
+    let dir = temp_dir("bad-hash");
+    let provider = build_provider(
+        &dir,
+        "provider",
+        "libbad-hash.so",
+        Some("libbad-hash.so"),
+        "provider_function",
+    );
+    corrupt_first_sysv_hash_bucket(&provider);
+    let object = build_consumer_object(&dir);
+    let output = dir.join("must-not-exist.so");
+
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--shared")
+        .arg("--needed-from")
+        .arg(&provider)
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&mini.stderr).contains("DT_HASH bucket"),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
     );
     assert!(!output.exists());
 
