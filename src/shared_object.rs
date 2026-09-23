@@ -29,8 +29,8 @@ use crate::tls::{
 };
 use crate::x86_64_relocations::{
     apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_DTPMOD64, R_X86_64_DTPOFF32,
-    R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPCREL, R_X86_64_GOTTPOFF,
-    R_X86_64_JUMP_SLOT, R_X86_64_PLT32, R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
+    R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPCREL, R_X86_64_GOTTPOFF, R_X86_64_JUMP_SLOT,
+    R_X86_64_PLT32, R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
 };
 
 const SHT_PROGBITS: u32 = 1;
@@ -1277,10 +1277,7 @@ fn validate_inputs(
                 let is_plt_import = relocation.relocation_type == R_X86_64_PLT32;
                 if matches!(
                     relocation.relocation_type,
-                    R_X86_64_TLSGD
-                        | R_X86_64_GOTTPOFF
-                        | R_X86_64_TLSLD
-                        | R_X86_64_DTPOFF32
+                    R_X86_64_TLSGD | R_X86_64_GOTTPOFF | R_X86_64_TLSLD | R_X86_64_DTPOFF32
                 ) {
                     continue;
                 }
@@ -1447,14 +1444,13 @@ fn validate_inputs(
                         }
                         continue;
                     }
-                    let linker_owned_got_symbol =
-                        (!got_symbols.is_empty()
-                            || !tls_gd_symbols.is_empty()
-                            || !tls_ie_symbols.is_empty()
-                            || uses_tls_ld)
-                            && symbol.name == GLOBAL_OFFSET_TABLE_SYMBOL
-                            && binding == STB_GLOBAL
-                            && symbol_type == STT_NOTYPE;
+                    let linker_owned_got_symbol = (!got_symbols.is_empty()
+                        || !tls_gd_symbols.is_empty()
+                        || !tls_ie_symbols.is_empty()
+                        || uses_tls_ld)
+                        && symbol.name == GLOBAL_OFFSET_TABLE_SYMBOL
+                        && binding == STB_GLOBAL
+                        && symbol_type == STT_NOTYPE;
                     if linker_owned_got_symbol {
                         continue;
                     }
