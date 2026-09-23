@@ -42,6 +42,7 @@ const GLOBAL_OFFSET_TABLE_SYMBOL: &[u8] = b"_GLOBAL_OFFSET_TABLE_";
 const DT_NULL: i64 = 0;
 const DT_NEEDED: i64 = 1;
 const DT_PLTRELSZ: i64 = 2;
+const DT_PLTGOT: i64 = 3;
 const DT_HASH: i64 = 4;
 const DT_STRTAB: i64 = 5;
 const DT_SYMTAB: i64 = 6;
@@ -51,7 +52,6 @@ const DT_SONAME: i64 = 14;
 const DT_RELA: i64 = 7;
 const DT_PLTREL: i64 = 20;
 const DT_JMPREL: i64 = 23;
-const DT_BIND_NOW: i64 = 24;
 const DT_RUNPATH: i64 = 29;
 const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
@@ -446,6 +446,14 @@ struct DynamicNames<'a> {
     runpath: Option<&'a [u8]>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DynamicRelocations<'a> {
+    rela: &'a [u8],
+    relative_count: usize,
+    jmprel: &'a [u8],
+    plt_got_address: Option<u64>,
+}
+
 #[derive(Debug)]
 struct DynamicMetadata {
     bytes: Vec<u8>,
@@ -525,6 +533,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     let relocated = relocated_output.sections;
     let got_entries = relocated_output.got_entries;
     let plt_got_entries = relocated_output.plt_got_entries;
+    let plt_got_base = relocated_output.plt_got_base;
     let layout = relocated
         .iter()
         .map(|section| LaidOutSection {
@@ -606,9 +615,12 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
             soname,
             runpath,
         },
-        &rela_bytes,
-        relative_relocation_count,
-        &jmprel_bytes,
+        DynamicRelocations {
+            rela: &rela_bytes,
+            relative_count: relative_relocation_count,
+            jmprel: &jmprel_bytes,
+            plt_got_address: plt_got_base,
+        },
     )?;
     let dynamic_address = metadata_address
         .checked_add(metadata.dynamic_offset)
@@ -1145,10 +1157,12 @@ fn build_dynamic_metadata(
     exports: &[ExportSymbol],
     imports: &BTreeMap<Vec<u8>, ImportSymbol>,
     names: DynamicNames<'_>,
-    rela_bytes: &[u8],
-    relative_relocation_count: usize,
-    jmprel_bytes: &[u8],
+    relocations: DynamicRelocations<'_>,
 ) -> Result<DynamicMetadata, SharedObjectError> {
+    let rela_bytes = relocations.rela;
+    let relative_relocation_count = relocations.relative_count;
+    let jmprel_bytes = relocations.jmprel;
+    let plt_got_address = relocations.plt_got_address;
     let symbol_count = exports
         .len()
         .checked_add(imports.len())
@@ -1242,6 +1256,7 @@ fn build_dynamic_metadata(
 
     let has_relocations = !rela_bytes.is_empty();
     let has_plt_relocations = !jmprel_bytes.is_empty();
+    debug_assert_eq!(has_plt_relocations, plt_got_address.is_some());
     let dynamic_entry_count = 5usize
         .checked_add(names.needed.len())
         .and_then(|count| count.checked_add(usize::from(soname_offset.is_some())))
@@ -1336,11 +1351,12 @@ fn build_dynamic_metadata(
         let jmprel_size =
             u64::try_from(jmprel_bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
         debug_assert_eq!(jmprel_bytes.len() % ELF64_RELA_SIZE, 0);
+        let plt_got_address = plt_got_address.ok_or(SharedObjectError::MetadataTooLarge)?;
         entries.extend_from_slice(&[
+            (DT_PLTGOT, plt_got_address),
             (DT_JMPREL, jmprel_address),
             (DT_PLTRELSZ, jmprel_size),
             (DT_PLTREL, DT_RELA as u64),
-            (DT_BIND_NOW, 0),
         ]);
     }
     entries.push((DT_NULL, 0));

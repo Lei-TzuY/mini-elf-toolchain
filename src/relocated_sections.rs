@@ -30,8 +30,10 @@ const PLT_OBJECT_INDEX: usize = usize::MAX - 4;
 const PLT_SECTION_INDEX: u16 = 1;
 const PLT_GOT_OBJECT_INDEX: usize = usize::MAX - 5;
 const PLT_GOT_SECTION_INDEX: u16 = 1;
+const PLT0_SIZE: u64 = 16;
 const PLT_ENTRY_SIZE: u64 = 16;
 const PLT_ALIGNMENT: u64 = 16;
+const PLT_GOT_RESERVED_SIZE: u64 = 24;
 const PLT_GOT_ENTRY_SIZE: u64 = 8;
 const PLT_GOT_ALIGNMENT: u64 = 8;
 const STT_TLS: u8 = 6;
@@ -69,6 +71,7 @@ pub struct RelocatedSectionsOutput {
     pub tls_got_entries: BTreeMap<Vec<u8>, u64>,
     pub plt_entries: BTreeMap<Vec<u8>, u64>,
     pub plt_got_entries: BTreeMap<Vec<u8>, u64>,
+    pub plt_got_base: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -351,8 +354,13 @@ pub fn relocate_allocatable_sections_with_external_got_and_plt(
     let got_size = got_size(got_symbol_count)?;
 
     validate_external_plt_symbols(inputs, external_plt_symbols)?;
-    let plt_size = synthetic_table_size(external_plt_symbols.len(), PLT_ENTRY_SIZE)?;
-    let plt_got_size = synthetic_table_size(external_plt_symbols.len(), PLT_GOT_ENTRY_SIZE)?;
+    let plt_size =
+        synthetic_table_size_with_prefix(external_plt_symbols.len(), PLT_ENTRY_SIZE, PLT0_SIZE)?;
+    let plt_got_size = synthetic_table_size_with_prefix(
+        external_plt_symbols.len(),
+        PLT_GOT_ENTRY_SIZE,
+        PLT_GOT_RESERVED_SIZE,
+    )?;
 
     let mut layout_inputs = sections
         .iter()
@@ -403,6 +411,7 @@ pub fn relocate_allocatable_sections_with_external_got_and_plt(
         PLT_SECTION_INDEX,
         external_plt_symbols,
         PLT_ENTRY_SIZE,
+        PLT0_SIZE,
     )?;
     let plt_got_entries = synthetic_entry_addresses(
         &layout,
@@ -410,6 +419,7 @@ pub fn relocate_allocatable_sections_with_external_got_and_plt(
         PLT_GOT_SECTION_INDEX,
         external_plt_symbols,
         PLT_GOT_ENTRY_SIZE,
+        PLT_GOT_RESERVED_SIZE,
     )?;
     let got_entries_output = got_entries.clone();
     let tls_got_entries_output = tls_got_entries.clone();
@@ -524,36 +534,102 @@ pub fn relocate_allocatable_sections_with_external_got_and_plt(
         });
     }
 
-    if plt_size != 0 {
+    let plt_got_base = if plt_size != 0 {
         let plt_layout = matching_layout(&layout, PLT_OBJECT_INDEX, PLT_SECTION_INDEX).ok_or(
             RelocatedSectionError::MissingLayout {
                 object_index: PLT_OBJECT_INDEX,
                 section_index: PLT_SECTION_INDEX,
             },
         )?;
+        let plt_got_layout = matching_layout(&layout, PLT_GOT_OBJECT_INDEX, PLT_GOT_SECTION_INDEX)
+            .ok_or(RelocatedSectionError::MissingLayout {
+                object_index: PLT_GOT_OBJECT_INDEX,
+                section_index: PLT_GOT_SECTION_INDEX,
+            })?;
+
+        let got_link_map = plt_got_layout.address.checked_add(8).ok_or(
+            RelocatedSectionError::PltSizeOverflow {
+                symbol_count: external_plt_symbols.len(),
+            },
+        )?;
+        let got_resolver = plt_got_layout.address.checked_add(16).ok_or(
+            RelocatedSectionError::PltSizeOverflow {
+                symbol_count: external_plt_symbols.len(),
+            },
+        )?;
         let mut plt_bytes = Vec::with_capacity(plt_size as usize);
-        for name in external_plt_symbols {
+        append_rip_indirect(
+            &mut plt_bytes,
+            [0xff, 0x35],
+            plt_layout.address,
+            got_link_map,
+            b"<plt0-link-map>",
+        )?;
+        let plt0_second =
+            plt_layout
+                .address
+                .checked_add(6)
+                .ok_or(RelocatedSectionError::PltSizeOverflow {
+                    symbol_count: external_plt_symbols.len(),
+                })?;
+        append_rip_indirect(
+            &mut plt_bytes,
+            [0xff, 0x25],
+            plt0_second,
+            got_resolver,
+            b"<plt0-resolver>",
+        )?;
+        plt_bytes.extend_from_slice(&[0x0f, 0x1f, 0x40, 0x00]);
+
+        let mut plt_got_bytes = vec![0_u8; PLT_GOT_RESERVED_SIZE as usize];
+        for (relocation_index, name) in external_plt_symbols.iter().enumerate() {
             let stub_address = plt_entries_output[name];
             let slot_address = plt_got_entries_output[name];
-            let next_ip = stub_address.checked_add(6).ok_or(
+            append_rip_indirect(
+                &mut plt_bytes,
+                [0xff, 0x25],
+                stub_address,
+                slot_address,
+                name,
+            )?;
+
+            let relocation_index = u32::try_from(relocation_index).map_err(|_| {
+                RelocatedSectionError::PltSizeOverflow {
+                    symbol_count: external_plt_symbols.len(),
+                }
+            })?;
+            plt_bytes.push(0x68);
+            plt_bytes.extend_from_slice(&relocation_index.to_le_bytes());
+
+            let jump_next_ip = stub_address.checked_add(PLT_ENTRY_SIZE).ok_or(
                 RelocatedSectionError::PltDisplacementOutOfRange {
                     name: name.clone(),
                     stub_address,
-                    slot_address,
+                    slot_address: plt_layout.address,
                 },
             )?;
-            let displacement = i128::from(slot_address) - i128::from(next_ip);
+            let displacement = i128::from(plt_layout.address) - i128::from(jump_next_ip);
             let displacement = i32::try_from(displacement).map_err(|_| {
                 RelocatedSectionError::PltDisplacementOutOfRange {
                     name: name.clone(),
                     stub_address,
-                    slot_address,
+                    slot_address: plt_layout.address,
                 }
             })?;
-            plt_bytes.extend_from_slice(&[0xff, 0x25]);
+            plt_bytes.push(0xe9);
             plt_bytes.extend_from_slice(&displacement.to_le_bytes());
-            plt_bytes.extend_from_slice(&[0x90; 10]);
+
+            let lazy_target =
+                stub_address
+                    .checked_add(6)
+                    .ok_or(RelocatedSectionError::PltSizeOverflow {
+                        symbol_count: external_plt_symbols.len(),
+                    })?;
+            plt_got_bytes.extend_from_slice(&lazy_target.to_le_bytes());
         }
+
+        debug_assert_eq!(plt_bytes.len(), plt_size as usize);
+        debug_assert_eq!(plt_got_bytes.len(), plt_got_size as usize);
         relocated.push(RelocatedSectionImage {
             object_index: PLT_OBJECT_INDEX,
             section_index: PLT_SECTION_INDEX,
@@ -564,12 +640,6 @@ pub fn relocate_allocatable_sections_with_external_got_and_plt(
             alignment: PLT_ALIGNMENT,
             bytes: plt_bytes,
         });
-
-        let plt_got_layout = matching_layout(&layout, PLT_GOT_OBJECT_INDEX, PLT_GOT_SECTION_INDEX)
-            .ok_or(RelocatedSectionError::MissingLayout {
-                object_index: PLT_GOT_OBJECT_INDEX,
-                section_index: PLT_GOT_SECTION_INDEX,
-            })?;
         relocated.push(RelocatedSectionImage {
             object_index: PLT_GOT_OBJECT_INDEX,
             section_index: PLT_GOT_SECTION_INDEX,
@@ -578,9 +648,12 @@ pub fn relocate_allocatable_sections_with_external_got_and_plt(
             address: plt_got_layout.address,
             size: plt_got_size,
             alignment: PLT_GOT_ALIGNMENT,
-            bytes: vec![0; plt_got_size as usize],
+            bytes: plt_got_bytes,
         });
-    }
+        Some(plt_got_layout.address)
+    } else {
+        None
+    };
 
     Ok(RelocatedSectionsOutput {
         sections: relocated,
@@ -588,6 +661,7 @@ pub fn relocate_allocatable_sections_with_external_got_and_plt(
         tls_got_entries: tls_got_entries_output,
         plt_entries: plt_entries_output,
         plt_got_entries: plt_got_entries_output,
+        plt_got_base,
     })
 }
 
@@ -666,12 +740,26 @@ fn synthetic_table_size(
         .ok_or(RelocatedSectionError::PltSizeOverflow { symbol_count })
 }
 
+fn synthetic_table_size_with_prefix(
+    symbol_count: usize,
+    entry_size: u64,
+    prefix_size: u64,
+) -> Result<u64, RelocatedSectionError> {
+    if symbol_count == 0 {
+        return Ok(0);
+    }
+    synthetic_table_size(symbol_count, entry_size)?
+        .checked_add(prefix_size)
+        .ok_or(RelocatedSectionError::PltSizeOverflow { symbol_count })
+}
+
 fn synthetic_entry_addresses(
     layout: &[LaidOutSection],
     object_index: usize,
     section_index: u16,
     symbols: &BTreeSet<Vec<u8>>,
     entry_size: u64,
+    prefix_size: u64,
 ) -> Result<BTreeMap<Vec<u8>, u64>, RelocatedSectionError> {
     if symbols.is_empty() {
         return Ok(BTreeMap::new());
@@ -690,6 +778,12 @@ fn synthetic_entry_addresses(
             .ok_or(RelocatedSectionError::PltSizeOverflow {
                 symbol_count: symbols.len(),
             })?;
+        let offset =
+            prefix_size
+                .checked_add(offset)
+                .ok_or(RelocatedSectionError::PltSizeOverflow {
+                    symbol_count: symbols.len(),
+                })?;
         let address = section
             .address
             .checked_add(offset)
@@ -697,6 +791,33 @@ fn synthetic_entry_addresses(
         entries.insert(name.clone(), address);
     }
     Ok(entries)
+}
+
+fn append_rip_indirect(
+    bytes: &mut Vec<u8>,
+    opcode: [u8; 2],
+    instruction_address: u64,
+    target_address: u64,
+    name: &[u8],
+) -> Result<(), RelocatedSectionError> {
+    let next_ip = instruction_address.checked_add(6).ok_or_else(|| {
+        RelocatedSectionError::PltDisplacementOutOfRange {
+            name: name.to_vec(),
+            stub_address: instruction_address,
+            slot_address: target_address,
+        }
+    })?;
+    let displacement = i128::from(target_address) - i128::from(next_ip);
+    let displacement = i32::try_from(displacement).map_err(|_| {
+        RelocatedSectionError::PltDisplacementOutOfRange {
+            name: name.to_vec(),
+            stub_address: instruction_address,
+            slot_address: target_address,
+        }
+    })?;
+    bytes.extend_from_slice(&opcode);
+    bytes.extend_from_slice(&displacement.to_le_bytes());
+    Ok(())
 }
 
 fn collect_static_got_symbols(
