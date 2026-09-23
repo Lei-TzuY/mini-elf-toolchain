@@ -333,9 +333,9 @@ fn extract_needed_arguments(arguments: &[OsString]) -> Result<NeededArguments, C
     while index < arguments.len() {
         let argument = &arguments[index];
         let value = if argument == "--needed" {
-            let value = arguments
-                .get(index + 1)
-                .ok_or_else(|| CliError::Usage("missing dependency name after --needed".to_owned()))?;
+            let value = arguments.get(index + 1).ok_or_else(|| {
+                CliError::Usage("missing dependency name after --needed".to_owned())
+            })?;
             index += 2;
             Some(value)
         } else if let Some(value) = argument
@@ -617,11 +617,12 @@ fn link_files(
     )
     .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     if options.shared_object {
-        let image =
-            link_shared_object_with_needed(&prepared.objects, DEFAULT_PAGE_ALIGNMENT, options.needed)
-                .map_err(|error| {
-                    CliError::Failure(format!("shared object link failed: {error}"))
-                })?;
+        let image = link_shared_object_with_needed(
+            &prepared.objects,
+            DEFAULT_PAGE_ALIGNMENT,
+            options.needed,
+        )
+        .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         fs::write(output, &image.bytes)
             .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
         return Ok(format!(
