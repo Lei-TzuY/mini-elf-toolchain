@@ -291,8 +291,7 @@ fn defined_default_visible_function_got_matches_gnu_and_is_runtime_preemptible()
 .type call_interposable_function,@function
 call_interposable_function:
     movq {FUNCTION}@GOTPCREL(%rip), %rax
-    call *%rax
-    ret
+    jmp *%rax
 .size call_interposable_function, .-call_interposable_function
 "#
         ),
