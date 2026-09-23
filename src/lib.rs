@@ -27,6 +27,7 @@ pub mod partial_link;
 pub mod permission_layout;
 pub mod pie_runtime;
 pub mod preload;
+pub mod provider_closure;
 mod program_headers;
 pub mod rela_apply;
 pub mod relocated_sections;
