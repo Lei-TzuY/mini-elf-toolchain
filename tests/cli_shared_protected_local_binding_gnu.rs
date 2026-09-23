@@ -66,7 +66,7 @@ fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
     object
 }
 
-fn assert_protected_local_metadata(shared: &Path) {
+fn assert_protected_exports(shared: &Path) {
     let symbols = Command::new("readelf")
         .arg("-sDW")
         .arg(shared)
@@ -94,23 +94,41 @@ fn assert_protected_local_metadata(shared: &Path) {
         "{} dynamic symbols:\n{symbols}",
         shared.display()
     );
+}
 
-    let relocations = Command::new("readelf")
+fn dynamic_relocations(shared: &Path) -> String {
+    let output = Command::new("readelf")
         .args(["-rW", "--use-dynamic"])
         .arg(shared)
         .output()
         .unwrap();
-    assert!(relocations.status.success());
-    let relocations = String::from_utf8_lossy(&relocations.stdout);
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn assert_no_loader_preemptible_got_or_plt(shared: &Path) {
+    let relocations = dynamic_relocations(shared);
     for symbol in [VALUE, FUNCTION] {
         assert!(
             !relocations.lines().any(|line| {
                 line.contains(symbol)
                     && (line.contains("R_X86_64_GLOB_DAT")
-                        || line.contains("R_X86_64_JUMP_SLOT")
-                        || line.contains("R_X86_64_64"))
+                        || line.contains("R_X86_64_JUMP_SLOT"))
             }),
-            "{} must locally bind protected symbol {symbol}:\n{relocations}",
+            "{} must not create preemptible GOT/PLT relocation for {symbol}:\n{relocations}",
+            shared.display()
+        );
+    }
+}
+
+fn assert_mini_uses_relative_local_binding(shared: &Path) {
+    let relocations = dynamic_relocations(shared);
+    for symbol in [VALUE, FUNCTION] {
+        assert!(
+            !relocations
+                .lines()
+                .any(|line| line.contains(symbol) && line.contains("R_X86_64_64")),
+            "{} must use symbol-free RELATIVE binding for protected pointer {symbol}:\n{relocations}",
             shared.display()
         );
     }
@@ -240,8 +258,10 @@ fn protected_data_and_function_absolute_got_and_plt_bind_locally_like_gnu() {
     );
 
     for shared in [&mini, &gnu] {
-        assert_protected_local_metadata(shared);
+        assert_protected_exports(shared);
+        assert_no_loader_preemptible_got_or_plt(shared);
     }
+    assert_mini_uses_relative_local_binding(&mini);
 
     #[cfg(target_os = "linux")]
     {
