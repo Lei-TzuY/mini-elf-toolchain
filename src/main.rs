@@ -17,7 +17,7 @@ use mini_elf_toolchain::partial_link::{
     link_relocatable_objects_with_forced_undefined, PartialLinkInput,
 };
 use mini_elf_toolchain::shared_object::{
-    link_shared_object_with_needed_and_soname, shared_import_requirements,
+    link_shared_object_with_needed_soname_and_runpath, shared_import_requirements,
 };
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
@@ -38,7 +38,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [--soname <name>|--soname=<name>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -154,7 +154,13 @@ where
                 "--soname is only supported with --shared".to_owned(),
             ));
         }
-        let mut needed = extract_needed_arguments(&soname.arguments)?;
+        let runpath = extract_runpath_argument(&soname.arguments)?;
+        if !shared_object && runpath.runpath.is_some() {
+            return Err(CliError::Usage(
+                "--runpath is only supported with --shared".to_owned(),
+            ));
+        }
+        let mut needed = extract_needed_arguments(&runpath.arguments)?;
         if !shared_object && !needed.specs.is_empty() {
             let provider_requested = needed
                 .specs
@@ -277,6 +283,7 @@ where
             position_independent,
             shared_object,
             soname: soname.soname.as_deref(),
+            runpath: runpath.runpath.as_deref(),
             needed: &needed.specs,
             provider_search_paths: &provider_search_paths,
             forced_undefined: &forced.symbols,
@@ -411,6 +418,66 @@ fn extract_soname_argument(arguments: &[OsString]) -> Result<SonameArguments, Cl
 
     Ok(SonameArguments {
         soname,
+        arguments: remaining,
+    })
+}
+
+struct RunpathArguments {
+    runpath: Option<Vec<u8>>,
+    arguments: Vec<OsString>,
+}
+
+fn extract_runpath_argument(arguments: &[OsString]) -> Result<RunpathArguments, CliError> {
+    let mut runpath = None;
+    let mut remaining = Vec::with_capacity(arguments.len());
+    let mut index = 0usize;
+
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if argument == "--runpath" {
+            let value = arguments
+                .get(index + 1)
+                .ok_or_else(|| CliError::Usage("missing path after --runpath".to_owned()))?;
+            if runpath.is_some() {
+                return Err(CliError::Usage("duplicate --runpath option".to_owned()));
+            }
+            let value = value.to_str().ok_or_else(|| {
+                CliError::Usage("RUNPATH after --runpath must be valid UTF-8".to_owned())
+            })?;
+            if value.is_empty() {
+                return Err(CliError::Usage("RUNPATH cannot be empty".to_owned()));
+            }
+            if value.as_bytes().contains(&0) {
+                return Err(CliError::Usage("RUNPATH cannot contain NUL".to_owned()));
+            }
+            runpath = Some(value.as_bytes().to_vec());
+            index += 2;
+            continue;
+        }
+        if let Some(value) = argument
+            .to_str()
+            .and_then(|argument| argument.strip_prefix("--runpath="))
+        {
+            if runpath.is_some() {
+                return Err(CliError::Usage("duplicate --runpath option".to_owned()));
+            }
+            if value.is_empty() {
+                return Err(CliError::Usage("RUNPATH cannot be empty".to_owned()));
+            }
+            if value.as_bytes().contains(&0) {
+                return Err(CliError::Usage("RUNPATH cannot contain NUL".to_owned()));
+            }
+            runpath = Some(value.as_bytes().to_vec());
+            index += 1;
+            continue;
+        }
+
+        remaining.push(argument.clone());
+        index += 1;
+    }
+
+    Ok(RunpathArguments {
+        runpath,
         arguments: remaining,
     })
 }
@@ -699,6 +766,7 @@ struct LinkFilesOptions<'a> {
     position_independent: bool,
     shared_object: bool,
     soname: Option<&'a [u8]>,
+    runpath: Option<&'a [u8]>,
     needed: &'a [NeededSpec],
     provider_search_paths: &'a [PathBuf],
     forced_undefined: &'a [Vec<u8>],
@@ -920,11 +988,12 @@ fn link_files(
             .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         let needed =
             resolve_needed_dependencies(options.needed, &imports, options.provider_search_paths)?;
-        let image = link_shared_object_with_needed_and_soname(
+        let image = link_shared_object_with_needed_soname_and_runpath(
             &prepared.objects,
             DEFAULT_PAGE_ALIGNMENT,
             &needed,
             options.soname,
+            options.runpath,
         )
         .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         fs::write(output, &image.bytes)
