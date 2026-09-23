@@ -1623,10 +1623,8 @@ fn validate_inputs(
                                 && definition_type == STT_TLS
                                 && definition.symbol.other == 0
                         });
-                    let supported_reference_binding =
-                        binding == STB_GLOBAL || (unresolved && binding == STB_WEAK);
                     if symbol_type != STT_TLS
-                        || !supported_reference_binding
+                        || binding != STB_GLOBAL
                         || symbol.symbol.other != 0
                         || symbol.name.is_empty()
                         || (!unresolved && !supported_definition)
@@ -1735,8 +1733,10 @@ fn validate_inputs(
                                 && definition_type == STT_TLS
                                 && definition.symbol.other == 0
                         });
+                    let supported_reference_binding =
+                        binding == STB_GLOBAL || (unresolved && binding == STB_WEAK);
                     if symbol_type != STT_TLS
-                        || binding != STB_GLOBAL
+                        || !supported_reference_binding
                         || symbol.symbol.other != 0
                         || symbol.name.is_empty()
                         || (!unresolved && !supported_definition)
