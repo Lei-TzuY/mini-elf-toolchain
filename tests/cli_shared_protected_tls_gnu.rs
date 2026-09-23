@@ -139,7 +139,11 @@ write_tls_desc:
 .size write_tls_desc, .-write_tls_desc
 "#
     );
-    assemble_source(dir, "protected-tls-cross-model", &protected_tls_source(&body))
+    assemble_source(
+        dir,
+        "protected-tls-cross-model",
+        &protected_tls_source(&body),
+    )
 }
 
 fn assemble_gnu_model(dir: &Path, stem: &str, body: String) -> PathBuf {
@@ -235,17 +239,17 @@ fn assert_mini_metadata(path: &Path) {
         "R_X86_64_TLSDESC",
     ] {
         assert!(
-            relocations.lines().any(|line| {
-                line.contains(relocation) && line.contains(TLS_NAME)
-            }),
+            relocations
+                .lines()
+                .any(|line| { line.contains(relocation) && line.contains(TLS_NAME) }),
             "{} missing {relocation} for {TLS_NAME}:\n{relocations}",
             path.display()
         );
     }
     assert!(
-        relocations.lines().any(|line| {
-            line.contains("R_X86_64_JUMP_SLOT") && line.contains("__tls_get_addr")
-        }),
+        relocations
+            .lines()
+            .any(|line| { line.contains("R_X86_64_JUMP_SLOT") && line.contains("__tls_get_addr") }),
         "{} missing __tls_get_addr JUMP_SLOT:\n{relocations}",
         path.display()
     );
@@ -721,8 +725,12 @@ write_tls:
 
     #[cfg(target_os = "linux")]
     {
-        let mini_self =
-            compile_runner(&dir, "mini-protected-self", &mini_self_runner_source(), false);
+        let mini_self = compile_runner(
+            &dir,
+            "mini-protected-self",
+            &mini_self_runner_source(),
+            false,
+        );
         let mini_preempt = compile_runner(
             &dir,
             "mini-protected-preempt",
@@ -739,10 +747,18 @@ write_tls:
             );
         }
 
-        let model_self =
-            compile_runner(&dir, "gnu-protected-self", &model_runner_source(false), false);
-        let model_preempt =
-            compile_runner(&dir, "gnu-protected-preempt", &model_runner_source(true), true);
+        let model_self = compile_runner(
+            &dir,
+            "gnu-protected-self",
+            &model_runner_source(false),
+            false,
+        );
+        let model_preempt = compile_runner(
+            &dir,
+            "gnu-protected-preempt",
+            &model_runner_source(true),
+            true,
+        );
         for shared in [&gnu_tlsgd, &gnu_ie, &gnu_tlsdesc] {
             for runner in [&model_self, &model_preempt] {
                 let status = Command::new(runner).arg(shared).status().unwrap();
