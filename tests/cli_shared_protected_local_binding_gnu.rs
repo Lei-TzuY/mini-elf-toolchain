@@ -112,8 +112,7 @@ fn assert_no_loader_preemptible_got_or_plt(shared: &Path) {
         assert!(
             !relocations.lines().any(|line| {
                 line.contains(symbol)
-                    && (line.contains("R_X86_64_GLOB_DAT")
-                        || line.contains("R_X86_64_JUMP_SLOT"))
+                    && (line.contains("R_X86_64_GLOB_DAT") || line.contains("R_X86_64_JUMP_SLOT"))
             }),
             "{} must not create preemptible GOT/PLT relocation for {symbol}:\n{relocations}",
             shared.display()
