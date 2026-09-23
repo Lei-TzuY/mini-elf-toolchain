@@ -481,6 +481,16 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
                 globals.tls_desc_entries.get(symbol.name).copied()
             } else if is_tls_ld_relocation_type(relocation.relocation_type) {
                 globals.tls_ld_entry
+            } else if relocation.relocation_type == R_X86_64_PLT32 {
+                let symbol = symbols.iter().find(|symbol| {
+                    symbol.table_section_index == table.symbol_table_index
+                        && symbol.symbol_index == relocation.symbol_index as usize
+                })?;
+                globals
+                    .plt_entries
+                    .get(symbol.name)
+                    .copied()
+                    .or(Some(values.address))
             } else {
                 Some(values.address)
             }
