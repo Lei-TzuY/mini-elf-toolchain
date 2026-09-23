@@ -28,6 +28,7 @@ pub mod permission_layout;
 pub mod pie_runtime;
 pub mod preload;
 mod program_headers;
+pub mod provider_closure;
 pub mod rela_apply;
 pub mod relocated_sections;
 pub mod relocations;

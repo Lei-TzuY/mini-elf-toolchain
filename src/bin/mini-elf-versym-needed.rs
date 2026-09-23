@@ -6,7 +6,13 @@ use std::process::ExitCode;
 mod checked {
     include!("mini-elf-versym.rs");
 
+    use mini_elf_toolchain::dynamic_provider::inspect_dynamic_provider;
+    use mini_elf_toolchain::provider_closure::resolve_provider_path;
+    use std::collections::{BTreeSet, VecDeque};
+    use std::path::{Path, PathBuf};
+
     const DT_NEEDED_X: i64 = 1;
+    const DT_RUNPATH_X: i64 = 29;
     const DT_VERNEED_X: i64 = 0x6fff_fffe;
     const DT_VERNEEDNUM_X: i64 = 0x6fff_ffff;
     const ELF64_VERNEED_SIZE_X: u64 = 16;
@@ -40,6 +46,14 @@ mod checked {
             .map_err(|error| format!("{display}: {error}"))?;
         let requirement_names = version_requirement_names(&entries, &program_headers, &file)
             .map_err(|error| format!("{display}: {error}"))?;
+        validate_requirement_dependencies(
+            input,
+            &entries,
+            &program_headers,
+            &file,
+            &requirement_names,
+        )
+        .map_err(|error| format!("{display}: {error}"))?;
 
         for index in definition_names.keys() {
             if requirement_names.contains_key(index) {
@@ -119,6 +133,119 @@ mod checked {
         hash
     }
 
+    fn validate_requirement_dependencies(
+        input: &std::ffi::OsStr,
+        entries: &[DynamicEntry],
+        program_headers: &[ProgramHeader],
+        file: &[u8],
+        requirements: &BTreeMap<u16, RequirementName>,
+    ) -> Result<(), String> {
+        let strtab = unique_tag_value(entries, DT_STRTAB, "DT_STRTAB")?
+            .ok_or_else(|| "DT_VERNEED requires DT_STRTAB".to_owned())?;
+        let strsz = unique_tag_value(entries, DT_STRSZ, "DT_STRSZ")?
+            .ok_or_else(|| "DT_VERNEED requires DT_STRSZ".to_owned())?;
+        let strtab_offset = map_virtual_range(
+            program_headers,
+            file.len(),
+            strtab,
+            strsz,
+            "DT_STRTAB table",
+        )?;
+
+        let direct_needed = entries
+            .iter()
+            .filter(|entry| entry.tag == DT_NEEDED_X)
+            .map(|entry| dynamic_string(file, strtab_offset, strsz, entry.value, "DT_NEEDED name"))
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let mut missing = requirements
+            .values()
+            .filter(|requirement| !direct_needed.contains(&requirement.dependency))
+            .map(|requirement| requirement.dependency.as_bytes().to_vec())
+            .collect::<BTreeSet<_>>();
+        if missing.is_empty() {
+            return Ok(());
+        }
+
+        let runpath = match unique_tag_value(entries, DT_RUNPATH_X, "DT_RUNPATH")? {
+            Some(offset) => {
+                Some(dynamic_string(file, strtab_offset, strsz, offset, "DT_RUNPATH")?.into_bytes())
+            }
+            None => None,
+        };
+
+        let input_path = Path::new(input);
+        let input_parent = input_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let mut visited = BTreeSet::<PathBuf>::new();
+        if let Ok(root) = std::fs::canonicalize(input_path) {
+            visited.insert(root);
+        }
+
+        let mut queue = VecDeque::new();
+        for needed in &direct_needed {
+            queue.push_back((
+                needed.as_bytes().to_vec(),
+                input_parent.clone(),
+                runpath.clone(),
+            ));
+        }
+
+        while let Some((needed, provider_directory, runpath)) = queue.pop_front() {
+            let path = resolve_provider_path(&needed, &provider_directory, runpath.as_deref(), &[])
+                .map_err(|error| error.to_string())?;
+            let canonical = std::fs::canonicalize(&path).map_err(|error| {
+                format!(
+                    "{}: cannot canonicalize checked version-provider dependency {:?}: {error}",
+                    path.display(),
+                    String::from_utf8_lossy(&needed)
+                )
+            })?;
+            if !visited.insert(canonical) {
+                continue;
+            }
+
+            let provider_file = std::fs::read(&path).map_err(|error| {
+                format!(
+                    "{}: cannot read checked version-provider dependency {:?}: {error}",
+                    path.display(),
+                    String::from_utf8_lossy(&needed)
+                )
+            })?;
+            let provider = inspect_dynamic_provider(&provider_file).map_err(|error| {
+                format!(
+                    "{}: cannot inspect checked version-provider dependency {:?}: {error}",
+                    path.display(),
+                    String::from_utf8_lossy(&needed)
+                )
+            })?;
+
+            missing.remove(needed.as_slice());
+            missing.remove(provider.soname.as_slice());
+            if missing.is_empty() {
+                return Ok(());
+            }
+
+            let parent = path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf();
+            for child in &provider.needed {
+                queue.push_back((child.clone(), parent.clone(), provider.runpath.clone()));
+            }
+        }
+
+        let names = missing
+            .iter()
+            .map(|name| format!("{:?}", String::from_utf8_lossy(name)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        Err(format!(
+            "DT_VERNEED dependency is neither directly declared by DT_NEEDED nor reachable through the checked dependency closure: {names}"
+        ))
+    }
+
     fn version_requirement_names(
         entries: &[DynamicEntry],
         program_headers: &[ProgramHeader],
@@ -149,12 +276,6 @@ mod checked {
             strsz,
             "DT_STRTAB table",
         )?;
-
-        let needed = entries
-            .iter()
-            .filter(|entry| entry.tag == DT_NEEDED_X)
-            .map(|entry| dynamic_string(file, strtab_offset, strsz, entry.value, "DT_NEEDED name"))
-            .collect::<Result<std::collections::BTreeSet<_>, _>>()?;
 
         let mut names = BTreeMap::new();
         let mut address = verneed.unwrap();
@@ -191,12 +312,6 @@ mod checked {
                 dependency_offset,
                 "DT_VERNEED dependency name",
             )?;
-            if !needed.contains(&dependency) {
-                return Err(format!(
-                    "DT_VERNEED dependency '{dependency}' is not declared by DT_NEEDED"
-                ));
-            }
-
             let mut aux_address = address
                 .checked_add(u64::from(aux_relative))
                 .ok_or_else(|| format!("DT_VERNEED entry {record_index} vn_aux overflows u64"))?;

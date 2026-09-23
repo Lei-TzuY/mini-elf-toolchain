@@ -399,7 +399,7 @@ impl fmt::Display for SharedObjectError {
             ),
             Self::VersionRequirementProviderMissing { provider } => write!(
                 f,
-                "shared object version requirement names provider {:?}, but that provider is not present in DT_NEEDED",
+                "shared object version requirement names provider {:?}, but that provider is not present in the checked direct/transitive provider scope",
                 String::from_utf8_lossy(provider)
             ),
             Self::ExternalImportUnsupportedType {
@@ -1018,7 +1018,28 @@ pub fn link_shared_object_with_needed_soname_runpath_and_versions(
     runpath: Option<&[u8]>,
     version_requirements: &[SharedVersionRequirement],
 ) -> Result<ExecutableImage, SharedObjectError> {
+    link_shared_object_with_needed_soname_runpath_versions_and_checked_providers(
+        inputs,
+        page_alignment,
+        needed,
+        soname,
+        runpath,
+        version_requirements,
+        needed,
+    )
+}
+
+pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_providers(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    needed: &[Vec<u8>],
+    soname: Option<&[u8]>,
+    runpath: Option<&[u8]>,
+    version_requirements: &[SharedVersionRequirement],
+    checked_version_providers: &[Vec<u8>],
+) -> Result<ExecutableImage, SharedObjectError> {
     validate_needed_names(needed)?;
+    validate_needed_names(checked_version_providers)?;
     validate_soname(soname)?;
     validate_runpath(runpath)?;
 
@@ -1029,7 +1050,11 @@ pub fn link_shared_object_with_needed_soname_runpath_and_versions(
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
     let imports = validate_inputs(inputs, &resolved.definitions)?;
-    validate_version_requirements(needed, &imports.symbols, version_requirements)?;
+    validate_version_requirements(
+        checked_version_providers,
+        &imports.symbols,
+        version_requirements,
+    )?;
     let tls_ie_import_symbols = imports
         .tls_ie_symbols
         .iter()
@@ -1310,12 +1335,15 @@ fn validate_needed_names(needed: &[Vec<u8>]) -> Result<(), SharedObjectError> {
 }
 
 fn validate_version_requirements(
-    needed: &[Vec<u8>],
+    checked_providers: &[Vec<u8>],
     imports: &BTreeMap<Vec<u8>, ImportSymbol>,
     requirements: &[SharedVersionRequirement],
 ) -> Result<(), SharedObjectError> {
     for requirement in requirements {
-        if !needed.iter().any(|name| name == &requirement.provider) {
+        if !checked_providers
+            .iter()
+            .any(|name| name == &requirement.provider)
+        {
             return Err(SharedObjectError::VersionRequirementProviderMissing {
                 provider: requirement.provider.clone(),
             });

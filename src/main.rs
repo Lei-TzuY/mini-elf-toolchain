@@ -16,9 +16,10 @@ use mini_elf_toolchain::ordered_inputs::{
 use mini_elf_toolchain::partial_link::{
     link_relocatable_objects_with_forced_undefined, PartialLinkInput,
 };
+use mini_elf_toolchain::provider_closure::resolve_provider_path;
 use mini_elf_toolchain::shared_object::{
-    link_shared_object_with_needed_soname_runpath_and_versions, shared_import_requirements,
-    SharedImportRequirement, SharedVersionRequirement,
+    link_shared_object_with_needed_soname_runpath_versions_and_checked_providers,
+    shared_import_requirements, SharedImportRequirement, SharedVersionRequirement,
 };
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
@@ -776,6 +777,13 @@ struct LinkFilesOptions<'a> {
 struct ResolvedNeededDependencies {
     names: Vec<Vec<u8>>,
     version_requirements: Vec<SharedVersionRequirement>,
+    checked_version_providers: Vec<Vec<u8>>,
+}
+
+#[derive(Default)]
+struct TransitiveProviderMatches {
+    matched_any: bool,
+    version_requirements: Vec<SharedVersionRequirement>,
 }
 
 fn resolve_needed_dependencies(
@@ -806,16 +814,45 @@ fn resolve_needed_dependencies(
                     .filter(|import| provider_matches_import(&provider, import))
                     .collect::<Vec<_>>();
                 let direct_match = !direct_matches.is_empty();
-                let matched = if direct_match {
-                    true
-                } else {
+
+                for import in &direct_matches {
+                    let Some(version) = import.version.as_ref() else {
+                        continue;
+                    };
+                    version_requirements
+                        .entry(import.linker_name.clone())
+                        .or_insert_with(|| SharedVersionRequirement {
+                            linker_name: import.linker_name.clone(),
+                            provider: provider.soname.clone(),
+                            version: version.clone(),
+                        });
+                }
+
+                let missing_versioned = imports
+                    .iter()
+                    .filter(|import| {
+                        import.version.is_some()
+                            && !version_requirements.contains_key(&import.linker_name)
+                    })
+                    .map(|import| import.linker_name.clone())
+                    .collect::<std::collections::BTreeSet<_>>();
+                let transitive = if !direct_match || !missing_versioned.is_empty() {
                     inspect_transitive_provider_exports(
                         &root_path,
                         &provider,
                         search_paths,
                         imports,
+                        &missing_versioned,
                     )?
+                } else {
+                    TransitiveProviderMatches::default()
                 };
+                for requirement in transitive.version_requirements {
+                    version_requirements
+                        .entry(requirement.linker_name.clone())
+                        .or_insert(requirement);
+                }
+                let matched = direct_match || transitive.matched_any;
                 if !matched {
                     if let Some(import) = imports.iter().find(|import| import.version.is_some()) {
                         let version = import
@@ -837,19 +874,6 @@ fn resolve_needed_dependencies(
                     )));
                 }
 
-                for import in direct_matches {
-                    let Some(version) = import.version.as_ref() else {
-                        continue;
-                    };
-                    version_requirements
-                        .entry(import.linker_name.clone())
-                        .or_insert_with(|| SharedVersionRequirement {
-                            linker_name: import.linker_name.clone(),
-                            provider: provider.soname.clone(),
-                            version: version.clone(),
-                        });
-                }
-
                 provider.soname
             }
         };
@@ -864,16 +888,28 @@ fn resolve_needed_dependencies(
         };
         if !version_requirements.contains_key(&import.linker_name) {
             return Err(CliError::Failure(format!(
-                "versioned shared import {:?}@{:?} requires a directly checked provider exporting the requested symbol version",
+                "versioned shared import {:?}@{:?} requires a checked direct/transitive provider exporting the requested symbol version",
                 String::from_utf8_lossy(&import.name),
                 String::from_utf8_lossy(version)
             )));
         }
     }
 
+    let version_requirements = version_requirements.into_values().collect::<Vec<_>>();
+    let mut checked_version_providers = names.clone();
+    for requirement in &version_requirements {
+        if !checked_version_providers
+            .iter()
+            .any(|provider| provider == &requirement.provider)
+        {
+            checked_version_providers.push(requirement.provider.clone());
+        }
+    }
+
     Ok(ResolvedNeededDependencies {
         names,
-        version_requirements: version_requirements.into_values().collect(),
+        version_requirements,
+        checked_version_providers,
     })
 }
 
@@ -893,26 +929,14 @@ fn provider_matches_import(
     }
 }
 
-fn provider_matches_unversioned_imports(
-    provider: &DynamicProviderMetadata,
-    imports: &[SharedImportRequirement],
-) -> bool {
-    imports.iter().any(|import| {
-        import.version.is_none()
-            && provider
-                .exports
-                .get(&import.name)
-                .is_some_and(|types| types.contains(&import.symbol_type))
-    })
-}
-
 fn inspect_transitive_provider_exports(
     root_path: &Path,
     root: &DynamicProviderMetadata,
     search_paths: &[PathBuf],
     imports: &[SharedImportRequirement],
-) -> Result<bool, CliError> {
-    use std::collections::{BTreeSet, VecDeque};
+    required_versioned: &std::collections::BTreeSet<Vec<u8>>,
+) -> Result<TransitiveProviderMatches, CliError> {
+    use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
     let root_canonical = fs::canonicalize(root_path).map_err(|error| {
         CliError::Failure(format!(
@@ -932,13 +956,17 @@ fn inspect_transitive_provider_exports(
         queue.push_back((needed.clone(), root_parent.clone(), root.runpath.clone()));
     }
 
+    let mut matched_any = false;
+    let mut version_requirements = BTreeMap::<Vec<u8>, SharedVersionRequirement>::new();
+
     while let Some((needed, provider_directory, runpath)) = queue.pop_front() {
-        let dependency_path = resolve_transitive_provider_path(
+        let dependency_path = resolve_provider_path(
             &needed,
             &provider_directory,
             runpath.as_deref(),
             search_paths,
-        )?;
+        )
+        .map_err(|error| CliError::Failure(error.to_string()))?;
         let canonical = fs::canonicalize(&dependency_path).map_err(|error| {
             CliError::Failure(format!(
                 "{}: cannot canonicalize transitive shared provider dependency {:?}: {error}",
@@ -958,8 +986,36 @@ fn inspect_transitive_provider_exports(
                 String::from_utf8_lossy(&needed)
             ))
         })?;
-        if provider_matches_unversioned_imports(&provider, imports) {
-            return Ok(true);
+
+        for import in imports {
+            if !provider_matches_import(&provider, import) {
+                continue;
+            }
+            matched_any = true;
+            if !required_versioned.contains(&import.linker_name) {
+                continue;
+            }
+            let Some(version) = import.version.as_ref() else {
+                continue;
+            };
+            version_requirements
+                .entry(import.linker_name.clone())
+                .or_insert_with(|| SharedVersionRequirement {
+                    linker_name: import.linker_name.clone(),
+                    provider: provider.soname.clone(),
+                    version: version.clone(),
+                });
+        }
+
+        if matched_any
+            && required_versioned
+                .iter()
+                .all(|name| version_requirements.contains_key(name))
+        {
+            return Ok(TransitiveProviderMatches {
+                matched_any,
+                version_requirements: version_requirements.into_values().collect(),
+            });
         }
 
         let parent = dependency_path
@@ -971,115 +1027,10 @@ fn inspect_transitive_provider_exports(
         }
     }
 
-    Ok(false)
-}
-
-fn resolve_transitive_provider_path(
-    name: &[u8],
-    provider_directory: &Path,
-    runpath: Option<&[u8]>,
-    search_paths: &[PathBuf],
-) -> Result<PathBuf, CliError> {
-    let name = std::str::from_utf8(name).map_err(|_| {
-        CliError::Failure(format!(
-            "transitive shared provider dependency name {:?} is not valid UTF-8",
-            String::from_utf8_lossy(name)
-        ))
-    })?;
-    if name.is_empty() {
-        return Err(CliError::Failure(
-            "transitive shared provider dependency name is empty".to_owned(),
-        ));
-    }
-    if name.contains('/') || name.contains('\\') {
-        return Err(CliError::Failure(format!(
-            "transitive shared provider dependency '{name}' contains a path separator; bounded closure resolution accepts SONAME-style filenames only"
-        )));
-    }
-
-    let mut directories = Vec::new();
-    push_unique_directory(&mut directories, provider_directory.to_path_buf());
-
-    if let Some(runpath) = runpath {
-        for directory in expand_provider_runpath(runpath, provider_directory)? {
-            push_unique_directory(&mut directories, directory);
-        }
-    }
-    for path in search_paths {
-        push_unique_directory(&mut directories, path.clone());
-    }
-
-    for directory in &directories {
-        let candidate = directory.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-
-    let mut message = format!("cannot resolve transitive shared provider dependency '{name}'");
-    if directories.is_empty() {
-        message.push_str("; no bounded provider search directories are available");
-    } else {
-        message.push_str(" in");
-        for directory in directories {
-            message.push_str(&format!(" '{}'", directory.display()));
-        }
-    }
-    Err(CliError::Failure(message))
-}
-
-fn push_unique_directory(directories: &mut Vec<PathBuf>, directory: PathBuf) {
-    if !directories.iter().any(|candidate| candidate == &directory) {
-        directories.push(directory);
-    }
-}
-
-fn expand_provider_runpath(
-    runpath: &[u8],
-    provider_directory: &Path,
-) -> Result<Vec<PathBuf>, CliError> {
-    let runpath = std::str::from_utf8(runpath).map_err(|_| {
-        CliError::Failure(format!(
-            "provider DT_RUNPATH {:?} is not valid UTF-8",
-            String::from_utf8_lossy(runpath)
-        ))
-    })?;
-    if runpath.is_empty() {
-        return Err(CliError::Failure(
-            "provider DT_RUNPATH is empty; bounded closure resolution rejects empty search entries"
-                .to_owned(),
-        ));
-    }
-
-    let mut result = Vec::new();
-    for entry in runpath.split(':') {
-        if entry.is_empty() {
-            return Err(CliError::Failure(format!(
-                "provider DT_RUNPATH '{runpath}' contains an empty search entry"
-            )));
-        }
-        let path = if entry == "$ORIGIN" || entry == "${ORIGIN}" {
-            provider_directory.to_path_buf()
-        } else if let Some(suffix) = entry.strip_prefix("$ORIGIN/") {
-            provider_directory.join(suffix)
-        } else if let Some(suffix) = entry.strip_prefix("${ORIGIN}/") {
-            provider_directory.join(suffix)
-        } else if entry.contains('$') {
-            return Err(CliError::Failure(format!(
-                "provider DT_RUNPATH entry '{entry}' uses an unsupported loader token; bounded closure resolution supports only $ORIGIN"
-            )));
-        } else {
-            let path = PathBuf::from(entry);
-            if !path.is_absolute() {
-                return Err(CliError::Failure(format!(
-                    "provider DT_RUNPATH entry '{entry}' is relative; bounded closure resolution accepts only absolute paths or $ORIGIN-based entries"
-                )));
-            }
-            path
-        };
-        push_unique_directory(&mut result, path);
-    }
-    Ok(result)
+    Ok(TransitiveProviderMatches {
+        matched_any,
+        version_requirements: version_requirements.into_values().collect(),
+    })
 }
 
 fn read_provider_file(path: &Path, role: &str) -> Result<Vec<u8>, CliError> {
@@ -1125,13 +1076,14 @@ fn link_files(
             .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         let needed =
             resolve_needed_dependencies(options.needed, &imports, options.provider_search_paths)?;
-        let image = link_shared_object_with_needed_soname_runpath_and_versions(
+        let image = link_shared_object_with_needed_soname_runpath_versions_and_checked_providers(
             &prepared.objects,
             DEFAULT_PAGE_ALIGNMENT,
             &needed.names,
             options.soname,
             options.runpath,
             &needed.version_requirements,
+            &needed.checked_version_providers,
         )
         .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         fs::write(output, &image.bytes)
