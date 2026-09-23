@@ -28,8 +28,8 @@ use crate::tls::{
     StaticTlsLayoutError, StaticTlsProgramHeaderError,
 };
 use crate::x86_64_relocations::{
-    R_X86_64_64, R_X86_64_DTPMOD64, R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT,
-    R_X86_64_GOTPCREL, R_X86_64_JUMP_SLOT, R_X86_64_PLT32, R_X86_64_TLSGD,
+    R_X86_64_64, R_X86_64_DTPMOD64, R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPCREL,
+    R_X86_64_JUMP_SLOT, R_X86_64_PLT32, R_X86_64_TLSGD,
 };
 
 const SHT_PROGBITS: u32 = 1;
