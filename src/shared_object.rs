@@ -1255,9 +1255,9 @@ fn validate_version_requirements(
                 provider: requirement.provider.clone(),
             });
         }
-        let valid = imports
-            .get(&requirement.linker_name)
-            .is_some_and(|import| import.version.as_deref() == Some(requirement.version.as_slice()));
+        let valid = imports.get(&requirement.linker_name).is_some_and(|import| {
+            import.version.as_deref() == Some(requirement.version.as_slice())
+        });
         if !valid {
             let name = imports
                 .get(&requirement.linker_name)
@@ -2237,10 +2237,7 @@ struct ConsumerVersionMetadata {
     provider_count: usize,
 }
 
-fn append_dynamic_string(
-    table: &mut Vec<u8>,
-    value: &[u8],
-) -> Result<u32, SharedObjectError> {
+fn append_dynamic_string(table: &mut Vec<u8>, value: &[u8]) -> Result<u32, SharedObjectError> {
     let offset = u32::try_from(table.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
     table.extend_from_slice(value);
     table.push(0);
@@ -2262,8 +2259,7 @@ fn build_consumer_version_metadata(
     }
 
     let mut group_keys = BTreeSet::<(Vec<u8>, Vec<u8>)>::new();
-    let mut requirement_by_linker =
-        BTreeMap::<Vec<u8>, (Vec<u8>, Vec<u8>)>::new();
+    let mut requirement_by_linker = BTreeMap::<Vec<u8>, (Vec<u8>, Vec<u8>)>::new();
     for requirement in requirements {
         let key = (requirement.provider.clone(), requirement.version.clone());
         group_keys.insert(key.clone());
@@ -2309,12 +2305,12 @@ fn build_consumer_version_metadata(
         let Some(version) = import.version.as_ref() else {
             continue;
         };
-        let key = requirement_by_linker
-            .get(linker_name)
-            .ok_or_else(|| SharedObjectError::InvalidVersionRequirement {
+        let key = requirement_by_linker.get(linker_name).ok_or_else(|| {
+            SharedObjectError::InvalidVersionRequirement {
                 name: import.dynamic_name.clone(),
                 version: version.clone(),
-            })?;
+            }
+        })?;
         if &key.1 != version {
             return Err(SharedObjectError::InvalidVersionRequirement {
                 name: import.dynamic_name.clone(),
@@ -2544,7 +2540,11 @@ fn build_dynamic_metadata(
         .and_then(|count| count.checked_add(usize::from(relative_relocation_count != 0)))
         .and_then(|count| count.checked_add(if has_plt_relocations { 4 } else { 0 }))
         .and_then(|count| {
-            count.checked_add(if version_metadata.provider_count != 0 { 3 } else { 0 })
+            count.checked_add(if version_metadata.provider_count != 0 {
+                3
+            } else {
+                0
+            })
         })
         .and_then(|count| count.checked_add(usize::from(dynamic_flags != 0)))
         .and_then(|count| count.checked_add(1))
