@@ -284,11 +284,7 @@ fn duplicate_or_empty_soname_is_rejected_without_output() {
     }
 
     let dir = temp_dir("invalid");
-    let object = assemble(
-        &dir,
-        "export",
-        ".text\n.globl exported\nexported:\n  ret\n",
-    );
+    let object = assemble(&dir, "export", ".text\n.globl exported\nexported:\n  ret\n");
 
     for (label, args) in [
         ("duplicate", vec!["--soname", "liba.so", "--soname=libb.so"]),
