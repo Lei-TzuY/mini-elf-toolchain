@@ -106,9 +106,18 @@ write_tls:
         .unwrap();
     assert!(input_relocations.status.success());
     let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
-    assert!(input_relocations.contains("R_X86_64_TLSGD"), "{input_relocations}");
-    assert!(input_relocations.contains("__tls_get_addr"), "{input_relocations}");
-    assert!(input_relocations.contains("R_X86_64_PLT32"), "{input_relocations}");
+    assert!(
+        input_relocations.contains("R_X86_64_TLSGD"),
+        "{input_relocations}"
+    );
+    assert!(
+        input_relocations.contains("__tls_get_addr"),
+        "{input_relocations}"
+    );
+    assert!(
+        input_relocations.contains("R_X86_64_PLT32"),
+        "{input_relocations}"
+    );
 
     let shared = dir.join("libtlsgd.so");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
