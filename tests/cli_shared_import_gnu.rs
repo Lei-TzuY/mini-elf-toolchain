@@ -176,23 +176,36 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_external_weak_import_remains_fail_closed() {
+fn shared_external_import_rejects_conflicting_symbol_types() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("weak");
-    let object = assemble(
+    let dir = temp_dir("conflicting-import-types");
+    let object_ref = assemble(
         &dir,
-        "weak",
+        "object-ref",
         r#".section .data
-.globl imported_pointer
-.type imported_pointer,@object
-.weak host_value
-.type host_value,@object
-imported_pointer:
-    .quad host_value
-.size imported_pointer, .-imported_pointer
+.globl object_pointer
+.type object_pointer,@object
+.extern conflict_symbol
+.type conflict_symbol,@object
+object_pointer:
+    .quad conflict_symbol
+.size object_pointer, .-object_pointer
+"#,
+    );
+    let function_ref = assemble(
+        &dir,
+        "function-ref",
+        r#".section .data
+.globl function_pointer
+.type function_pointer,@object
+.extern conflict_symbol
+.type conflict_symbol,@function
+function_pointer:
+    .quad conflict_symbol
+.size function_pointer, .-function_pointer
 "#,
     );
     let output = dir.join("must-not-exist.so");
@@ -201,17 +214,15 @@ imported_pointer:
         .args(["link", "-o"])
         .arg(&output)
         .arg("--shared")
-        .arg(&object)
+        .arg(&object_ref)
+        .arg(&function_ref)
         .output()
         .unwrap();
 
     assert!(!mini.status.success());
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
-    assert!(
-        stderr.contains("weak") || stderr.contains("binding"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("conflicting ELF symbol types"), "{stderr}");
     assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
