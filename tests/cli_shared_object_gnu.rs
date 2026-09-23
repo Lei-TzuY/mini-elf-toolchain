@@ -150,6 +150,45 @@ exported_value:
     }
     assert!(!dynamic_text.contains("NEEDED"));
 
+    let dynamic_symbols = Command::new("readelf")
+        .args(["--dyn-syms", "-W"])
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(
+        dynamic_symbols.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dynamic_symbols.stderr)
+    );
+    let dynamic_symbol_text = String::from_utf8_lossy(&dynamic_symbols.stdout);
+    assert!(
+        dynamic_symbol_text.contains("answer"),
+        "generated dynsym is missing answer: {dynamic_symbol_text}"
+    );
+    assert!(
+        dynamic_symbol_text.contains("exported_value"),
+        "generated dynsym is missing exported_value: {dynamic_symbol_text}"
+    );
+
+    for symbol in ["answer", "exported_value"] {
+        let lookup = Command::new(env!("CARGO_BIN_EXE_mini-elf-sysv-hash-lookup"))
+            .arg(symbol)
+            .arg(&shared)
+            .output()
+            .unwrap();
+        assert!(
+            lookup.status.success(),
+            "{}: {}",
+            symbol,
+            String::from_utf8_lossy(&lookup.stderr)
+        );
+        let lookup_text = String::from_utf8_lossy(&lookup.stdout);
+        assert!(
+            !lookup_text.contains("not-found"),
+            "checked SysV hash lookup missed {symbol}: {lookup_text}"
+        );
+    }
+
     let consumer_source = dir.join("consumer.c");
     let consumer = dir.join("consumer");
     fs::write(
@@ -162,7 +201,8 @@ int main(int argc, char **argv) {
     if (!handle) return 21;
     int (*answer)(void) = (int (*)(void))dlsym(handle, "answer");
     uint64_t *value = (uint64_t *)dlsym(handle, "exported_value");
-    if (!answer || !value) return 22;
+    if (!answer) return 22;
+    if (!value) return 27;
     if (answer() != 42) return 23;
     if (*value != UINT64_C(0x1122334455667788)) return 24;
     if (dlsym(handle, "definitely_missing") != 0) return 25;
