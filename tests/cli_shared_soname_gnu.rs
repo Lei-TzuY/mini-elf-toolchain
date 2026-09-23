@@ -78,9 +78,7 @@ provider_value:
 .globl provider_function
 .type provider_function,@function
 provider_function:
-    mov provider_value@GOTPCREL(%rip), %rax
-    mov (%rax), %rax
-    add $1, %rax
+    movabs $0x1122334455667789, %rax
     ret
 .size provider_function, .-provider_function
 "#,
