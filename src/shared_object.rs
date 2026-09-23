@@ -1325,13 +1325,13 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
     let import_rela_bytes =
         build_import_relocation_table(inputs, &relocated, &imports.sites, &import_dynamic_indices)?;
     rela_bytes.extend_from_slice(&import_rela_bytes);
-    let got_import_rela_bytes = build_got_relocation_table(
+    let got_rela_bytes = build_got_relocation_table(
         &imports.got_symbols,
         &got_entries,
         &export_dynamic_indices,
         &import_dynamic_indices,
     )?;
-    rela_bytes.extend_from_slice(&got_import_rela_bytes);
+    rela_bytes.extend_from_slice(&got_rela_bytes);
     let tls_gd_rela_bytes = build_tls_gd_relocation_table(
         &imports.tls_gd_symbols,
         &tls_gd_entries,
