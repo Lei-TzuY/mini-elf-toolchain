@@ -421,9 +421,7 @@ fn build_dynamic_metadata(
     put_u32(&mut bytes, hash_offset + 4, symbol_count_u32);
     put_u32(&mut bytes, hash_offset + 8, 1);
     for symbol_index in 0..symbol_count {
-        let value = if symbol_index == 0 {
-            0
-        } else if symbol_index + 1 == symbol_count {
+        let value = if symbol_index == 0 || symbol_index + 1 == symbol_count {
             0
         } else {
             u32::try_from(symbol_index + 1).map_err(|_| SharedObjectError::MetadataTooLarge)?
