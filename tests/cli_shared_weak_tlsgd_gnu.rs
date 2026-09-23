@@ -221,26 +221,6 @@ fn assert_named_weak_tlsgd_metadata(shared: &Path) {
         shared.display()
     );
 
-    let versions = Command::new("readelf")
-        .arg("-VW")
-        .arg(shared)
-        .output()
-        .unwrap();
-    assert!(
-        versions.status.success(),
-        "{}",
-        String::from_utf8_lossy(&versions.stderr)
-    );
-    let versions = String::from_utf8_lossy(&versions.stdout);
-    let requirement = versions
-        .lines()
-        .find(|line| line.contains("Name: VERS_1"))
-        .unwrap_or_else(|| panic!("{} missing VERS_1:\n{versions}", shared.display()));
-    assert!(
-        requirement.contains("Flags: none"),
-        "{} must keep a strong version-node requirement even though the symbol binding is weak: {requirement}",
-        shared.display()
-    );
 }
 
 fn assert_weak_tlsgd_metadata(shared: &Path) {
@@ -552,6 +532,26 @@ fn versioned_weak_tlsgd_matches_gnu_and_preserves_version_node_requirement() {
     for shared in [&mini, &gnu] {
         assert_named_weak_tlsgd_metadata(shared);
     }
+
+    let gnu_versions = Command::new("readelf")
+        .arg("-VW")
+        .arg(&gnu)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_versions.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_versions.stderr)
+    );
+    let gnu_versions = String::from_utf8_lossy(&gnu_versions.stdout);
+    let gnu_requirement = gnu_versions
+        .lines()
+        .find(|line| line.contains("Name: VERS_1"))
+        .unwrap_or_else(|| panic!("GNU output missing VERS_1:\n{gnu_versions}"));
+    assert!(
+        gnu_requirement.contains("Flags: none"),
+        "GNU weak TLS symbol binding must not weaken the VERS_1 node requirement: {gnu_requirement}"
+    );
 
     let mini_versions = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym-needed"))
         .arg(&mini)
