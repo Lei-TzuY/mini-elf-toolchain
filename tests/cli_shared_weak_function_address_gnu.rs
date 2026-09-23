@@ -152,11 +152,9 @@ fn weak_named_version_function_addresses_match_gnu_and_zero_when_runtime_definit
     assert!(input_symbols.status.success());
     let input_symbols = String::from_utf8_lossy(&input_symbols.stdout);
     assert!(
-        input_symbols
-            .lines()
-            .any(|line| line.contains("WEAK")
-                && line.contains("UND")
-                && line.contains("provider_function@VERS_1")),
+        input_symbols.lines().any(|line| line.contains("WEAK")
+            && line.contains("UND")
+            && line.contains("provider_function@VERS_1")),
         "{input_symbols}"
     );
 
@@ -180,10 +178,7 @@ fn weak_named_version_function_addresses_match_gnu_and_zero_when_runtime_definit
     let gnu = dir.join("libgnu.so");
     let gnu_link = Command::new("ld")
         .args(["-shared", "--hash-style=sysv"])
-        .arg(format!(
-            "-rpath={}",
-            runtime_provider_dir.to_string_lossy()
-        ))
+        .arg(format!("-rpath={}", runtime_provider_dir.to_string_lossy()))
         .args(["-o"])
         .arg(&gnu)
         .arg(&object)
@@ -205,11 +200,9 @@ fn weak_named_version_function_addresses_match_gnu_and_zero_when_runtime_definit
         assert!(symbols.status.success());
         let symbols = String::from_utf8_lossy(&symbols.stdout);
         assert!(
-            symbols
-                .lines()
-                .any(|line| line.contains("WEAK")
-                    && line.contains("UND")
-                    && line.contains("provider_function@VERS_1")),
+            symbols.lines().any(|line| line.contains("WEAK")
+                && line.contains("UND")
+                && line.contains("provider_function@VERS_1")),
             "{symbols}"
         );
 
