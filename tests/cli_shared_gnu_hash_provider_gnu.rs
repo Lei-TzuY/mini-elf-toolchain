@@ -6,7 +6,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const DT_NULL: i64 = 0;
-const DT_HASH: i64 = 4;
 const DT_GNU_HASH: i64 = 0x6fff_fef5;
 
 fn command_reports(program: &str, marker: &str) -> bool {
