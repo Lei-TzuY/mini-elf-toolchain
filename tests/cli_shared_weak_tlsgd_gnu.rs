@@ -120,9 +120,7 @@ provider_other:
     let map = dir.join("provider.map");
     fs::write(
         &map,
-        format!(
-            "{version} {{ global: provider_tls; provider_other; local: *; }};\n"
-        ),
+        format!("{version} {{ global: provider_tls; provider_other; local: *; }};\n"),
     )
     .unwrap();
     let shared = dir.join("libprovider.so");
