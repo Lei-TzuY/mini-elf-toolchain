@@ -457,10 +457,9 @@ mod tests {
 
     #[test]
     fn parses_single_parent_inheritance_and_rejects_global_wildcards() {
-        let script = VersionScript::parse(
-            b"VERS_1 { global: old_api; }; VERS_2 { global: api; } VERS_1;",
-        )
-        .unwrap();
+        let script =
+            VersionScript::parse(b"VERS_1 { global: old_api; }; VERS_2 { global: api; } VERS_1;")
+                .unwrap();
         assert_eq!(script.parent_for(b"VERS_1"), None);
         assert_eq!(script.parent_for(b"VERS_2"), Some(b"VERS_1".as_slice()));
 
