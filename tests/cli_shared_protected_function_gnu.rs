@@ -242,6 +242,196 @@ int main(int argc, char **argv) {{
     let _ = fs::remove_dir_all(dir);
 }
 
+
+#[test]
+fn protected_function_cross_object_plt_and_provider_lookup_work() {
+    if !have_tools() {
+        return;
+    }
+
+    let dir = temp_dir("cross-object");
+    let definition = assemble(
+        &dir,
+        "definition",
+        &format!(
+            r#".section .note.GNU-stack,"",@progbits
+.text
+.globl {FUNCTION}
+.protected {FUNCTION}
+.type {FUNCTION},@function
+{FUNCTION}:
+    mov $7, %eax
+    ret
+.size {FUNCTION}, .-{FUNCTION}
+"#
+        ),
+    );
+    let caller = assemble(
+        &dir,
+        "caller",
+        &format!(
+            r#".section .note.GNU-stack,"",@progbits
+.text
+.type {FUNCTION},@function
+.globl {CALLER}
+.type {CALLER},@function
+{CALLER}:
+    sub $8, %rsp
+    call {FUNCTION}@PLT
+    add $8, %rsp
+    ret
+.size {CALLER}, .-{CALLER}
+"#
+        ),
+    );
+
+    let input_relocations = Command::new("readelf")
+        .arg("-rW")
+        .arg(&caller)
+        .output()
+        .unwrap();
+    assert!(input_relocations.status.success());
+    let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
+    assert!(
+        input_relocations
+            .lines()
+            .any(|line| line.contains("R_X86_64_PLT32") && line.contains(FUNCTION)),
+        "{input_relocations}"
+    );
+
+    let mini = dir.join("libmini-cross.so");
+    let mini_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&mini)
+        .args(["--shared", "--soname", "libmini-cross.so"])
+        .arg(&definition)
+        .arg(&caller)
+        .output()
+        .unwrap();
+    assert!(
+        mini_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini_link.stderr)
+    );
+
+    let gnu = dir.join("libgnu-cross.so");
+    let gnu_link = Command::new("ld")
+        .args([
+            "-shared",
+            "--hash-style=sysv",
+            "--soname=libgnu-cross.so",
+            "-o",
+        ])
+        .arg(&gnu)
+        .arg(&definition)
+        .arg(&caller)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_link.stderr)
+    );
+
+    for shared in [&mini, &gnu] {
+        assert_protected_export_without_jump_slot(shared);
+    }
+
+    let consumer_object = assemble(
+        &dir,
+        "consumer",
+        &format!(
+            r#".section .note.GNU-stack,"",@progbits
+.text
+.type {FUNCTION},@function
+.globl consume_protected_function
+.type consume_protected_function,@function
+consume_protected_function:
+    sub $8, %rsp
+    call {FUNCTION}@PLT
+    add $8, %rsp
+    ret
+.size consume_protected_function, .-consume_protected_function
+"#
+        ),
+    );
+    let consumer = dir.join("libconsumer.so");
+    let consumer_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&consumer)
+        .args(["--shared", "--soname", "libconsumer.so", "--needed-from"])
+        .arg(&mini)
+        .arg(&consumer_object)
+        .output()
+        .unwrap();
+    assert!(
+        consumer_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&consumer_link.stderr)
+    );
+
+    let dynamic = Command::new("readelf")
+        .arg("-dW")
+        .arg(&consumer)
+        .output()
+        .unwrap();
+    assert!(dynamic.status.success());
+    let dynamic = String::from_utf8_lossy(&dynamic.stdout);
+    assert!(
+        dynamic.contains("NEEDED") && dynamic.contains("libmini-cross.so"),
+        "{dynamic}"
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let source = dir.join("cross-runner.c");
+        let runner = dir.join("cross-runner");
+        fs::write(
+            &source,
+            format!(
+                r#"#include <dlfcn.h>
+
+typedef int (*fn)(void);
+
+int main(int argc, char **argv) {{
+    if (argc != 2) return 288;
+    void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return 289;
+    fn caller = (fn)dlsym(handle, "{CALLER}");
+    if (!caller) return 290;
+    if (caller() != 7) return 291;
+    return dlclose(handle) == 0 ? 0 : 292;
+}}
+"#
+            ),
+        )
+        .unwrap();
+        let compile = Command::new("cc")
+            .args(["-o"])
+            .arg(&runner)
+            .arg(&source)
+            .arg("-ldl")
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+
+        for shared in [&mini, &gnu] {
+            let status = Command::new(&runner).arg(shared).status().unwrap();
+            assert!(
+                status.success(),
+                "cross-object protected runtime returned {status} for {}",
+                shared.display()
+            );
+        }
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
 #[test]
 fn protected_function_got_interposition_remains_out_of_scope() {
     if !command_reports("as", "GNU assembler") {
