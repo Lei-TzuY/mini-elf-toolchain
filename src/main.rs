@@ -13,6 +13,7 @@ use mini_elf_toolchain::ordered_inputs::{
 use mini_elf_toolchain::partial_link::{
     link_relocatable_objects_with_forced_undefined, PartialLinkInput,
 };
+use mini_elf_toolchain::shared_object::link_shared_object;
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
 };
@@ -31,7 +32,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -140,13 +141,25 @@ where
         };
         let raw_remaining: Vec<_> = args.collect();
         let (position_independent, raw_remaining) = extract_pie_argument(&raw_remaining)?;
-        if position_independent && contains_image_base_argument(&raw_remaining) {
+        let (shared_object, raw_remaining) = extract_shared_argument(&raw_remaining)?;
+        if position_independent && shared_object {
             return Err(CliError::Usage(
-                "--pie cannot be combined with --image-base".to_owned(),
+                "--pie cannot be combined with --shared".to_owned(),
             ));
+        }
+        if (position_independent || shared_object) && contains_image_base_argument(&raw_remaining) {
+            return Err(CliError::Usage(format!(
+                "{} cannot be combined with --image-base",
+                if shared_object { "--shared" } else { "--pie" }
+            )));
         }
         let forced =
             extract_forced_undefined_arguments(&raw_remaining).map_err(forced_undefined_error)?;
+        if shared_object && !forced.symbols.is_empty() {
+            return Err(CliError::Usage(
+                "--shared does not support forced undefined roots".to_owned(),
+            ));
+        }
         let image_base =
             extract_image_base_argument(&forced.arguments).map_err(image_base_error)?;
         let mut remaining = image_base.arguments;
@@ -200,20 +213,31 @@ where
             }
         }
 
+        if shared_object && map_output.is_some() {
+            return Err(CliError::Usage(
+                "--shared does not support link map output".to_owned(),
+            ));
+        }
+        if shared_object && entry_seen {
+            return Err(CliError::Usage(
+                "--shared does not support --entry".to_owned(),
+            ));
+        }
+
         let remaining =
             resolve_static_library_arguments(&remaining).map_err(library_search_error)?;
         if remaining.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
-        return link_files(
-            &output,
-            map_output.as_ref(),
-            &entry_symbol,
-            image_base.image_base,
+        let options = LinkFilesOptions {
+            map_output: map_output.as_ref(),
+            entry_symbol: &entry_symbol,
+            image_base: image_base.image_base,
             position_independent,
-            &forced.symbols,
-            &remaining,
-        );
+            shared_object,
+            forced_undefined: &forced.symbols,
+        };
+        return link_files(&output, &options, &remaining);
     }
 
     Err(CliError::Usage(format!(
@@ -260,6 +284,31 @@ fn extract_pie_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>),
     }
 
     Ok((position_independent, remaining))
+}
+
+fn extract_shared_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>), CliError> {
+    let mut shared = false;
+    let mut remaining = Vec::with_capacity(arguments.len());
+
+    for argument in arguments {
+        if argument == "--shared" {
+            if shared {
+                return Err(CliError::Usage("duplicate --shared option".to_owned()));
+            }
+            shared = true;
+        } else if argument
+            .to_str()
+            .is_some_and(|argument| argument.starts_with("--shared="))
+        {
+            return Err(CliError::Usage(
+                "--shared does not accept a value".to_owned(),
+            ));
+        } else {
+            remaining.push(argument.clone());
+        }
+    }
+
+    Ok((shared, remaining))
 }
 
 fn contains_image_base_argument(arguments: &[OsString]) -> bool {
@@ -450,13 +499,18 @@ struct LoadedLinkInputSequence {
     sequence: Vec<LoadedLinkInputRef>,
 }
 
-fn link_files(
-    output: &OsString,
-    map_output: Option<&OsString>,
-    entry_symbol: &OsString,
+struct LinkFilesOptions<'a> {
+    map_output: Option<&'a OsString>,
+    entry_symbol: &'a OsString,
     image_base: u64,
     position_independent: bool,
-    forced_undefined: &[Vec<u8>],
+    shared_object: bool,
+    forced_undefined: &'a [Vec<u8>],
+}
+
+fn link_files(
+    output: &OsString,
+    options: &LinkFilesOptions<'_>,
     paths: &[OsString],
 ) -> Result<String, CliError> {
     let loaded = load_link_input_sequence(paths)?;
@@ -481,12 +535,26 @@ fn link_files(
         .iter()
         .map(|input| loaded.paths[input.file_index].clone())
         .collect::<Vec<_>>();
-    let prepared =
-        prepare_ordered_link_inputs_with_forced_undefined(&ordered_inputs, forced_undefined)
-            .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
-    let entry_symbol = entry_symbol.to_string_lossy();
+    let prepared = prepare_ordered_link_inputs_with_forced_undefined(
+        &ordered_inputs,
+        options.forced_undefined,
+    )
+    .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
+    if options.shared_object {
+        let image = link_shared_object(&prepared.objects, DEFAULT_PAGE_ALIGNMENT)
+            .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
+        fs::write(output, &image.bytes)
+            .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
+        return Ok(format!(
+            "linked shared ELF64 x86-64: output={}, objects={}, bytes={}",
+            output.to_string_lossy(),
+            prepared.objects.len(),
+            image.bytes.len()
+        ));
+    }
 
-    let linked = if position_independent {
+    let entry_symbol = options.entry_symbol.to_string_lossy();
+    let linked = if options.position_independent {
         link_static_position_independent_executable_with_map(
             &prepared.objects,
             DEFAULT_PAGE_ALIGNMENT,
@@ -495,7 +563,7 @@ fn link_files(
     } else {
         link_static_executable_with_map(
             &prepared.objects,
-            image_base,
+            options.image_base,
             DEFAULT_PAGE_ALIGNMENT,
             entry_symbol.as_bytes(),
         )
@@ -506,7 +574,7 @@ fn link_files(
         .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
     set_executable_permissions(output)?;
 
-    if let Some(map_output) = map_output {
+    if let Some(map_output) = options.map_output {
         fs::write(map_output, linked.link_map.render()).map_err(|error| {
             CliError::Failure(format!("{}: {error}", map_output.to_string_lossy()))
         })?;
@@ -514,7 +582,7 @@ fn link_files(
 
     Ok(format!(
         "{}: output={}, objects={}, bytes={}, entry={:#x}",
-        if position_independent {
+        if options.position_independent {
             "linked static PIE ELF64 x86-64"
         } else {
             "linked static ELF64 x86-64"
