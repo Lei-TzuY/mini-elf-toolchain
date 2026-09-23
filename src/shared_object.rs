@@ -197,7 +197,7 @@ pub fn link_shared_object(
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
 
-    let relocated = relocate_allocatable_sections(inputs, 0, page_alignment)
+    let relocated = relocate_allocatable_sections(inputs, page_alignment, page_alignment)
         .map_err(SharedObjectError::Relocation)?;
     let layout = relocated
         .iter()
