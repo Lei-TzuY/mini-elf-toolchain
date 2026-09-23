@@ -728,18 +728,9 @@ write_tls:
 
     #[cfg(target_os = "linux")]
     {
-        let mini_self = compile_runner(
-            &dir,
-            "mini-self-bind",
-            &mini_self_runner_source(),
-            false,
-        );
-        let mini_preempt = compile_runner(
-            &dir,
-            "mini-preempt",
-            &mini_preempt_runner_source(),
-            true,
-        );
+        let mini_self = compile_runner(&dir, "mini-self-bind", &mini_self_runner_source(), false);
+        let mini_preempt =
+            compile_runner(&dir, "mini-preempt", &mini_preempt_runner_source(), true);
 
         for runner in [&mini_self, &mini_preempt] {
             let status = Command::new(runner).arg(&mini).status().unwrap();
