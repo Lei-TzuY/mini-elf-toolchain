@@ -817,6 +817,19 @@ fn resolve_needed_dependencies(
                     )?
                 };
                 if !matched {
+                    if let Some(import) = imports.iter().find(|import| import.version.is_some()) {
+                        let version = import
+                            .version
+                            .as_deref()
+                            .expect("versioned import predicate guarantees a version");
+                        return Err(CliError::Failure(format!(
+                            "{}: provider SONAME {:?} and its checked transitive dependency closure do not satisfy named-version import {:?}@{:?}",
+                            root_path.display(),
+                            String::from_utf8_lossy(&provider.soname),
+                            String::from_utf8_lossy(&import.name),
+                            String::from_utf8_lossy(version)
+                        )));
+                    }
                     return Err(CliError::Failure(format!(
                         "{}: provider SONAME {:?} and its checked transitive dependency closure exports none of the consumer's bounded external imports",
                         root_path.display(),
