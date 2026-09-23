@@ -334,7 +334,10 @@ new_value:
     assert!(dynamic.status.success());
     let dynamic = String::from_utf8_lossy(&dynamic.stdout);
     assert!(dynamic.contains("VERDEF"), "{dynamic}");
-    assert!(dynamic.contains("VERDEFNUM") && dynamic.contains("2"), "{dynamic}");
+    assert!(
+        dynamic.contains("VERDEFNUM") && dynamic.contains("2"),
+        "{dynamic}"
+    );
     assert!(dynamic.contains("VERSYM"), "{dynamic}");
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-verdef"))
