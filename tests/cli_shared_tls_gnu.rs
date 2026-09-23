@@ -241,8 +241,10 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_tls_relocation_remains_fail_closed() {
-    if !command_reports("as", "GNU assembler") {
+fn shared_local_exec_tls_relocation_remains_fail_closed() {
+    if !command_reports("as", "GNU assembler")
+        || !command_reports("readelf", "GNU readelf")
+    {
         return;
     }
 
@@ -261,12 +263,25 @@ tls_value:
 .globl tls_offset
 .type tls_offset,@function
 tls_offset:
-    mov tls_value@gottpoff(%rip), %rax
+    mov %fs:0, %rax
+    lea tls_value@tpoff(%rax), %rax
     ret
 .size tls_offset, .-tls_offset
 "#,
     );
     let output = dir.join("must-not-exist.so");
+
+    let relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(relocations.status.success());
+    let relocations = String::from_utf8_lossy(&relocations.stdout);
+    assert!(
+        relocations.contains("R_X86_64_TPOFF32"),
+        "fail-closed fixture must carry local-exec TPOFF32: {relocations}"
+    );
 
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
