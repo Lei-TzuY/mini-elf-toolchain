@@ -59,6 +59,7 @@ const DT_SYMTAB: i64 = 6;
 const DT_STRSZ: i64 = 10;
 const DT_SYMENT: i64 = 11;
 const DT_SONAME: i64 = 14;
+const DT_SYMBOLIC: i64 = 16;
 const DT_RELA: i64 = 7;
 const DT_PLTREL: i64 = 20;
 const DT_JMPREL: i64 = 23;
@@ -82,6 +83,7 @@ const ELF64_VERDEF_SIZE: usize = 20;
 const ELF64_VERDAUX_SIZE: usize = 8;
 const ELF64_VERNEED_SIZE: usize = 16;
 const ELF64_VERNAUX_SIZE: usize = 16;
+const DF_SYMBOLIC: u64 = 0x2;
 const DF_STATIC_TLS: u64 = 0x10;
 
 #[derive(Debug)]
@@ -1154,6 +1156,7 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
             version_requirements,
             checked_version_providers,
             version_script: None,
+            symbolic: false,
         },
     )
 }
@@ -1166,6 +1169,7 @@ pub struct SharedObjectLinkOptions<'a> {
     pub version_requirements: &'a [SharedVersionRequirement],
     pub checked_version_providers: &'a [Vec<u8>],
     pub version_script: Option<&'a VersionScript>,
+    pub symbolic: bool,
 }
 
 pub fn link_shared_object_with_version_script_and_checked_providers(
@@ -1180,6 +1184,7 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
         version_requirements,
         checked_version_providers,
         version_script,
+        symbolic,
     } = options;
     validate_needed_names(needed)?;
     validate_needed_names(checked_version_providers)?;
@@ -1451,11 +1456,11 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
             relative_count: relative_relocation_count,
             jmprel: &jmprel_bytes,
             plt_got_address: plt_got_base,
-            flags: if imports.tls_ie_symbols.is_empty() {
+            flags: (if imports.tls_ie_symbols.is_empty() {
                 0
             } else {
                 DF_STATIC_TLS
-            },
+            }) | if symbolic { DF_SYMBOLIC } else { 0 },
         },
     )?;
     let dynamic_address = metadata_address
@@ -3045,6 +3050,7 @@ fn build_dynamic_metadata(
 
     let has_relocations = !rela_bytes.is_empty();
     let has_plt_relocations = !jmprel_bytes.is_empty();
+    let symbolic = dynamic_flags & DF_SYMBOLIC != 0;
     debug_assert_eq!(has_plt_relocations, plt_got_address.is_some());
     let dynamic_entry_count = 5usize
         .checked_add(names.needed.len())
@@ -3072,6 +3078,7 @@ fn build_dynamic_metadata(
                 0
             })
         })
+        .and_then(|count| count.checked_add(usize::from(symbolic)))
         .and_then(|count| count.checked_add(usize::from(dynamic_flags != 0)))
         .and_then(|count| count.checked_add(1))
         .ok_or(SharedObjectError::MetadataTooLarge)?;
@@ -3186,6 +3193,9 @@ fn build_dynamic_metadata(
                 .map_err(|_| SharedObjectError::MetadataTooLarge)?;
             entries.push((DT_RELACOUNT, rela_count));
         }
+    }
+    if symbolic {
+        entries.push((DT_SYMBOLIC, 0));
     }
     if dynamic_flags != 0 {
         entries.push((DT_FLAGS, dynamic_flags));
