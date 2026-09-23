@@ -822,29 +822,7 @@ fn validate_inputs(
     let mut plt_symbols = BTreeSet::<Vec<u8>>::new();
 
     for input in inputs {
-        for (section_index, section) in input.object.sections.iter().enumerate() {
-            if section.flags & SHF_TLS != 0 {
-                return Err(SharedObjectError::TlsUnsupported {
-                    object_index: input.object_index,
-                    section_index: section_index as u16,
-                });
-            }
-        }
-
         for table in &input.object.rela_tables {
-            if table.relocations.iter().any(|relocation| {
-                !matches!(
-                    relocation.relocation_type,
-                    R_X86_64_64 | R_X86_64_GOTPCREL | R_X86_64_PLT32
-                )
-            }) {
-                return Err(SharedObjectError::RelocationUnsupported {
-                    object_index: input.object_index,
-                    rela_section_index: table.section_index,
-                    relocation_count: table.relocations.len(),
-                });
-            }
-
             let target = &input.object.sections[usize::from(table.target_section_index)];
             let symbol_table = input
                 .object
@@ -862,6 +840,33 @@ fn validate_inputs(
                 object_index: input.object_index,
                 source,
             })?;
+
+            for (relocation_index, relocation) in table.relocations.iter().enumerate() {
+                let symbol = &symbols[relocation.symbol_index as usize];
+                let symbol_type = symbol.symbol.info & 0x0f;
+                if target.flags & SHF_TLS != 0 || symbol_type == STT_TLS {
+                    return Err(SharedObjectError::TlsRelocationUnsupported {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        symbol_index: relocation.symbol_index,
+                        name: symbol.name.to_vec(),
+                    });
+                }
+            }
+
+            if table.relocations.iter().any(|relocation| {
+                !matches!(
+                    relocation.relocation_type,
+                    R_X86_64_64 | R_X86_64_GOTPCREL | R_X86_64_PLT32
+                )
+            }) {
+                return Err(SharedObjectError::RelocationUnsupported {
+                    object_index: input.object_index,
+                    rela_section_index: table.section_index,
+                    relocation_count: table.relocations.len(),
+                });
+            }
 
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 let symbol = &symbols[relocation.symbol_index as usize];
@@ -1017,6 +1022,13 @@ fn validate_inputs(
                 }
                 if symbol.symbol.section_index == SHN_UNDEF && !symbol.name.is_empty() {
                     let symbol_type = symbol.symbol.info & 0x0f;
+                    if symbol_type == STT_TLS {
+                        return Err(SharedObjectError::TlsImportUnsupported {
+                            object_index: input.object_index,
+                            symbol_index: symbol.symbol_index,
+                            name: symbol.name.to_vec(),
+                        });
+                    }
                     let linker_owned_got_symbol = !got_symbols.is_empty()
                         && symbol.name == GLOBAL_OFFSET_TABLE_SYMBOL
                         && binding == STB_GLOBAL
