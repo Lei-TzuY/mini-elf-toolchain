@@ -183,7 +183,8 @@ fn mini_provider_emits_default_named_version_and_mini_consumer_binds_it() {
     );
     let namespace = String::from_utf8_lossy(&namespace.stdout);
     assert!(namespace.contains("provider_value"), "{namespace}");
-    assert!(namespace.contains("definition=VERS_1"), "{namespace}");
+    assert!(namespace.contains("source=definition"), "{namespace}");
+    assert!(namespace.contains("version=VERS_1"), "{namespace}");
 
     let consumer_object = versioned_consumer_object(&dir, "VERS_1");
     let consumer = dir.join("libconsumer.so");
@@ -350,11 +351,11 @@ dependency_pointer:
         String::from_utf8_lossy(&check.stderr)
     );
     let check = String::from_utf8_lossy(&check.stdout);
-    assert!(check.contains("definition=LOCAL_1"), "{check}");
-    assert!(
-        check.contains("requirement=libdependency.so:DEP_1"),
-        "{check}"
-    );
+    assert!(check.contains("source=definition"), "{check}");
+    assert!(check.contains("version=LOCAL_1"), "{check}");
+    assert!(check.contains("source=requirement"), "{check}");
+    assert!(check.contains("dependency=libdependency.so"), "{check}");
+    assert!(check.contains("version=DEP_1"), "{check}");
 
     let symbols = Command::new("readelf")
         .arg("-sDW")
