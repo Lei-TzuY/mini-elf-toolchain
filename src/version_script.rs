@@ -55,7 +55,10 @@ impl VersionScript {
                             let symbol = cursor.expect_word("exact global symbol")?;
                             cursor.expect(TokenKind::Semi, "';' after global symbol")?;
                             saw_symbol = true;
-                            if assignments.insert(symbol.clone(), version.clone()).is_some() {
+                            if assignments
+                                .insert(symbol.clone(), version.clone())
+                                .is_some()
+                            {
                                 return Err(VersionScriptError::DuplicateSymbol { symbol });
                             }
                         }
@@ -425,9 +428,7 @@ mod tests {
     #[test]
     fn rejects_duplicate_symbol_assignment() {
         assert!(matches!(
-            VersionScript::parse(
-                b"VERS_1 { global: api; }; VERS_2 { global: api; };"
-            ),
+            VersionScript::parse(b"VERS_1 { global: api; }; VERS_2 { global: api; };"),
             Err(VersionScriptError::DuplicateSymbol { .. })
         ));
     }
