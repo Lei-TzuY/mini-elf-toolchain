@@ -258,7 +258,7 @@ fn weak_named_version_function_addresses_match_gnu_and_zero_when_runtime_definit
 typedef uint64_t (*provider_fn)(void);
 
 int main(int argc, char **argv) {
-    if (argc != 2) return 140;
+    if (argc != 3) return 140;
     void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!handle) return 141;
 
@@ -268,10 +268,19 @@ int main(int argc, char **argv) {
         (provider_fn (*)(void))dlsym(handle, "imported_function_via_got");
     if (!direct || !via_got) return 142;
 
-    if (*direct != 0) return 143;
-    if (via_got() != 0) return 144;
+    provider_fn direct_value = *direct;
+    provider_fn got_value = via_got();
+    if (argv[2][0] == '1') {
+        if (!direct_value || !got_value) return 143;
+        if (direct_value != got_value) return 144;
+        if (direct_value() != UINT64_C(0x5a)) return 145;
+        if (got_value() != UINT64_C(0x5a)) return 146;
+    } else {
+        if (direct_value != 0) return 147;
+        if (got_value != 0) return 148;
+    }
 
-    return dlclose(handle) == 0 ? 0 : 145;
+    return dlclose(handle) == 0 ? 0 : 149;
 }
 "#,
         )
@@ -290,12 +299,23 @@ int main(int argc, char **argv) {
         );
 
         for shared in [&mini, &gnu] {
-            let status = Command::new(&runner).arg(shared).status().unwrap();
-            assert!(
-                status.success(),
-                "weak function-address runtime returned {status} for {}",
-                shared.display()
-            );
+            for (provider_dir, expect_present) in [
+                (&link_provider_dir, "1"),
+                (&runtime_provider_dir, "0"),
+            ] {
+                let status = Command::new(&runner)
+                    .arg(shared)
+                    .arg(expect_present)
+                    .env("LD_LIBRARY_PATH", provider_dir)
+                    .status()
+                    .unwrap();
+                assert!(
+                    status.success(),
+                    "weak function-address runtime returned {status} for {} with provider directory {} and expected-present={expect_present}",
+                    shared.display(),
+                    provider_dir.display()
+                );
+            }
         }
     }
 
