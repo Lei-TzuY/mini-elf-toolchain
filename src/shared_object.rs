@@ -359,7 +359,7 @@ impl fmt::Display for SharedObjectError {
                 binding,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded shared relocation handling currently permits undefined external imports plus defined default-visible STT_OBJECT symbols only through ordinary GOTPCREL/GLOB_DAT interposition",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded shared relocation handling currently permits undefined external imports plus defined default-visible strong STT_OBJECT symbols only through ordinary GOTPCREL/GLOB_DAT interposition",
                 String::from_utf8_lossy(name)
             ),
             Self::ExternalImportUnsupportedBinding {
@@ -1857,7 +1857,7 @@ fn validate_inputs(
                         && definitions.get(symbol.name).is_some_and(|definition| {
                             let definition_binding = definition.symbol.info >> 4;
                             let definition_type = definition.symbol.info & 0x0f;
-                            matches!(definition_binding, STB_GLOBAL | STB_WEAK)
+                            definition_binding == STB_GLOBAL
                                 && definition_type == STT_OBJECT
                                 && definition.symbol.other == 0
                         });
