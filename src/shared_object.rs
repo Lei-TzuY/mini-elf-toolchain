@@ -46,6 +46,7 @@ const STT_NOTYPE: u8 = 0;
 const STT_OBJECT: u8 = 1;
 const STT_FUNC: u8 = 2;
 const STT_TLS: u8 = 6;
+const STV_HIDDEN: u8 = 2;
 const STV_PROTECTED: u8 = 3;
 const GLOBAL_OFFSET_TABLE_SYMBOL: &[u8] = b"_GLOBAL_OFFSET_TABLE_";
 
@@ -1236,6 +1237,9 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
     let mut matched_script_symbols = BTreeSet::new();
     let mut exports = Vec::new();
     for definition in resolved.definitions.values() {
+        if definition.symbol.other == STV_HIDDEN {
+            continue;
+        }
         let identity = if let Some(script) = version_script {
             if definition.name.contains(&b'@') {
                 return Err(SharedObjectError::VersionScriptExplicitAliasUnsupported {
@@ -1569,6 +1573,15 @@ fn validate_runpath(runpath: Option<&[u8]>) -> Result<(), SharedObjectError> {
     Ok(())
 }
 
+fn is_bounded_local_binding_definition(definition: &SymbolDefinition) -> bool {
+    let binding = definition.symbol.info >> 4;
+    let symbol_type = definition.symbol.info & 0x0f;
+    binding == STB_GLOBAL
+        && matches!(symbol_type, STT_OBJECT | STT_FUNC)
+        && matches!(definition.symbol.other, STV_HIDDEN | STV_PROTECTED)
+        && definition.symbol.section_index != SHN_ABS
+}
+
 fn validate_inputs(
     inputs: &[LinkerInputObject<'_>],
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
@@ -1882,20 +1895,15 @@ fn validate_inputs(
                                 && matches!(definition_type, STT_OBJECT | STT_FUNC)
                                 && definition.symbol.other == 0
                         });
-                    let protected_definition = !symbol.name.is_empty()
-                        && definitions.get(symbol.name).is_some_and(|definition| {
-                            let definition_binding = definition.symbol.info >> 4;
-                            let definition_type = definition.symbol.info & 0x0f;
-                            definition_binding == STB_GLOBAL
-                                && matches!(definition_type, STT_OBJECT | STT_FUNC)
-                                && definition.symbol.other == STV_PROTECTED
-                                && definition.symbol.section_index != SHN_ABS
-                        });
+                    let local_binding_definition = !symbol.name.is_empty()
+                        && definitions
+                            .get(symbol.name)
+                            .is_some_and(is_bounded_local_binding_definition);
                     if is_got_import && supported_definition {
                         got_symbols.insert(symbol.name.to_vec());
                         continue;
                     }
-                    if is_got_import && protected_definition {
+                    if is_got_import && local_binding_definition {
                         relative_got_symbols.insert(symbol.name.to_vec());
                         continue;
                     }
@@ -1920,16 +1928,12 @@ fn validate_inputs(
                         plt_symbols.insert(symbol.name.to_vec());
                         continue;
                     }
-                    let protected_plt_definition = is_plt_import
+                    let local_binding_plt_definition = is_plt_import
                         && definitions.get(symbol.name).is_some_and(|definition| {
-                            let definition_binding = definition.symbol.info >> 4;
-                            let definition_type = definition.symbol.info & 0x0f;
-                            definition_binding == STB_GLOBAL
-                                && definition_type == STT_FUNC
-                                && definition.symbol.other == STV_PROTECTED
-                                && definition.symbol.section_index != SHN_ABS
+                            is_bounded_local_binding_definition(definition)
+                                && definition.symbol.info & 0x0f == STT_FUNC
                         });
-                    if protected_plt_definition {
+                    if local_binding_plt_definition {
                         if target.flags & SHF_ALLOC == 0 || target.flags & SHF_EXECINSTR == 0 {
                             return Err(SharedObjectError::ExternalPltTargetNotExecutable {
                                 object_index: input.object_index,
@@ -1942,7 +1946,7 @@ fn validate_inputs(
                         continue;
                     }
                     if relocation.relocation_type == R_X86_64_64
-                        && (supported_definition || protected_definition)
+                        && (supported_definition || local_binding_definition)
                     {
                         if target.flags & SHF_ALLOC == 0 || target.flags & SHF_WRITE == 0 {
                             return Err(
@@ -2095,12 +2099,14 @@ fn validate_inputs(
                     });
                 }
                 let symbol_type = symbol.symbol.info & 0x0f;
-                let protected_definition = symbol.symbol.other == STV_PROTECTED
-                    && binding == STB_GLOBAL
-                    && matches!(symbol_type, STT_OBJECT | STT_FUNC)
-                    && symbol.symbol.section_index != SHN_UNDEF
-                    && symbol.symbol.section_index != SHN_ABS;
-                if symbol.symbol.other != 0 && !protected_definition {
+                let local_binding_definition = !symbol.name.is_empty()
+                    && definitions
+                        .get(symbol.name)
+                        .is_some_and(is_bounded_local_binding_definition);
+                let supported_nondefault_visibility =
+                    matches!(symbol.symbol.other, STV_HIDDEN | STV_PROTECTED)
+                        && local_binding_definition;
+                if symbol.symbol.other != 0 && !supported_nondefault_visibility {
                     return Err(SharedObjectError::NondefaultVisibility {
                         object_index: input.object_index,
                         symbol_index: symbol.symbol_index,
