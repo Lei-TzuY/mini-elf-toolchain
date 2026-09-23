@@ -1202,8 +1202,8 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
             parse_export_identity(&definition.name)?
         };
 
-        let absolute_value = final_symbol_address(definition, &layout)
-            .map_err(SharedObjectError::SymbolAddress)?;
+        let absolute_value =
+            final_symbol_address(definition, &layout).map_err(SharedObjectError::SymbolAddress)?;
         let symbol_type = definition.symbol.info & 0x0f;
         let value = if symbol_type == STT_TLS {
             tls_export_value(definition, absolute_value, tls_layout)?
