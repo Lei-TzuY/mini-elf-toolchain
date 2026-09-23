@@ -4,6 +4,7 @@ use crate::executable_writer::{
     write_elf64_x86_64_executable_segments, write_elf64_x86_64_position_independent_segments,
     ExecutableImage, ExecutableWriteError, LoadSegmentInput,
 };
+use crate::gnu_stack::GnuStackPolicyError;
 use crate::layout::LaidOutSection;
 use crate::link_map::{build_link_map, LinkMap};
 use crate::link_symbols::{resolve_validated_objects, LinkSymbolError};
@@ -34,6 +35,7 @@ pub enum StaticLinkError {
     LinkMap(FinalSymbolAddressError),
     LoadSegments(LoadSegmentBuildError),
     Write(ExecutableWriteError),
+    GnuStack(GnuStackPolicyError),
     TlsProgramHeader(StaticTlsProgramHeaderError),
     PieRuntime(PieRuntimeError),
     PositionIndependentRelocation {
@@ -74,6 +76,7 @@ impl fmt::Display for StaticLinkError {
             Self::LinkMap(source) => write!(f, "cannot build link map: {source}"),
             Self::LoadSegments(source) => write!(f, "cannot build load segments: {source}"),
             Self::Write(source) => write!(f, "cannot emit executable: {source}"),
+            Self::GnuStack(source) => write!(f, "cannot derive GNU stack policy: {source}"),
             Self::TlsProgramHeader(source) => {
                 write!(f, "cannot emit static TLS program header: {source}")
             }
@@ -125,6 +128,7 @@ impl std::error::Error for StaticLinkError {
             Self::EntryAddress(source) | Self::LinkMap(source) => Some(source),
             Self::LoadSegments(source) => Some(source),
             Self::Write(source) => Some(source),
+            Self::GnuStack(source) => Some(source),
             Self::TlsProgramHeader(source) => Some(source),
             Self::PieRuntime(source) => Some(source),
             Self::MissingEntrySymbol { .. }
