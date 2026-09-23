@@ -89,8 +89,14 @@ call_host_direct:
         .unwrap();
     assert!(input_relocations.status.success());
     let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
-    assert!(input_relocations.contains("R_X86_64_PLT32"), "{input_relocations}");
-    assert!(input_relocations.contains("host_function"), "{input_relocations}");
+    assert!(
+        input_relocations.contains("R_X86_64_PLT32"),
+        "{input_relocations}"
+    );
+    assert!(
+        input_relocations.contains("host_function"),
+        "{input_relocations}"
+    );
 
     let shared = dir.join("libplt.so");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
@@ -115,7 +121,10 @@ call_host_direct:
     let dynamic = String::from_utf8_lossy(&dynamic.stdout);
     assert!(dynamic.contains("JMPREL"), "{dynamic}");
     assert!(dynamic.contains("PLTRELSZ"), "{dynamic}");
-    assert!(dynamic.contains("PLTREL") && dynamic.contains("RELA"), "{dynamic}");
+    assert!(
+        dynamic.contains("PLTREL") && dynamic.contains("RELA"),
+        "{dynamic}"
+    );
     assert!(dynamic.contains("BIND_NOW"), "{dynamic}");
 
     let symbols = Command::new("readelf")
