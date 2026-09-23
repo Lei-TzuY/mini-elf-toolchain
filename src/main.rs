@@ -634,9 +634,7 @@ fn resolve_needed_dependencies(
                         path.to_string_lossy()
                     ))
                 })?;
-                let matched = imports
-                    .iter()
-                    .any(|name| provider.exports.contains(name));
+                let matched = imports.iter().any(|name| provider.exports.contains(name));
                 if !matched {
                     return Err(CliError::Failure(format!(
                         "{}: provider SONAME {:?} exports none of the consumer's bounded external imports",
