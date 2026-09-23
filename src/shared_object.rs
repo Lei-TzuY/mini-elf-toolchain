@@ -530,7 +530,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a global/weak STT_TLS symbol with a default-visible unresolved import or supported default/protected definition",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a default-visible global/weak STT_TLS symbol for unresolved/default-visible binding, or a defined global STT_TLS symbol with STV_PROTECTED",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsIeTargetNotExecutable {
@@ -556,7 +556,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object TLSDESC relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} references TLS symbol {symbol_index} ({:?}); bounded TLSDESC requires a global/weak STT_TLS symbol with a default-visible unresolved import or supported default/protected definition",
+                "shared object TLSDESC relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} references TLS symbol {symbol_index} ({:?}); bounded TLSDESC requires a default-visible global/weak STT_TLS symbol for unresolved/default-visible binding, or a defined global STT_TLS symbol with STV_PROTECTED",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsDescTargetNotExecutable {
@@ -668,7 +668,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object symbol {symbol_index} in object {object_index} ({:?}) is not supported by bounded TLSGD; TLSGD requires a global/weak STT_TLS symbol with a default-visible unresolved import or supported default/protected definition",
+                "shared object symbol {symbol_index} in object {object_index} ({:?}) is not supported by bounded TLSGD; TLSGD requires a default-visible global/weak STT_TLS symbol for unresolved/default-visible binding, or a defined global STT_TLS symbol with STV_PROTECTED",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsSymbolOutsideImage { name, address } => write!(
