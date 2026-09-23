@@ -219,23 +219,33 @@ fn weak_named_version_function_addresses_match_gnu_and_zero_when_runtime_definit
                 && relocations.contains("provider_function@VERS_1"),
             "{label} dynamic relocations:\n{relocations}"
         );
-
-        let versions = Command::new("readelf")
-            .arg("-VW")
-            .arg(shared)
-            .output()
-            .unwrap();
-        assert!(versions.status.success());
-        let versions = String::from_utf8_lossy(&versions.stdout);
-        assert!(
-            versions.contains("libprovider.so"),
-            "{label} version metadata:\n{versions}"
-        );
-        assert!(
-            versions.contains("VERS_1"),
-            "{label} version metadata:\n{versions}"
-        );
     }
+
+    let mini_versions = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym-needed"))
+        .arg(&mini)
+        .output()
+        .unwrap();
+    assert!(
+        mini_versions.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini_versions.stderr)
+    );
+    let mini_versions = String::from_utf8_lossy(&mini_versions.stdout);
+    assert!(
+        mini_versions.contains("provider_function")
+            && mini_versions.contains("requirement=libprovider.so:VERS_1"),
+        "{mini_versions}"
+    );
+
+    let gnu_versions = Command::new("readelf")
+        .arg("-VW")
+        .arg(&gnu)
+        .output()
+        .unwrap();
+    assert!(gnu_versions.status.success());
+    let gnu_versions = String::from_utf8_lossy(&gnu_versions.stdout);
+    assert!(gnu_versions.contains("libprovider.so"), "{gnu_versions}");
+    assert!(gnu_versions.contains("VERS_1"), "{gnu_versions}");
 
     #[cfg(target_os = "linux")]
     {
