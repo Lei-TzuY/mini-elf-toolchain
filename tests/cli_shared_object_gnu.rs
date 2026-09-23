@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const PT_DYNAMIC: u32 = 2;
 const PT_INTERP: u32 = 3;
+const PT_TLS: u32 = 7;
 
 fn command_available(program: &str) -> bool {
     Command::new(program)
@@ -292,7 +293,7 @@ answer:
 }
 
 #[test]
-fn shared_object_rejects_tls_before_output() {
+fn shared_object_accepts_defined_tls_export_and_emits_pt_tls() {
     if !command_available("as") {
         return;
     }
@@ -317,7 +318,7 @@ answer:
 .size answer, .-answer
 "#,
     );
-    let shared = dir.join("rejected-tls.so");
+    let shared = dir.join("tls-export.so");
 
     let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
@@ -327,10 +328,13 @@ answer:
         .output()
         .unwrap();
 
-    assert!(!link.status.success());
-    assert!(link.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&link.stderr).contains("TLS"));
-    assert!(!shared.exists());
+    assert!(
+        link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&link.stderr)
+    );
+    assert!(shared.exists());
+    assert_eq!(program_header_count(&shared, PT_TLS), 1);
 
     let _ = fs::remove_dir_all(dir);
 }

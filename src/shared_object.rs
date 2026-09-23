@@ -6,7 +6,7 @@ use crate::executable_writer::{
 };
 use crate::layout::LaidOutSection;
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
-use crate::linker_input::LinkerInputObject;
+use crate::linker_input::{LinkerInputError, LinkerInputObject};
 use crate::load_segments::{
     build_load_segments, LoadSegmentBuildError, LoadableSectionInput, SHF_ALLOC, SHF_EXECINSTR,
     SHF_WRITE,
@@ -23,6 +23,10 @@ use crate::relocated_sections::{
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
+use crate::tls::{
+    compute_static_tls_layout, inject_static_tls_program_header, StaticTlsLayout,
+    StaticTlsLayoutError, StaticTlsProgramHeaderError,
+};
 use crate::x86_64_relocations::{
     R_X86_64_64, R_X86_64_GLOB_DAT, R_X86_64_GOTPCREL, R_X86_64_JUMP_SLOT, R_X86_64_PLT32,
 };
@@ -37,6 +41,7 @@ const R_X86_64_NONE: u32 = 0;
 const STT_NOTYPE: u8 = 0;
 const STT_OBJECT: u8 = 1;
 const STT_FUNC: u8 = 2;
+const STT_TLS: u8 = 6;
 const GLOBAL_OFFSET_TABLE_SYMBOL: &[u8] = b"_GLOBAL_OFFSET_TABLE_";
 
 const DT_NULL: i64 = 0;
@@ -136,10 +141,25 @@ pub enum SharedObjectError {
         target_section_index: u16,
         flags: u64,
     },
-    TlsUnsupported {
+    TlsRelocationUnsupported {
         object_index: usize,
-        section_index: u16,
+        rela_section_index: u16,
+        relocation_index: usize,
+        symbol_index: u32,
+        name: Vec<u8>,
     },
+    TlsImportUnsupported {
+        object_index: usize,
+        symbol_index: usize,
+        name: Vec<u8>,
+    },
+    TlsSymbolOutsideImage {
+        name: Vec<u8>,
+        address: u64,
+    },
+    TlsInput(LinkerInputError),
+    TlsLayout(StaticTlsLayoutError),
+    TlsProgramHeader(StaticTlsProgramHeaderError),
     EmptyNeededName {
         dependency_index: usize,
     },
@@ -302,13 +322,36 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} targets section {target_section_index} with flags {flags:#x}; bounded PLT32 imports require an allocated executable call site"
             ),
-            Self::TlsUnsupported {
+            Self::TlsRelocationUnsupported {
                 object_index,
-                section_index,
+                rela_section_index,
+                relocation_index,
+                symbol_index,
+                name,
             } => write!(
                 f,
-                "shared object first slice rejects TLS section {section_index} in object {object_index}; shared-object TLS is not implemented"
+                "shared object TLS export slice rejects TLS relocation use in object {object_index} RELA section {rela_section_index} relocation {relocation_index} symbol {symbol_index} ({:?}); dynamic TLS relocation/codegen is not implemented",
+                String::from_utf8_lossy(name)
             ),
+            Self::TlsImportUnsupported {
+                object_index,
+                symbol_index,
+                name,
+            } => write!(
+                f,
+                "shared object symbol {symbol_index} in object {object_index} ({:?}) is an undefined TLS import; this slice supports defined TLS exports only",
+                String::from_utf8_lossy(name)
+            ),
+            Self::TlsSymbolOutsideImage { name, address } => write!(
+                f,
+                "shared object TLS export {:?} resolves to {address:#x}, outside the computed PT_TLS image",
+                String::from_utf8_lossy(name)
+            ),
+            Self::TlsInput(source) => write!(f, "cannot read shared TLS input sections: {source}"),
+            Self::TlsLayout(source) => write!(f, "cannot compute shared TLS layout: {source}"),
+            Self::TlsProgramHeader(source) => {
+                write!(f, "cannot emit shared PT_TLS program header: {source}")
+            },
             Self::EmptyNeededName { dependency_index } => write!(
                 f,
                 "shared object DT_NEEDED dependency {dependency_index} has an empty name"
@@ -393,6 +436,9 @@ impl std::error::Error for SharedObjectError {
             Self::SymbolAddress(source) => Some(source),
             Self::LoadSegments(source) => Some(source),
             Self::Write(source) => Some(source),
+            Self::TlsInput(source) => Some(source),
+            Self::TlsLayout(source) => Some(source),
+            Self::TlsProgramHeader(source) => Some(source),
             Self::RelocationUnsupported { .. }
             | Self::PreemptibleRelativeTarget { .. }
             | Self::ExternalImportUnsupportedBinding { .. }
@@ -406,7 +452,9 @@ impl std::error::Error for SharedObjectError {
             | Self::MissingImportPltGotEntry { .. }
             | Self::ExternalPltUnsupportedType { .. }
             | Self::ExternalPltTargetNotExecutable { .. }
-            | Self::TlsUnsupported { .. }
+            | Self::TlsRelocationUnsupported { .. }
+            | Self::TlsImportUnsupported { .. }
+            | Self::TlsSymbolOutsideImage { .. }
             | Self::EmptyNeededName { .. }
             | Self::NeededNameContainsNul { .. }
             | Self::EmptySoname
@@ -600,12 +648,29 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         })
         .collect::<Vec<_>>();
 
+    let mut input_sections = Vec::new();
+    for input in inputs {
+        input_sections.extend(
+            input
+                .allocatable_sections()
+                .map_err(SharedObjectError::TlsInput)?,
+        );
+    }
+    let tls_layout = compute_static_tls_layout(&input_sections, &layout)
+        .map_err(SharedObjectError::TlsLayout)?;
+
     let exports = resolved
         .definitions
         .values()
         .map(|definition| {
-            let value = final_symbol_address(definition, &layout)
+            let absolute_value = final_symbol_address(definition, &layout)
                 .map_err(SharedObjectError::SymbolAddress)?;
+            let symbol_type = definition.symbol.info & 0x0f;
+            let value = if symbol_type == STT_TLS {
+                tls_export_value(definition, absolute_value, tls_layout)?
+            } else {
+                absolute_value
+            };
             Ok(ExportSymbol {
                 name: definition.name.clone(),
                 info: definition.symbol.info,
@@ -718,6 +783,12 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
 
     let image = write_elf64_x86_64_shared_segments(&writer_segments, page_alignment)
         .map_err(SharedObjectError::Write)?;
+    let image = if let Some(tls) = tls_layout {
+        inject_static_tls_program_header(image, tls, page_alignment)
+            .map_err(SharedObjectError::TlsProgramHeader)?
+    } else {
+        image
+    };
     map_runtime_program_headers_with_dynamic(
         image,
         RuntimeDynamicProgramHeader {
@@ -726,6 +797,31 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         },
     )
     .map_err(SharedObjectError::Write)
+}
+
+fn tls_export_value(
+    definition: &SymbolDefinition,
+    absolute_value: u64,
+    tls: Option<StaticTlsLayout>,
+) -> Result<u64, SharedObjectError> {
+    let tls = tls.ok_or_else(|| SharedObjectError::TlsSymbolOutsideImage {
+        name: definition.name.clone(),
+        address: absolute_value,
+    })?;
+    let tls_end = tls
+        .base_address
+        .checked_add(tls.memory_size)
+        .ok_or(SharedObjectError::AddressOverflow)?;
+    let symbol_end = absolute_value
+        .checked_add(definition.symbol.size)
+        .ok_or(SharedObjectError::AddressOverflow)?;
+    if absolute_value < tls.base_address || symbol_end > tls_end {
+        return Err(SharedObjectError::TlsSymbolOutsideImage {
+            name: definition.name.clone(),
+            address: absolute_value,
+        });
+    }
+    Ok(absolute_value - tls.base_address)
 }
 
 fn validate_needed_names(needed: &[Vec<u8>]) -> Result<(), SharedObjectError> {
@@ -774,29 +870,7 @@ fn validate_inputs(
     let mut plt_symbols = BTreeSet::<Vec<u8>>::new();
 
     for input in inputs {
-        for (section_index, section) in input.object.sections.iter().enumerate() {
-            if section.flags & SHF_TLS != 0 {
-                return Err(SharedObjectError::TlsUnsupported {
-                    object_index: input.object_index,
-                    section_index: section_index as u16,
-                });
-            }
-        }
-
         for table in &input.object.rela_tables {
-            if table.relocations.iter().any(|relocation| {
-                !matches!(
-                    relocation.relocation_type,
-                    R_X86_64_64 | R_X86_64_GOTPCREL | R_X86_64_PLT32
-                )
-            }) {
-                return Err(SharedObjectError::RelocationUnsupported {
-                    object_index: input.object_index,
-                    rela_section_index: table.section_index,
-                    relocation_count: table.relocations.len(),
-                });
-            }
-
             let target = &input.object.sections[usize::from(table.target_section_index)];
             let symbol_table = input
                 .object
@@ -814,6 +888,33 @@ fn validate_inputs(
                 object_index: input.object_index,
                 source,
             })?;
+
+            for (relocation_index, relocation) in table.relocations.iter().enumerate() {
+                let symbol = &symbols[relocation.symbol_index as usize];
+                let symbol_type = symbol.symbol.info & 0x0f;
+                if target.flags & SHF_TLS != 0 || symbol_type == STT_TLS {
+                    return Err(SharedObjectError::TlsRelocationUnsupported {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        symbol_index: relocation.symbol_index,
+                        name: symbol.name.to_vec(),
+                    });
+                }
+            }
+
+            if table.relocations.iter().any(|relocation| {
+                !matches!(
+                    relocation.relocation_type,
+                    R_X86_64_64 | R_X86_64_GOTPCREL | R_X86_64_PLT32
+                )
+            }) {
+                return Err(SharedObjectError::RelocationUnsupported {
+                    object_index: input.object_index,
+                    rela_section_index: table.section_index,
+                    relocation_count: table.relocations.len(),
+                });
+            }
 
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 let symbol = &symbols[relocation.symbol_index as usize];
@@ -969,6 +1070,13 @@ fn validate_inputs(
                 }
                 if symbol.symbol.section_index == SHN_UNDEF && !symbol.name.is_empty() {
                     let symbol_type = symbol.symbol.info & 0x0f;
+                    if symbol_type == STT_TLS {
+                        return Err(SharedObjectError::TlsImportUnsupported {
+                            object_index: input.object_index,
+                            symbol_index: symbol.symbol_index,
+                            name: symbol.name.to_vec(),
+                        });
+                    }
                     let linker_owned_got_symbol = !got_symbols.is_empty()
                         && symbol.name == GLOBAL_OFFSET_TABLE_SYMBOL
                         && binding == STB_GLOBAL
