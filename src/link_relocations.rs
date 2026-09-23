@@ -1,5 +1,5 @@
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::layout::LaidOutSection;
 use crate::rela_apply::{apply_rela_table_with_values_and_places, RelaTableApplyError};
@@ -165,6 +165,7 @@ pub struct ResolvedGlobalSymbols<'a> {
     pub definitions: &'a BTreeMap<Vec<u8>, SymbolDefinition>,
     pub got_entries: &'a BTreeMap<Vec<u8>, u64>,
     pub tls_got_entries: &'a BTreeMap<Vec<u8>, u64>,
+    pub unresolved_got_symbols: &'a BTreeSet<Vec<u8>>,
 }
 
 pub fn apply_rela_table_with_resolved_symbols(
@@ -179,6 +180,7 @@ pub fn apply_rela_table_with_resolved_symbols(
     let global_definitions = BTreeMap::new();
     let got_entries = BTreeMap::new();
     let tls_got_entries = BTreeMap::new();
+    let unresolved_got_symbols = BTreeSet::new();
     apply_rela_table_with_resolved_symbols_and_definitions(
         section,
         section_address,
@@ -190,6 +192,7 @@ pub fn apply_rela_table_with_resolved_symbols(
             definitions: &global_definitions,
             got_entries: &got_entries,
             tls_got_entries: &tls_got_entries,
+            unresolved_got_symbols: &unresolved_got_symbols,
         },
         layout,
     )
@@ -264,6 +267,7 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
                     Some(address) => *address,
                     None if binding == STB_WEAK && symbol.symbol.section_index == SHN_UNDEF => 0,
                     None if symbol.symbol.section_index == SHN_UNDEF
+                        && globals.unresolved_got_symbols.contains(symbol.name)
                         && globals.got_entries.contains_key(symbol.name)
                         && table
                             .relocations
