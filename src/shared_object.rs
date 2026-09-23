@@ -18,8 +18,8 @@ use crate::program_headers::{
     map_runtime_program_headers_with_dynamic, RuntimeDynamicProgramHeader,
 };
 use crate::relocated_sections::{
-    relocate_allocatable_sections_with_external_got_plt_tls_gd_tls_ld_and_tls_ie,
-    RelocatedSectionError, RelocatedSectionImage,
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests, RelocatedSectionError,
+    RelocatedSectionImage, TlsSyntheticRequests,
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
@@ -814,18 +814,19 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     masked_sites.extend(imports.tls_ld_dtpoff_sites.iter().copied());
     let relocation_inputs = mask_import_relocations(inputs, &masked_sites);
 
-    let relocated_output =
-        relocate_allocatable_sections_with_external_got_plt_tls_gd_tls_ld_and_tls_ie(
-            &relocation_inputs,
-            page_alignment,
-            page_alignment,
-            &imports.got_symbols,
-            &imports.plt_symbols,
-            &imports.tls_gd_symbols,
-            imports.uses_tls_ld,
-            &tls_ie_import_symbols,
-        )
-        .map_err(SharedObjectError::Relocation)?;
+    let relocated_output = relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
+        &relocation_inputs,
+        page_alignment,
+        page_alignment,
+        &imports.got_symbols,
+        &imports.plt_symbols,
+        TlsSyntheticRequests {
+            tls_gd_symbols: &imports.tls_gd_symbols,
+            tls_ld_enabled: imports.uses_tls_ld,
+            external_tls_got_symbols: &tls_ie_import_symbols,
+        },
+    )
+    .map_err(SharedObjectError::Relocation)?;
     let mut relocated = relocated_output.sections;
     let got_entries = relocated_output.got_entries;
     let tls_got_entries = relocated_output.tls_got_entries;
