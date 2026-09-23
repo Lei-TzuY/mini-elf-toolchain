@@ -252,7 +252,10 @@ int main(int argc, char **argv) {
             String::from_utf8_lossy(&compile.stderr)
         );
         let status = Command::new(&runner).arg(&consumer).status().unwrap();
-        assert!(status.success(), "version-definition roundtrip returned {status}");
+        assert!(
+            status.success(),
+            "version-definition roundtrip returned {status}"
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
