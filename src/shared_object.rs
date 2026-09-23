@@ -556,7 +556,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object TLSDESC relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} references TLS symbol {symbol_index} ({:?}); the first TLSDESC slice requires a defined default-visible strong STT_TLS symbol in the output DSO",
+                "shared object TLSDESC relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} references TLS symbol {symbol_index} ({:?}); bounded TLSDESC requires a default-visible STT_TLS symbol that is either a strong supported definition/import or an unresolved weak import",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsDescTargetNotExecutable {
@@ -1623,8 +1623,10 @@ fn validate_inputs(
                                 && definition_type == STT_TLS
                                 && definition.symbol.other == 0
                         });
+                    let supported_reference_binding =
+                        binding == STB_GLOBAL || (unresolved && binding == STB_WEAK);
                     if symbol_type != STT_TLS
-                        || binding != STB_GLOBAL
+                        || !supported_reference_binding
                         || symbol.symbol.other != 0
                         || symbol.name.is_empty()
                         || (!unresolved && !supported_definition)
@@ -2114,7 +2116,8 @@ fn validate_inputs(
                                 || tls_desc_symbols.contains(symbol.name)))
                             || (binding == STB_WEAK
                                 && (tls_gd_symbols.contains(symbol.name)
-                                    || tls_ie_symbols.contains(symbol.name)));
+                                    || tls_ie_symbols.contains(symbol.name)
+                                    || tls_desc_symbols.contains(symbol.name)));
                         let supported_tls_import =
                             import_symbols.contains_key(symbol.name) && supported_tls_model;
                         if !supported_tls_import {
