@@ -252,7 +252,10 @@ int main(int argc, char **argv) {{
             String::from_utf8_lossy(&compile.stderr)
         );
         let status = Command::new(&consumer).arg(&shared).status().unwrap();
-        assert!(status.success(), "bound weak-import consumer returned {status}");
+        assert!(
+            status.success(),
+            "bound weak-import consumer returned {status}"
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
