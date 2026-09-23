@@ -19,7 +19,7 @@ use crate::program_headers::{
 use crate::relocated_sections::{
     relocate_allocatable_sections, RelocatedSectionError, RelocatedSectionImage,
 };
-use crate::resolve::{SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK, SymbolDefinition};
+use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
 use crate::x86_64_relocations::R_X86_64_64;
 
@@ -354,12 +354,9 @@ pub fn link_shared_object(
     let imports = validate_inputs(inputs, &resolved.definitions)?;
     let relocation_inputs = mask_import_relocations(inputs, &imports.sites);
 
-    let relocated = relocate_allocatable_sections(
-        &relocation_inputs,
-        page_alignment,
-        page_alignment,
-    )
-    .map_err(SharedObjectError::Relocation)?;
+    let relocated =
+        relocate_allocatable_sections(&relocation_inputs, page_alignment, page_alignment)
+            .map_err(SharedObjectError::Relocation)?;
     let layout = relocated
         .iter()
         .map(|section| LaidOutSection {
@@ -401,12 +398,8 @@ pub fn link_shared_object(
         &BTreeMap::new(),
     )
     .map_err(SharedObjectError::RuntimeRelative)?;
-    let import_rela_bytes = build_import_relocation_table(
-        inputs,
-        &relocated,
-        &imports.sites,
-        &import_dynamic_indices,
-    )?;
+    let import_rela_bytes =
+        build_import_relocation_table(inputs, &relocated, &imports.sites, &import_dynamic_indices)?;
     rela_bytes.extend_from_slice(&import_rela_bytes);
 
     let metadata_address = align_up(
@@ -537,8 +530,7 @@ fn validate_inputs(
                     continue;
                 }
 
-                if symbol.symbol.section_index != SHN_UNDEF
-                    || definitions.contains_key(symbol.name)
+                if symbol.symbol.section_index != SHN_UNDEF || definitions.contains_key(symbol.name)
                 {
                     return Err(SharedObjectError::PreemptibleRelativeTarget {
                         object_index: input.object_index,
