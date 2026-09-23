@@ -7,6 +7,7 @@ pub const R_X86_64_PC32: u32 = 2;
 pub const R_X86_64_GOT32: u32 = 3;
 pub const R_X86_64_PLT32: u32 = 4;
 pub const R_X86_64_GLOB_DAT: u32 = 6;
+pub const R_X86_64_JUMP_SLOT: u32 = 7;
 pub const R_X86_64_GOTPCREL: u32 = 9;
 pub const R_X86_64_32: u32 = 10;
 pub const R_X86_64_32S: u32 = 11;

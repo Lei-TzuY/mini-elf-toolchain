@@ -20,6 +20,8 @@ pub struct LinkContext<'a> {
     got_entries: BTreeMap<Vec<u8>, u64>,
     tls_got_entries: BTreeMap<Vec<u8>, u64>,
     unresolved_got_symbols: BTreeSet<Vec<u8>>,
+    plt_entries: BTreeMap<Vec<u8>, u64>,
+    unresolved_plt_symbols: BTreeSet<Vec<u8>>,
     layout: Vec<LaidOutSection>,
 }
 
@@ -131,6 +133,26 @@ pub fn build_link_context_with_got_entry_maps_and_unresolved_got<'a>(
     tls_got_entries: BTreeMap<Vec<u8>, u64>,
     unresolved_got_symbols: BTreeSet<Vec<u8>>,
 ) -> Result<LinkContext<'a>, LinkContextBuildError> {
+    build_link_context_with_got_plt_maps_and_unresolved(
+        objects,
+        layout,
+        got_entries,
+        tls_got_entries,
+        unresolved_got_symbols,
+        BTreeMap::new(),
+        BTreeSet::new(),
+    )
+}
+
+pub fn build_link_context_with_got_plt_maps_and_unresolved<'a>(
+    objects: &[ValidatedObject<'a>],
+    layout: &[LaidOutSection],
+    got_entries: BTreeMap<Vec<u8>, u64>,
+    tls_got_entries: BTreeMap<Vec<u8>, u64>,
+    unresolved_got_symbols: BTreeSet<Vec<u8>>,
+    plt_entries: BTreeMap<Vec<u8>, u64>,
+    unresolved_plt_symbols: BTreeSet<Vec<u8>>,
+) -> Result<LinkContext<'a>, LinkContextBuildError> {
     let mut symbols_by_object = Vec::with_capacity(objects.len());
 
     for (object_index, object) in objects.iter().enumerate() {
@@ -162,6 +184,8 @@ pub fn build_link_context_with_got_entry_maps_and_unresolved_got<'a>(
         got_entries,
         tls_got_entries,
         unresolved_got_symbols,
+        plt_entries,
+        unresolved_plt_symbols,
         layout: layout.to_vec(),
     })
 }
@@ -213,6 +237,8 @@ impl LinkContext<'_> {
                 got_entries: &self.got_entries,
                 tls_got_entries: &self.tls_got_entries,
                 unresolved_got_symbols: &self.unresolved_got_symbols,
+                plt_entries: &self.plt_entries,
+                unresolved_plt_symbols: &self.unresolved_plt_symbols,
             },
             &self.layout,
         )
