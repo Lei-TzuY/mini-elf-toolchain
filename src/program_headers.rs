@@ -87,8 +87,7 @@ fn map_runtime_program_headers_impl(
         });
     }
 
-    let extra_headers =
-        1usize + usize::from(dynamic.is_some()) + usize::from(stack.is_some());
+    let extra_headers = 1usize + usize::from(dynamic.is_some()) + usize::from(stack.is_some());
     if old_phnum > u16::MAX as usize - extra_headers {
         return Err(ExecutableWriteError::TooManyLoadSegments {
             count: old_phnum + extra_headers,
@@ -235,10 +234,7 @@ fn map_runtime_program_headers_impl(
     }
     if let Some(stack) = stack {
         let start = next_extra_index * ELF64_PHDR_SIZE;
-        write_gnu_stack_program_header(
-            &mut table[start..start + ELF64_PHDR_SIZE],
-            stack,
-        );
+        write_gnu_stack_program_header(&mut table[start..start + ELF64_PHDR_SIZE], stack);
     }
 
     image.bytes.resize(new_file_len, 0);
@@ -282,7 +278,11 @@ fn write_dynamic_program_header(
 
 fn write_gnu_stack_program_header(out: &mut [u8], stack: RuntimeStackProgramHeader) {
     put_u32(out, 0, PT_GNU_STACK);
-    put_u32(out, 4, PF_R | PF_W | if stack.executable { PF_X } else { 0 });
+    put_u32(
+        out,
+        4,
+        PF_R | PF_W | if stack.executable { PF_X } else { 0 },
+    );
     put_u64(out, 8, 0);
     put_u64(out, 16, 0);
     put_u64(out, 24, 0);
