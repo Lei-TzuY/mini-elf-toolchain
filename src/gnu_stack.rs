@@ -12,7 +12,7 @@ pub(crate) struct GnuStackPolicy {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum GnuStackPolicyError {
+pub enum GnuStackPolicyError {
     MissingSectionNameStringTable {
         object_index: usize,
         section_index: u16,
@@ -185,12 +185,12 @@ pub(crate) fn gnu_stack_policy(
     Ok(saw_stack_note.then_some(GnuStackPolicy { executable }))
 }
 
-fn section_name<'a>(
-    names: &'a [u8],
+fn section_name(
+    names: &[u8],
     object_index: usize,
     section_index: u16,
     name_offset: u32,
-) -> Result<&'a [u8], GnuStackPolicyError> {
+) -> Result<&[u8], GnuStackPolicyError> {
     let offset = usize::try_from(name_offset).map_err(|_| {
         GnuStackPolicyError::SectionNameOffsetOutOfBounds {
             object_index,
