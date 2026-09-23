@@ -288,16 +288,15 @@ pub fn add_runtime_relative_relocations(
         });
     }
 
-    let relocations = collect_relative_relocations(inputs, &sections, definitions, got_entries)?;
-    if relocations.is_empty() {
+    let (rela_bytes, relocation_count) =
+        build_relative_relocation_table(inputs, &sections, definitions, got_entries)?;
+    if relocation_count == 0 {
         return Ok(PieRuntimeOutput {
             sections,
             entry_address: user_entry_address,
             dynamic: None,
         });
     }
-
-    let rela_bytes = serialize_relative_relocations(&relocations)?;
     let max_end = sections.iter().try_fold(0_u64, |max_end, section| {
         let end = section
             .address
@@ -315,7 +314,7 @@ pub fn add_runtime_relative_relocations(
     let trampoline = build_trampoline(
         trampoline_address,
         rela_address,
-        relocations.len(),
+        relocation_count,
         user_entry_address,
     )?;
     let dynamic_address = align_up(
@@ -324,7 +323,7 @@ pub fn add_runtime_relative_relocations(
             .ok_or(PieRuntimeError::RuntimeAddressOverflow)?,
         page_alignment,
     )?;
-    let dynamic = build_dynamic_table(rela_address, rela_bytes.len(), relocations.len())?;
+    let dynamic = build_dynamic_table(rela_address, rela_bytes.len(), relocation_count)?;
 
     sections.push(runtime_section(
         PIE_RELA_SECTION_INDEX,
@@ -356,6 +355,18 @@ pub fn add_runtime_relative_relocations(
             size: 5 * ELF64_DYN_SIZE,
         }),
     })
+}
+
+pub(crate) fn build_relative_relocation_table(
+    inputs: &[LinkerInputObject<'_>],
+    sections: &[RelocatedSectionImage],
+    definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
+    got_entries: &BTreeMap<Vec<u8>, u64>,
+) -> Result<(Vec<u8>, usize), PieRuntimeError> {
+    let relocations = collect_relative_relocations(inputs, sections, definitions, got_entries)?;
+    let count = relocations.len();
+    let bytes = serialize_relative_relocations(&relocations)?;
+    Ok((bytes, count))
 }
 
 fn collect_relative_relocations(
