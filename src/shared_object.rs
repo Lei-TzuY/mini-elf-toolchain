@@ -133,6 +133,12 @@ pub enum SharedObjectError {
         object_index: usize,
         section_index: u16,
     },
+    EmptyNeededName {
+        dependency_index: usize,
+    },
+    NeededNameContainsNul {
+        dependency_index: usize,
+    },
     Symbols(LinkSymbolError),
     ObjectSymbols {
         object_index: usize,
@@ -283,6 +289,14 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object first slice rejects TLS section {section_index} in object {object_index}; shared-object TLS is not implemented"
             ),
+            Self::EmptyNeededName { dependency_index } => write!(
+                f,
+                "shared object DT_NEEDED dependency {dependency_index} has an empty name"
+            ),
+            Self::NeededNameContainsNul { dependency_index } => write!(
+                f,
+                "shared object DT_NEEDED dependency {dependency_index} contains an embedded NUL byte"
+            ),
             Self::Symbols(source) => write!(f, "cannot resolve shared object symbols: {source}"),
             Self::ObjectSymbols {
                 object_index,
@@ -364,6 +378,8 @@ impl std::error::Error for SharedObjectError {
             | Self::ExternalPltUnsupportedType { .. }
             | Self::ExternalPltTargetNotExecutable { .. }
             | Self::TlsUnsupported { .. }
+            | Self::EmptyNeededName { .. }
+            | Self::NeededNameContainsNul { .. }
             | Self::UnsupportedBinding { .. }
             | Self::UndefinedNonlocal { .. }
             | Self::NondefaultVisibility { .. }
@@ -424,6 +440,8 @@ pub fn link_shared_object_with_needed(
     page_alignment: u64,
     needed: &[Vec<u8>],
 ) -> Result<ExecutableImage, SharedObjectError> {
+    validate_needed_names(needed)?;
+
     let validated = inputs
         .iter()
         .map(LinkerInputObject::validated_object)
@@ -573,6 +591,18 @@ pub fn link_shared_object_with_needed(
         },
     )
     .map_err(SharedObjectError::Write)
+}
+
+fn validate_needed_names(needed: &[Vec<u8>]) -> Result<(), SharedObjectError> {
+    for (dependency_index, name) in needed.iter().enumerate() {
+        if name.is_empty() {
+            return Err(SharedObjectError::EmptyNeededName { dependency_index });
+        }
+        if name.contains(&0) {
+            return Err(SharedObjectError::NeededNameContainsNul { dependency_index });
+        }
+    }
+    Ok(())
 }
 
 fn validate_inputs(
