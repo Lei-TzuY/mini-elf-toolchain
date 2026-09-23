@@ -17,6 +17,7 @@ pub const R_X86_64_8: u32 = 14;
 pub const R_X86_64_PC8: u32 = 15;
 pub const R_X86_64_DTPMOD64: u32 = 16;
 pub const R_X86_64_DTPOFF64: u32 = 17;
+pub const R_X86_64_TPOFF64: u32 = 18;
 pub const R_X86_64_TLSGD: u32 = 19;
 pub const R_X86_64_TLSLD: u32 = 20;
 pub const R_X86_64_DTPOFF32: u32 = 21;
