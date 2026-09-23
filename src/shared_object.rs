@@ -213,7 +213,7 @@ impl fmt::Display for SharedObjectError {
                 binding,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references undefined symbol {symbol_index} ({:?}) with unsupported binding {binding}; bounded non-call imports accept global/weak symbols while PLT imports require a strong global symbol",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references undefined symbol {symbol_index} ({:?}) with unsupported binding {binding}; bounded imports accept strong globals plus weak STT_OBJECT symbols on non-call paths, while PLT imports require a strong global symbol",
                 String::from_utf8_lossy(name)
             ),
             Self::ConflictingImportSymbolType {
@@ -818,6 +818,7 @@ fn validate_inputs(
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 let symbol = &symbols[relocation.symbol_index as usize];
                 let binding = symbol.symbol.info >> 4;
+                let symbol_type = symbol.symbol.info & 0x0f;
                 let is_got_import = relocation.relocation_type == R_X86_64_GOTPCREL;
                 let is_plt_import = relocation.relocation_type == R_X86_64_PLT32;
 
@@ -844,11 +845,8 @@ fn validate_inputs(
                     });
                 }
 
-                let binding_supported = if is_plt_import {
-                    binding == STB_GLOBAL
-                } else {
-                    binding == STB_GLOBAL || binding == STB_WEAK
-                };
+                let binding_supported = binding == STB_GLOBAL
+                    || (binding == STB_WEAK && !is_plt_import && symbol_type == STT_OBJECT);
                 if !binding_supported {
                     return Err(SharedObjectError::ExternalImportUnsupportedBinding {
                         object_index: input.object_index,
@@ -868,7 +866,6 @@ fn validate_inputs(
                     });
                 }
 
-                let symbol_type = symbol.symbol.info & 0x0f;
                 if is_plt_import && symbol_type != STT_FUNC {
                     return Err(SharedObjectError::ExternalPltUnsupportedType {
                         object_index: input.object_index,
@@ -980,7 +977,8 @@ fn validate_inputs(
                         continue;
                     }
                     let supported_import = import_symbols.contains_key(symbol.name)
-                        && (binding == STB_GLOBAL || binding == STB_WEAK)
+                        && (binding == STB_GLOBAL
+                            || (binding == STB_WEAK && symbol_type == STT_OBJECT))
                         && matches!(symbol_type, STT_OBJECT | STT_FUNC);
                     if !supported_import {
                         return Err(SharedObjectError::UndefinedNonlocal {
