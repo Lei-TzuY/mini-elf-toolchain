@@ -792,11 +792,20 @@ struct ExportSymbol {
     size: u64,
 }
 
-fn parse_export_identity(
-    name: &[u8],
-) -> Result<(Vec<u8>, Option<Vec<u8>>, bool), SharedObjectError> {
+#[derive(Debug, Clone)]
+struct ExportIdentity {
+    dynamic_name: Vec<u8>,
+    version: Option<Vec<u8>>,
+    is_default_version: bool,
+}
+
+fn parse_export_identity(name: &[u8]) -> Result<ExportIdentity, SharedObjectError> {
     let Some(first_at) = name.iter().position(|byte| *byte == b'@') else {
-        return Ok((name.to_vec(), None, true));
+        return Ok(ExportIdentity {
+            dynamic_name: name.to_vec(),
+            version: None,
+            is_default_version: true,
+        });
     };
     let base = &name[..first_at];
     let suffix = &name[first_at..];
@@ -812,7 +821,11 @@ fn parse_export_identity(
             name: name.to_vec(),
         });
     }
-    Ok((base.to_vec(), Some(version.to_vec()), is_default_version))
+    Ok(ExportIdentity {
+        dynamic_name: base.to_vec(),
+        version: Some(version.to_vec()),
+        is_default_version,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1133,13 +1146,12 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
             } else {
                 absolute_value
             };
-            let (dynamic_name, version, is_default_version) =
-                parse_export_identity(&definition.name)?;
+            let identity = parse_export_identity(&definition.name)?;
             Ok(ExportSymbol {
                 linker_name: definition.name.clone(),
-                dynamic_name,
-                version,
-                is_default_version,
+                dynamic_name: identity.dynamic_name,
+                version: identity.version,
+                is_default_version: identity.is_default_version,
                 info: definition.symbol.info,
                 section_index: if definition.symbol.section_index == SHN_ABS {
                     SHN_ABS
