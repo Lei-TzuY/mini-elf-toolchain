@@ -213,24 +213,24 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_external_weak_function_plt_call_remains_fail_closed() {
+fn shared_external_weak_nonfunction_plt_call_remains_fail_closed() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("weak-plt");
+    let dir = temp_dir("weak-nonfunction-plt");
     let object = assemble(
         &dir,
-        "weak-function-call",
+        "weak-object-call",
         r#".section .text
-.globl call_host_function
-.type call_host_function,@function
-.weak host_function
-.type host_function,@function
-call_host_function:
-    call host_function@PLT
+.globl call_host_object
+.type call_host_object,@function
+.weak host_object
+.type host_object,@object
+call_host_object:
+    call host_object@PLT
     ret
-.size call_host_function, .-call_host_function
+.size call_host_object, .-call_host_object
 "#,
     );
     let output = dir.join("must-not-exist.so");
@@ -247,7 +247,7 @@ call_host_function:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("strong global") || stderr.contains("binding"),
+        stderr.contains("PLT") || stderr.contains("function"),
         "{stderr}"
     );
     assert!(!output.exists());
