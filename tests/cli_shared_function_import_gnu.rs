@@ -96,8 +96,14 @@ imported_function_pointer:
         .unwrap();
     assert!(input_relocations.status.success());
     let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
-    assert!(input_relocations.contains("GOTPCREL"), "{input_relocations}");
-    assert!(input_relocations.contains("R_X86_64_64"), "{input_relocations}");
+    assert!(
+        input_relocations.contains("GOTPCREL"),
+        "{input_relocations}"
+    );
+    assert!(
+        input_relocations.contains("R_X86_64_64"),
+        "{input_relocations}"
+    );
     assert!(input_relocations.matches("host_function").count() >= 2);
 
     let shared = dir.join("libfunctionimport.so");
