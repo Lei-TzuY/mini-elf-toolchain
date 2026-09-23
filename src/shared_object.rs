@@ -80,6 +80,11 @@ pub enum SharedObjectError {
         name: Vec<u8>,
         binding: u8,
     },
+    ConflictingImportSymbolType {
+        name: Vec<u8>,
+        first_type: u8,
+        second_type: u8,
+    },
     ExternalImportUnsupportedType {
         object_index: usize,
         rela_section_index: u16,
@@ -208,7 +213,16 @@ impl fmt::Display for SharedObjectError {
                 binding,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references undefined symbol {symbol_index} ({:?}) with binding {binding}; bounded external data imports require a strong global symbol",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references undefined symbol {symbol_index} ({:?}) with unsupported binding {binding}; bounded non-call imports accept global/weak symbols while PLT imports require a strong global symbol",
+                String::from_utf8_lossy(name)
+            ),
+            Self::ConflictingImportSymbolType {
+                name,
+                first_type,
+                second_type,
+            } => write!(
+                f,
+                "shared object import {:?} is referenced with conflicting ELF symbol types {first_type} and {second_type}",
                 String::from_utf8_lossy(name)
             ),
             Self::ExternalImportUnsupportedType {
@@ -382,6 +396,7 @@ impl std::error::Error for SharedObjectError {
             Self::RelocationUnsupported { .. }
             | Self::PreemptibleRelativeTarget { .. }
             | Self::ExternalImportUnsupportedBinding { .. }
+            | Self::ConflictingImportSymbolType { .. }
             | Self::ExternalImportUnsupportedType { .. }
             | Self::ExternalImportTargetNotWritable { .. }
             | Self::ExternalImportRelocationOutOfBounds { .. }
@@ -422,6 +437,47 @@ struct ImportSymbol {
     name: Vec<u8>,
     info: u8,
     size: u64,
+}
+
+fn record_import_symbol(
+    imports: &mut BTreeMap<Vec<u8>, ImportSymbol>,
+    name: &[u8],
+    info: u8,
+    size: u64,
+) -> Result<(), SharedObjectError> {
+    let symbol_type = info & 0x0f;
+    let binding = info >> 4;
+
+    match imports.get_mut(name) {
+        Some(existing) => {
+            let existing_type = existing.info & 0x0f;
+            if existing_type != symbol_type {
+                return Err(SharedObjectError::ConflictingImportSymbolType {
+                    name: name.to_vec(),
+                    first_type: existing_type,
+                    second_type: symbol_type,
+                });
+            }
+
+            let existing_binding = existing.info >> 4;
+            if existing_binding == STB_WEAK && binding == STB_GLOBAL {
+                existing.info = info;
+            }
+            existing.size = existing.size.max(size);
+        }
+        None => {
+            imports.insert(
+                name.to_vec(),
+                ImportSymbol {
+                    name: name.to_vec(),
+                    info,
+                    size,
+                },
+            );
+        }
+    }
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -788,7 +844,12 @@ fn validate_inputs(
                     });
                 }
 
-                if binding != STB_GLOBAL {
+                let binding_supported = if is_plt_import {
+                    binding == STB_GLOBAL
+                } else {
+                    binding == STB_GLOBAL || binding == STB_WEAK
+                };
+                if !binding_supported {
                     return Err(SharedObjectError::ExternalImportUnsupportedBinding {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
@@ -836,13 +897,12 @@ fn validate_inputs(
                     });
                 }
 
-                import_symbols
-                    .entry(symbol.name.to_vec())
-                    .or_insert_with(|| ImportSymbol {
-                        name: symbol.name.to_vec(),
-                        info: symbol.symbol.info,
-                        size: symbol.symbol.size,
-                    });
+                record_import_symbol(
+                    &mut import_symbols,
+                    symbol.name,
+                    symbol.symbol.info,
+                    symbol.symbol.size,
+                )?;
 
                 if is_got_import {
                     got_symbols.insert(symbol.name.to_vec());
@@ -920,7 +980,7 @@ fn validate_inputs(
                         continue;
                     }
                     let supported_import = import_symbols.contains_key(symbol.name)
-                        && binding == STB_GLOBAL
+                        && (binding == STB_GLOBAL || binding == STB_WEAK)
                         && matches!(symbol_type, STT_OBJECT | STT_FUNC);
                     if !supported_import {
                         return Err(SharedObjectError::UndefinedNonlocal {
