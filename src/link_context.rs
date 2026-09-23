@@ -17,6 +17,7 @@ pub struct LinkSyntheticEntries {
     pub got_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_got_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_gd_entries: BTreeMap<Vec<u8>, u64>,
+    pub tls_desc_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_ld_entry: Option<u64>,
     pub unresolved_tls_got_symbols: BTreeSet<Vec<u8>>,
     pub unresolved_got_symbols: BTreeSet<Vec<u8>>,
@@ -32,6 +33,7 @@ pub struct LinkContext<'a> {
     got_entries: BTreeMap<Vec<u8>, u64>,
     tls_got_entries: BTreeMap<Vec<u8>, u64>,
     tls_gd_entries: BTreeMap<Vec<u8>, u64>,
+    tls_desc_entries: BTreeMap<Vec<u8>, u64>,
     tls_ld_entry: Option<u64>,
     unresolved_tls_got_symbols: BTreeSet<Vec<u8>>,
     unresolved_got_symbols: BTreeSet<Vec<u8>>,
@@ -196,6 +198,7 @@ pub fn build_link_context_with_got_plt_maps_and_unresolved<'a>(
         got_entries: synthetic.got_entries,
         tls_got_entries: synthetic.tls_got_entries,
         tls_gd_entries: synthetic.tls_gd_entries,
+        tls_desc_entries: synthetic.tls_desc_entries,
         tls_ld_entry: synthetic.tls_ld_entry,
         unresolved_tls_got_symbols: synthetic.unresolved_tls_got_symbols,
         unresolved_got_symbols: synthetic.unresolved_got_symbols,
@@ -224,6 +227,10 @@ impl LinkContext<'_> {
 
     pub fn tls_gd_entries(&self) -> &BTreeMap<Vec<u8>, u64> {
         &self.tls_gd_entries
+    }
+
+    pub fn tls_desc_entries(&self) -> &BTreeMap<Vec<u8>, u64> {
+        &self.tls_desc_entries
     }
 
     pub fn tls_ld_entry(&self) -> Option<u64> {
@@ -260,6 +267,7 @@ impl LinkContext<'_> {
                 got_entries: &self.got_entries,
                 tls_got_entries: &self.tls_got_entries,
                 tls_gd_entries: &self.tls_gd_entries,
+                tls_desc_entries: &self.tls_desc_entries,
                 tls_ld_entry: self.tls_ld_entry,
                 unresolved_tls_got_symbols: &self.unresolved_tls_got_symbols,
                 unresolved_got_symbols: &self.unresolved_got_symbols,
