@@ -89,6 +89,10 @@ pub enum SharedObjectError {
         offset: u64,
         target_size: u64,
     },
+    MissingImportRelocationTarget {
+        object_index: usize,
+        target_section_index: u16,
+    },
     MissingImportDynamicSymbol {
         name: Vec<u8>,
     },
@@ -195,6 +199,13 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} writes 8 bytes at offset {offset} beyond target section {target_section_index} size {target_size}"
             ),
+            Self::MissingImportRelocationTarget {
+                object_index,
+                target_section_index,
+            } => write!(
+                f,
+                "shared object external import target object {object_index} section {target_section_index} has no relocated output section"
+            ),
             Self::MissingImportDynamicSymbol { name } => write!(
                 f,
                 "shared object external import {:?} has no dynamic symbol index",
@@ -281,6 +292,7 @@ impl std::error::Error for SharedObjectError {
             | Self::ExternalImportUnsupportedType { .. }
             | Self::ExternalImportTargetNotWritable { .. }
             | Self::ExternalImportRelocationOutOfBounds { .. }
+            | Self::MissingImportRelocationTarget { .. }
             | Self::MissingImportDynamicSymbol { .. }
             | Self::TlsUnsupported { .. }
             | Self::UnsupportedBinding { .. }
@@ -470,7 +482,13 @@ pub fn link_shared_object(
     .map_err(SharedObjectError::Write)
 }
 
-fn validate_inputs(inputs: &[LinkerInputObject<'_>]) -> Result<(), SharedObjectError> {
+fn validate_inputs(
+    inputs: &[LinkerInputObject<'_>],
+    definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
+) -> Result<ImportPlan, SharedObjectError> {
+    let mut import_symbols = BTreeMap::<Vec<u8>, ImportSymbol>::new();
+    let mut import_sites = BTreeSet::<ImportRelocationSite>::new();
+
     for input in inputs {
         for (section_index, section) in input.object.sections.iter().enumerate() {
             if section.flags & SHF_TLS != 0 {
@@ -480,6 +498,7 @@ fn validate_inputs(inputs: &[LinkerInputObject<'_>]) -> Result<(), SharedObjectE
                 });
             }
         }
+
         for table in &input.object.rela_tables {
             if table
                 .relocations
@@ -492,6 +511,8 @@ fn validate_inputs(inputs: &[LinkerInputObject<'_>]) -> Result<(), SharedObjectE
                     relocation_count: table.relocations.len(),
                 });
             }
+
+            let target = &input.object.sections[usize::from(table.target_section_index)];
             let symbol_table = input
                 .object
                 .symbol_tables
@@ -508,10 +529,17 @@ fn validate_inputs(inputs: &[LinkerInputObject<'_>]) -> Result<(), SharedObjectE
                 object_index: input.object_index,
                 source,
             })?;
+
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 let symbol = &symbols[relocation.symbol_index as usize];
                 let binding = symbol.symbol.info >> 4;
-                if binding != STB_LOCAL {
+                if binding == STB_LOCAL {
+                    continue;
+                }
+
+                if symbol.symbol.section_index != SHN_UNDEF
+                    || definitions.contains_key(symbol.name)
+                {
                     return Err(SharedObjectError::PreemptibleRelativeTarget {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
@@ -521,6 +549,66 @@ fn validate_inputs(inputs: &[LinkerInputObject<'_>]) -> Result<(), SharedObjectE
                         binding,
                     });
                 }
+
+                if binding != STB_GLOBAL {
+                    return Err(SharedObjectError::ExternalImportUnsupportedBinding {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        symbol_index: relocation.symbol_index,
+                        name: symbol.name.to_vec(),
+                        binding,
+                    });
+                }
+                if symbol.symbol.other != 0 {
+                    return Err(SharedObjectError::NondefaultVisibility {
+                        object_index: input.object_index,
+                        symbol_index: symbol.symbol_index,
+                        name: symbol.name.to_vec(),
+                        other: symbol.symbol.other,
+                    });
+                }
+
+                let symbol_type = symbol.symbol.info & 0x0f;
+                if symbol_type != STT_OBJECT {
+                    return Err(SharedObjectError::ExternalImportUnsupportedType {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        symbol_index: relocation.symbol_index,
+                        name: symbol.name.to_vec(),
+                        symbol_type,
+                    });
+                }
+                if symbol.name.is_empty() {
+                    return Err(SharedObjectError::UndefinedNonlocal {
+                        object_index: input.object_index,
+                        symbol_index: symbol.symbol_index,
+                        name: Vec::new(),
+                    });
+                }
+                if target.flags & SHF_ALLOC == 0 || target.flags & SHF_WRITE == 0 {
+                    return Err(SharedObjectError::ExternalImportTargetNotWritable {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        target_section_index: table.target_section_index,
+                        flags: target.flags,
+                    });
+                }
+
+                import_symbols
+                    .entry(symbol.name.to_vec())
+                    .or_insert_with(|| ImportSymbol {
+                        name: symbol.name.to_vec(),
+                        info: symbol.symbol.info,
+                        size: symbol.symbol.size,
+                    });
+                import_sites.insert(ImportRelocationSite {
+                    object_index: input.object_index,
+                    rela_section_index: table.section_index,
+                    relocation_index,
+                });
             }
         }
 
@@ -556,16 +644,178 @@ fn validate_inputs(inputs: &[LinkerInputObject<'_>]) -> Result<(), SharedObjectE
                     });
                 }
                 if symbol.symbol.section_index == SHN_UNDEF && !symbol.name.is_empty() {
-                    return Err(SharedObjectError::UndefinedNonlocal {
-                        object_index: input.object_index,
-                        symbol_index: symbol.symbol_index,
-                        name: symbol.name.to_vec(),
-                    });
+                    let symbol_type = symbol.symbol.info & 0x0f;
+                    let supported_import = import_symbols.contains_key(symbol.name)
+                        && binding == STB_GLOBAL
+                        && symbol_type == STT_OBJECT;
+                    if !supported_import {
+                        return Err(SharedObjectError::UndefinedNonlocal {
+                            object_index: input.object_index,
+                            symbol_index: symbol.symbol_index,
+                            name: symbol.name.to_vec(),
+                        });
+                    }
                 }
             }
         }
     }
-    Ok(())
+
+    Ok(ImportPlan {
+        symbols: import_symbols,
+        sites: import_sites,
+    })
+}
+
+fn mask_import_relocations<'a>(
+    inputs: &[LinkerInputObject<'a>],
+    sites: &BTreeSet<ImportRelocationSite>,
+) -> Vec<LinkerInputObject<'a>> {
+    inputs
+        .iter()
+        .map(|input| {
+            let mut object = input.object.clone();
+            for table in &mut object.rela_tables {
+                for (relocation_index, relocation) in table.relocations.iter_mut().enumerate() {
+                    if sites.contains(&ImportRelocationSite {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                    }) {
+                        relocation.relocation_type = R_X86_64_NONE;
+                    }
+                }
+            }
+            LinkerInputObject {
+                object_index: input.object_index,
+                file: input.file,
+                object,
+            }
+        })
+        .collect()
+}
+
+fn import_dynamic_symbol_indices(
+    export_count: usize,
+    imports: &BTreeMap<Vec<u8>, ImportSymbol>,
+) -> Result<BTreeMap<Vec<u8>, u32>, SharedObjectError> {
+    let first_import_index = export_count
+        .checked_add(1)
+        .ok_or(SharedObjectError::MetadataTooLarge)?;
+    imports
+        .keys()
+        .enumerate()
+        .map(|(offset, name)| {
+            let index = first_import_index
+                .checked_add(offset)
+                .ok_or(SharedObjectError::MetadataTooLarge)?;
+            let index = u32::try_from(index).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+            Ok((name.clone(), index))
+        })
+        .collect()
+}
+
+fn build_import_relocation_table(
+    inputs: &[LinkerInputObject<'_>],
+    sections: &[RelocatedSectionImage],
+    sites: &BTreeSet<ImportRelocationSite>,
+    dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+) -> Result<Vec<u8>, SharedObjectError> {
+    let mut bytes = Vec::new();
+
+    for input in inputs {
+        for table in &input.object.rela_tables {
+            if !table
+                .relocations
+                .iter()
+                .enumerate()
+                .any(|(relocation_index, _)| {
+                    sites.contains(&ImportRelocationSite {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                    })
+                })
+            {
+                continue;
+            }
+
+            let target = sections
+                .iter()
+                .find(|section| {
+                    section.object_index == input.object_index
+                        && section.section_index == table.target_section_index
+                })
+                .ok_or(SharedObjectError::MissingImportRelocationTarget {
+                    object_index: input.object_index,
+                    target_section_index: table.target_section_index,
+                })?;
+            let symbol_table = input
+                .object
+                .symbol_tables
+                .iter()
+                .find(|candidate| candidate.section_index == table.symbol_table_index)
+                .expect("validated RELA table references validated symbol table");
+            let symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                symbol_table,
+                input.object_index,
+            )
+            .map_err(|source| SharedObjectError::ObjectSymbols {
+                object_index: input.object_index,
+                source,
+            })?;
+
+            for (relocation_index, relocation) in table.relocations.iter().enumerate() {
+                let site = ImportRelocationSite {
+                    object_index: input.object_index,
+                    rela_section_index: table.section_index,
+                    relocation_index,
+                };
+                if !sites.contains(&site) {
+                    continue;
+                }
+
+                let end = relocation.offset.checked_add(8).ok_or(
+                    SharedObjectError::ExternalImportRelocationOutOfBounds {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        target_section_index: table.target_section_index,
+                        offset: relocation.offset,
+                        target_size: target.size,
+                    },
+                )?;
+                if end > target.size {
+                    return Err(SharedObjectError::ExternalImportRelocationOutOfBounds {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        target_section_index: table.target_section_index,
+                        offset: relocation.offset,
+                        target_size: target.size,
+                    });
+                }
+
+                let symbol = &symbols[relocation.symbol_index as usize];
+                let dynamic_index = dynamic_indices.get(symbol.name).copied().ok_or_else(|| {
+                    SharedObjectError::MissingImportDynamicSymbol {
+                        name: symbol.name.to_vec(),
+                    }
+                })?;
+                let offset = target
+                    .address
+                    .checked_add(relocation.offset)
+                    .ok_or(SharedObjectError::AddressOverflow)?;
+                let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_64);
+                bytes.extend_from_slice(&offset.to_le_bytes());
+                bytes.extend_from_slice(&info.to_le_bytes());
+                bytes.extend_from_slice(&relocation.addend.to_le_bytes());
+            }
+        }
+    }
+
+    Ok(bytes)
 }
 
 fn build_dynamic_metadata(
