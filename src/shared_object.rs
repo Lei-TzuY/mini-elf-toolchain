@@ -530,7 +530,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a default-visible strong STT_TLS symbol that is either defined in the output DSO or recorded as an external import",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a default-visible STT_TLS symbol that is either a strong supported definition/import or an unresolved weak import",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsIeTargetNotExecutable {
