@@ -371,22 +371,213 @@ dependency_pointer:
 }
 
 #[test]
-fn nondefault_defined_version_alias_remains_fail_closed() {
+fn producer_emits_default_and_nondefault_aliases_for_one_dynamic_name() {
+    if !have_tools() {
+        return;
+    }
+
+    let dir = temp_dir("dual-alias");
+    let provider_object = assemble(
+        &dir,
+        "dual-provider",
+        r#".section .data
+.globl old_impl
+.type old_impl,@object
+old_impl:
+    .quad 0x1111222233334444
+.size old_impl, .-old_impl
+.symver old_impl,provider_value@VERS_1
+
+.globl new_impl
+.type new_impl,@object
+new_impl:
+    .quad 0xaaaabbbbccccdddd
+.size new_impl, .-new_impl
+.symver new_impl,provider_value@@VERS_2
+"#,
+    );
+    let provider = dir.join("libprovider.so");
+
+    let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&provider)
+        .args(["--shared", "--soname", "libprovider.so"])
+        .arg(&provider_object)
+        .output()
+        .unwrap();
+    assert!(
+        link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&link.stderr)
+    );
+
+    let symbols = Command::new("readelf")
+        .arg("-sDW")
+        .arg(&provider)
+        .output()
+        .unwrap();
+    assert!(symbols.status.success());
+    let symbols = String::from_utf8_lossy(&symbols.stdout);
+    assert!(symbols.contains("provider_value@VERS_1"), "{symbols}");
+    assert!(symbols.contains("provider_value@@VERS_2"), "{symbols}");
+
+    let versions = Command::new(env!("CARGO_BIN_EXE_mini-elf-vercheck"))
+        .arg(&provider)
+        .output()
+        .unwrap();
+    assert!(
+        versions.status.success(),
+        "{}",
+        String::from_utf8_lossy(&versions.stderr)
+    );
+    let versions = String::from_utf8_lossy(&versions.stdout);
+    assert!(versions.contains("version=VERS_1"), "{versions}");
+    assert!(versions.contains("version=VERS_2"), "{versions}");
+
+    let consumer_object = assemble(
+        &dir,
+        "dual-consumer",
+        r#".section .data
+.extern provider_v1
+.type provider_v1,@object
+.symver provider_v1,provider_value@VERS_1
+.globl pointer_v1
+.type pointer_v1,@object
+pointer_v1:
+    .quad provider_v1
+.size pointer_v1, .-pointer_v1
+
+.extern provider_v2
+.type provider_v2,@object
+.symver provider_v2,provider_value@VERS_2
+.globl pointer_v2
+.type pointer_v2,@object
+pointer_v2:
+    .quad provider_v2
+.size pointer_v2, .-pointer_v2
+"#,
+    );
+    let consumer = dir.join("libconsumer.so");
+    let consumer_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&consumer)
+        .args(["--shared", "--soname", "libconsumer.so"])
+        .arg("--needed-from")
+        .arg(&provider)
+        .args(["--runpath", "$ORIGIN"])
+        .arg(&consumer_object)
+        .output()
+        .unwrap();
+    assert!(
+        consumer_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&consumer_link.stderr)
+    );
+
+    let requirements = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym-needed"))
+        .arg(&consumer)
+        .output()
+        .unwrap();
+    assert!(
+        requirements.status.success(),
+        "{}",
+        String::from_utf8_lossy(&requirements.stderr)
+    );
+    let requirements = String::from_utf8_lossy(&requirements.stdout);
+    assert!(
+        requirements.contains("requirement=libprovider.so:VERS_1"),
+        "{requirements}"
+    );
+    assert!(
+        requirements.contains("requirement=libprovider.so:VERS_2"),
+        "{requirements}"
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let source = dir.join("dual-runner.c");
+        let runner = dir.join("dual-runner");
+        fs::write(
+            &source,
+            r#"#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <stdint.h>
+
+int main(int argc, char **argv) {
+    if (argc != 3) return 90;
+
+    void *provider = dlopen(argv[1], RTLD_NOW | RTLD_GLOBAL);
+    if (!provider) return 91;
+
+    uint64_t *default_value = (uint64_t *)dlsym(provider, "provider_value");
+    uint64_t *old_value = (uint64_t *)dlvsym(provider, "provider_value", "VERS_1");
+    uint64_t *new_value = (uint64_t *)dlvsym(provider, "provider_value", "VERS_2");
+    if (!default_value || !old_value || !new_value) return 92;
+    if (*default_value != UINT64_C(0xaaaabbbbccccdddd)) return 93;
+    if (*old_value != UINT64_C(0x1111222233334444)) return 94;
+    if (*new_value != UINT64_C(0xaaaabbbbccccdddd)) return 95;
+
+    void *consumer = dlopen(argv[2], RTLD_NOW | RTLD_LOCAL);
+    if (!consumer) return 96;
+    uint64_t **pointer_v1 = (uint64_t **)dlsym(consumer, "pointer_v1");
+    uint64_t **pointer_v2 = (uint64_t **)dlsym(consumer, "pointer_v2");
+    if (!pointer_v1 || !pointer_v2 || !*pointer_v1 || !*pointer_v2) return 97;
+    if (**pointer_v1 != UINT64_C(0x1111222233334444)) return 98;
+    if (**pointer_v2 != UINT64_C(0xaaaabbbbccccdddd)) return 99;
+
+    if (dlclose(consumer) != 0) return 100;
+    return dlclose(provider) == 0 ? 0 : 101;
+}
+"#,
+        )
+        .unwrap();
+        let compile = Command::new("cc")
+            .args(["-o"])
+            .arg(&runner)
+            .arg(&source)
+            .arg("-ldl")
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+        let status = Command::new(&runner)
+            .arg(&provider)
+            .arg(&consumer)
+            .status()
+            .unwrap();
+        assert!(status.success(), "dual-version runtime returned {status}");
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn multiple_default_aliases_for_one_dynamic_name_fail_before_output() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("nondefault");
+    let dir = temp_dir("duplicate-default");
     let object = assemble(
         &dir,
-        "provider-nondefault",
+        "duplicate-default",
         r#".section .data
-.globl provider_impl
-.type provider_impl,@object
-provider_impl:
-    .quad 7
-.size provider_impl, .-provider_impl
-.symver provider_impl,provider_value@VERS_1
+.globl first_impl
+.type first_impl,@object
+first_impl:
+    .quad 1
+.size first_impl, .-first_impl
+.symver first_impl,provider_value@@VERS_1
+
+.globl second_impl
+.type second_impl,@object
+second_impl:
+    .quad 2
+.size second_impl, .-second_impl
+.symver second_impl,provider_value@@VERS_2
 "#,
     );
     let output = dir.join("must-not-exist.so");
@@ -403,7 +594,7 @@ provider_impl:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("non-default") || stderr.contains("@@"),
+        stderr.contains("default") || stderr.contains("dynamic name"),
         "{stderr}"
     );
     assert!(!output.exists());
