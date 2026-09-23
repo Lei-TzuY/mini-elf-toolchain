@@ -58,7 +58,7 @@ fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
 }
 
 #[test]
-fn shared_object_direct_external_call_uses_bound_now_jump_slot() {
+fn shared_object_direct_external_call_uses_lazy_plt_jump_slot() {
     if !have_tools() {
         return;
     }
@@ -125,7 +125,11 @@ call_host_direct:
         dynamic.contains("PLTREL") && dynamic.contains("RELA"),
         "{dynamic}"
     );
-    assert!(dynamic.contains("BIND_NOW"), "{dynamic}");
+    assert!(dynamic.contains("PLTGOT"), "{dynamic}");
+    assert!(
+        !dynamic.contains("BIND_NOW"),
+        "lazy PLT must not force eager binding: {dynamic}"
+    );
 
     let symbols = Command::new("readelf")
         .arg("-sDW")
@@ -164,8 +168,11 @@ call_host_direct:
             r#"#include <dlfcn.h>
 #include <stdint.h>
 
+static uint64_t host_calls;
+
 uint64_t host_function(uint64_t value) {
-    return value + 1;
+    host_calls += 1;
+    return value + host_calls;
 }
 
 int main(int argc, char **argv) {
@@ -176,7 +183,8 @@ int main(int argc, char **argv) {
         (uint64_t (*)(void))dlsym(handle, "call_host_direct");
     if (!call_host_direct) return 72;
     if (call_host_direct() != UINT64_C(42)) return 73;
-    return dlclose(handle) == 0 ? 0 : 74;
+    if (call_host_direct() != UINT64_C(43)) return 74;
+    return dlclose(handle) == 0 ? 0 : 75;
 }
 "#,
         )
