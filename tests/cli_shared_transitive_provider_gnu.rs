@@ -86,13 +86,7 @@ deep_function:
     );
     let deep = dir.join("libdeep.so");
     let deep_link = Command::new("ld")
-        .args([
-            "-shared",
-            "--hash-style=gnu",
-            "-soname",
-            "libdeep.so",
-            "-o",
-        ])
+        .args(["-shared", "--hash-style=gnu", "-soname", "libdeep.so", "-o"])
         .arg(&deep)
         .arg(&deep_object)
         .output()
@@ -145,8 +139,7 @@ middle_anchor:
         .unwrap();
     assert!(middle_dynamic.status.success());
     assert!(
-        String::from_utf8_lossy(&middle_dynamic.stdout)
-            .contains("Shared library: [libdeep.so]"),
+        String::from_utf8_lossy(&middle_dynamic.stdout).contains("Shared library: [libdeep.so]"),
         "{}",
         String::from_utf8_lossy(&middle_dynamic.stdout)
     );
@@ -347,8 +340,14 @@ fn transitive_provider_search_uses_shared_library_paths() {
         .unwrap();
     assert!(dynamic.status.success());
     let dynamic = String::from_utf8_lossy(&dynamic.stdout);
-    assert!(dynamic.contains("Shared library: [libmiddle.so]"), "{dynamic}");
-    assert!(!dynamic.contains("Shared library: [libdeep.so]"), "{dynamic}");
+    assert!(
+        dynamic.contains("Shared library: [libmiddle.so]"),
+        "{dynamic}"
+    );
+    assert!(
+        !dynamic.contains("Shared library: [libdeep.so]"),
+        "{dynamic}"
+    );
 
     #[cfg(target_os = "linux")]
     {
