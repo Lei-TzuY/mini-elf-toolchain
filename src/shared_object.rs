@@ -1219,19 +1219,20 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
                     name: definition.name.clone(),
                 });
             }
-            let version = script
-                .resolve_version(&definition.name)
-                .map_err(|source| match source {
-                    VersionScriptMatchError::MultiplePrefixVersions {
-                        symbol,
-                        first_version,
-                        second_version,
-                    } => SharedObjectError::VersionScriptPatternConflict {
-                        name: symbol,
-                        first_version,
-                        second_version,
-                    },
-                })?;
+            let version =
+                script
+                    .resolve_version(&definition.name)
+                    .map_err(|source| match source {
+                        VersionScriptMatchError::MultiplePrefixVersions {
+                            symbol,
+                            first_version,
+                            second_version,
+                        } => SharedObjectError::VersionScriptPatternConflict {
+                            name: symbol,
+                            first_version,
+                            second_version,
+                        },
+                    })?;
             if let Some(version) = version {
                 if script.version_for(&definition.name).is_some() {
                     matched_script_symbols.insert(definition.name.clone());
