@@ -269,3 +269,45 @@ read_external_tls:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn shared_tlsgd_notype_plt_exception_is_specific_to_tls_get_addr() {
+    if !command_reports("as", "GNU assembler") {
+        return;
+    }
+
+    let dir = temp_dir("notype-plt");
+    let object = assemble(
+        &dir,
+        "notype-plt",
+        r#".section .text
+.globl call_unknown
+.type call_unknown,@function
+.extern unknown_runtime_helper
+call_unknown:
+    call unknown_runtime_helper@PLT
+    ret
+.size call_unknown, .-call_unknown
+"#,
+    );
+    let output = dir.join("must-not-exist.so");
+
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--shared")
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(
+        stderr.contains("PLT") && stderr.contains("symbol type 0"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
