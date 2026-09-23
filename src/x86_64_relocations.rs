@@ -18,6 +18,8 @@ pub const R_X86_64_PC8: u32 = 15;
 pub const R_X86_64_DTPMOD64: u32 = 16;
 pub const R_X86_64_DTPOFF64: u32 = 17;
 pub const R_X86_64_TLSGD: u32 = 19;
+pub const R_X86_64_TLSLD: u32 = 20;
+pub const R_X86_64_DTPOFF32: u32 = 21;
 pub const R_X86_64_GOTTPOFF: u32 = 22;
 pub const R_X86_64_TPOFF32: u32 = 23;
 pub const R_X86_64_PC64: u32 = 24;
@@ -63,6 +65,10 @@ pub fn is_static_tls_gotpcrel_type(relocation_type: u32) -> bool {
 
 pub fn is_tls_gd_relocation_type(relocation_type: u32) -> bool {
     relocation_type == R_X86_64_TLSGD
+}
+
+pub fn is_tls_ld_relocation_type(relocation_type: u32) -> bool {
+    relocation_type == R_X86_64_TLSLD
 }
 
 pub fn is_static_got_offset_type(relocation_type: u32) -> bool {
@@ -240,6 +246,7 @@ pub fn evaluate_relocation(
         | R_X86_64_GOTPCREL
         | R_X86_64_GOTTPOFF
         | R_X86_64_TLSGD
+        | R_X86_64_TLSLD
         | R_X86_64_GOTPCRELX
         | R_X86_64_REX_GOTPCRELX => {
             let value = symbol_value + addend - place;
@@ -253,7 +260,7 @@ pub fn evaluate_relocation(
                 .map_err(|_| RelocationEvaluationError::Unsigned32OutOfRange { value })?;
             Ok(RelocationValue::U32(value))
         }
-        R_X86_64_32S => {
+        R_X86_64_32S | R_X86_64_DTPOFF32 => {
             let value = symbol_value + addend;
             let value = i32::try_from(value)
                 .map_err(|_| RelocationEvaluationError::Signed32OutOfRange { value })?;
