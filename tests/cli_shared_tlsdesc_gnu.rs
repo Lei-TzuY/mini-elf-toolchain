@@ -151,9 +151,7 @@ write_tlsdesc_value:
     let symbols = String::from_utf8_lossy(&symbols.stdout);
     assert!(
         symbols.lines().any(|line| {
-            line.contains(" TLS ")
-                && !line.contains(" UND ")
-                && line.ends_with(" tlsdesc_value")
+            line.contains(" TLS ") && !line.contains(" UND ") && line.ends_with(" tlsdesc_value")
         }),
         "{symbols}"
     );
