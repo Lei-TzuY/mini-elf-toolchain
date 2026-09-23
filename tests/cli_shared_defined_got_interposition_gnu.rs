@@ -267,52 +267,208 @@ int main(int argc, char **argv) {{
 }
 
 #[test]
-fn defined_function_got_interposition_remains_fail_closed() {
-    if !command_reports("as", "GNU assembler") {
+fn defined_default_visible_function_got_matches_gnu_and_is_runtime_preemptible() {
+    if !have_tools() {
         return;
     }
 
-    let dir = temp_dir("function-boundary");
+    const FUNCTION: &str = "mini_elf_interposable_function_326";
+    let dir = temp_dir("function-runtime");
     let object = assemble(
         &dir,
         "function-provider",
-        r#".section .note.GNU-stack,"",@progbits
+        &format!(
+            r#".section .note.GNU-stack,"",@progbits
 .text
-.globl interposable_function
-.type interposable_function,@function
-interposable_function:
+.globl {FUNCTION}
+.type {FUNCTION},@function
+{FUNCTION}:
     mov $7, %eax
     ret
-.size interposable_function, .-interposable_function
+.size {FUNCTION}, .-{FUNCTION}
 
-.globl address_of_interposable_function
-.type address_of_interposable_function,@function
-address_of_interposable_function:
-    movq interposable_function@GOTPCREL(%rip), %rax
+.globl call_interposable_function
+.type call_interposable_function,@function
+call_interposable_function:
+    movq {FUNCTION}@GOTPCREL(%rip), %rax
+    call *%rax
     ret
-.size address_of_interposable_function, .-address_of_interposable_function
-"#,
+.size call_interposable_function, .-call_interposable_function
+"#
+        ),
     );
-    let output = dir.join("must-not-exist.so");
 
-    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
-        .args(["link", "-o"])
-        .arg(&output)
-        .arg("--shared")
+    let input_relocations = Command::new("readelf")
+        .arg("-rW")
         .arg(&object)
         .output()
         .unwrap();
-
-    assert!(!mini.status.success());
-    assert!(mini.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(input_relocations.status.success());
+    let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
     assert!(
-        stderr.contains("default-visible nonlocal")
-            || stderr.contains("interposition")
-            || stderr.contains("preemptible"),
-        "{stderr}"
+        input_relocations.contains("R_X86_64_GOTPCREL")
+            && input_relocations.contains(FUNCTION),
+        "{input_relocations}"
     );
-    assert!(!output.exists());
+
+    let mini = dir.join("libmini-function.so");
+    let mini_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&mini)
+        .args(["--shared", "--soname", "libmini-function.so"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        mini_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini_link.stderr)
+    );
+
+    let gnu = dir.join("libgnu-function.so");
+    let gnu_link = Command::new("ld")
+        .args([
+            "-shared",
+            "--hash-style=sysv",
+            "--soname=libgnu-function.so",
+            "-o",
+        ])
+        .arg(&gnu)
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_link.stderr)
+    );
+
+    for shared in [&mini, &gnu] {
+        let symbols = Command::new("readelf")
+            .arg("-sDW")
+            .arg(shared)
+            .output()
+            .unwrap();
+        assert!(symbols.status.success());
+        let symbols = String::from_utf8_lossy(&symbols.stdout);
+        assert!(
+            symbols.lines().any(|line| {
+                line.contains("GLOBAL")
+                    && line.contains(" FUNC ")
+                    && !line.contains(" UND ")
+                    && line.ends_with(FUNCTION)
+            }),
+            "{} dynamic symbols:\n{symbols}",
+            shared.display()
+        );
+
+        let relocations = Command::new("readelf")
+            .args(["-rW", "--use-dynamic"])
+            .arg(shared)
+            .output()
+            .unwrap();
+        assert!(relocations.status.success());
+        let relocations = String::from_utf8_lossy(&relocations.stdout);
+        assert!(
+            relocations.lines().any(|line| {
+                line.contains("R_X86_64_GLOB_DAT") && line.contains(FUNCTION)
+            }),
+            "{} dynamic relocations:\n{relocations}",
+            shared.display()
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let own_source = dir.join("function-own.c");
+        let own_runner = dir.join("function-own");
+        fs::write(
+            &own_source,
+            r#"#include <dlfcn.h>
+
+typedef int (*call_fn)(void);
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 231;
+    void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return 232;
+    call_fn call_value = (call_fn)dlsym(handle, "call_interposable_function");
+    if (!call_value) return 233;
+    if (call_value() != 7) return 234;
+    return dlclose(handle) == 0 ? 0 : 235;
+}
+"#,
+        )
+        .unwrap();
+        let own_compile = Command::new("cc")
+            .args(["-o"])
+            .arg(&own_runner)
+            .arg(&own_source)
+            .arg("-ldl")
+            .output()
+            .unwrap();
+        assert!(
+            own_compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&own_compile.stderr)
+        );
+
+        let bound_source = dir.join("function-bound.c");
+        let bound_runner = dir.join("function-bound");
+        fs::write(
+            &bound_source,
+            format!(
+                r#"#include <dlfcn.h>
+
+__attribute__((noinline, visibility("default")))
+int {FUNCTION}(void) {{
+    return 42;
+}}
+
+typedef int (*call_fn)(void);
+
+int main(int argc, char **argv) {{
+    if (argc != 2) return 236;
+    void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return 237;
+    call_fn call_value = (call_fn)dlsym(handle, "call_interposable_function");
+    if (!call_value) return 238;
+    if (call_value() != 42) return 239;
+    return dlclose(handle) == 0 ? 0 : 240;
+}}
+"#
+            ),
+        )
+        .unwrap();
+        let bound_compile = Command::new("cc")
+            .args(["-rdynamic", "-o"])
+            .arg(&bound_runner)
+            .arg(&bound_source)
+            .arg("-ldl")
+            .output()
+            .unwrap();
+        assert!(
+            bound_compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&bound_compile.stderr)
+        );
+
+        for shared in [&mini, &gnu] {
+            let own = Command::new(&own_runner).arg(shared).status().unwrap();
+            assert!(
+                own.success(),
+                "defined function GOT self-binding runtime returned {own} for {}",
+                shared.display()
+            );
+
+            let bound = Command::new(&bound_runner).arg(shared).status().unwrap();
+            assert!(
+                bound.success(),
+                "defined function GOT preemption runtime returned {bound} for {}",
+                shared.display()
+            );
+        }
+    }
 
     let _ = fs::remove_dir_all(dir);
 }
