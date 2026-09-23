@@ -266,7 +266,6 @@ int main(int argc, char **argv) {{
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 fn defined_function_got_interposition_remains_fail_closed() {
     if !command_reports("as", "GNU assembler") {
