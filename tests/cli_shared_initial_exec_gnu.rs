@@ -226,7 +226,10 @@ int main(int argc, char **argv) {
         );
 
         let status = Command::new(&runner).arg(&shared).status().unwrap();
-        assert!(status.success(), "initial-exec TLS runner returned {status}");
+        assert!(
+            status.success(),
+            "initial-exec TLS runner returned {status}"
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
