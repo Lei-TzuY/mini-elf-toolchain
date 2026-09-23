@@ -6,13 +6,17 @@ use crate::executable_writer::{
 };
 use crate::layout::LaidOutSection;
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
-use crate::linker_input::LinkerInputObject;
+use crate::linker_input::{LinkerInputError, LinkerInputObject};
 use crate::load_segments::{
     build_load_segments, LoadSegmentBuildError, LoadableSectionInput, SHF_ALLOC, SHF_EXECINSTR,
     SHF_WRITE,
 };
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
 use crate::permission_layout::SHF_TLS;
+use crate::tls::{
+    compute_static_tls_layout, inject_static_tls_program_header, StaticTlsLayout,
+    StaticTlsLayoutError, StaticTlsProgramHeaderError,
+};
 use crate::pie_runtime::{build_relative_relocation_table, PieRuntimeError};
 use crate::program_headers::{
     map_runtime_program_headers_with_dynamic, RuntimeDynamicProgramHeader,
@@ -37,6 +41,7 @@ const R_X86_64_NONE: u32 = 0;
 const STT_NOTYPE: u8 = 0;
 const STT_OBJECT: u8 = 1;
 const STT_FUNC: u8 = 2;
+const STT_TLS: u8 = 6;
 const GLOBAL_OFFSET_TABLE_SYMBOL: &[u8] = b"_GLOBAL_OFFSET_TABLE_";
 
 const DT_NULL: i64 = 0;
@@ -136,10 +141,25 @@ pub enum SharedObjectError {
         target_section_index: u16,
         flags: u64,
     },
-    TlsUnsupported {
+    TlsRelocationUnsupported {
         object_index: usize,
-        section_index: u16,
+        rela_section_index: u16,
+        relocation_index: usize,
+        symbol_index: u32,
+        name: Vec<u8>,
     },
+    TlsImportUnsupported {
+        object_index: usize,
+        symbol_index: usize,
+        name: Vec<u8>,
+    },
+    TlsSymbolOutsideImage {
+        name: Vec<u8>,
+        address: u64,
+    },
+    TlsInput(LinkerInputError),
+    TlsLayout(StaticTlsLayoutError),
+    TlsProgramHeader(StaticTlsProgramHeaderError),
     EmptyNeededName {
         dependency_index: usize,
     },
@@ -302,13 +322,36 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} targets section {target_section_index} with flags {flags:#x}; bounded PLT32 imports require an allocated executable call site"
             ),
-            Self::TlsUnsupported {
+            Self::TlsRelocationUnsupported {
                 object_index,
-                section_index,
+                rela_section_index,
+                relocation_index,
+                symbol_index,
+                name,
             } => write!(
                 f,
-                "shared object first slice rejects TLS section {section_index} in object {object_index}; shared-object TLS is not implemented"
+                "shared object TLS export slice rejects TLS relocation use in object {object_index} RELA section {rela_section_index} relocation {relocation_index} symbol {symbol_index} ({:?}); dynamic TLS relocation/codegen is not implemented",
+                String::from_utf8_lossy(name)
             ),
+            Self::TlsImportUnsupported {
+                object_index,
+                symbol_index,
+                name,
+            } => write!(
+                f,
+                "shared object symbol {symbol_index} in object {object_index} ({:?}) is an undefined TLS import; this slice supports defined TLS exports only",
+                String::from_utf8_lossy(name)
+            ),
+            Self::TlsSymbolOutsideImage { name, address } => write!(
+                f,
+                "shared object TLS export {:?} resolves to {address:#x}, outside the computed PT_TLS image",
+                String::from_utf8_lossy(name)
+            ),
+            Self::TlsInput(source) => write!(f, "cannot read shared TLS input sections: {source}"),
+            Self::TlsLayout(source) => write!(f, "cannot compute shared TLS layout: {source}"),
+            Self::TlsProgramHeader(source) => {
+                write!(f, "cannot emit shared PT_TLS program header: {source}")
+            },
             Self::EmptyNeededName { dependency_index } => write!(
                 f,
                 "shared object DT_NEEDED dependency {dependency_index} has an empty name"
@@ -393,6 +436,9 @@ impl std::error::Error for SharedObjectError {
             Self::SymbolAddress(source) => Some(source),
             Self::LoadSegments(source) => Some(source),
             Self::Write(source) => Some(source),
+            Self::TlsInput(source) => Some(source),
+            Self::TlsLayout(source) => Some(source),
+            Self::TlsProgramHeader(source) => Some(source),
             Self::RelocationUnsupported { .. }
             | Self::PreemptibleRelativeTarget { .. }
             | Self::ExternalImportUnsupportedBinding { .. }
@@ -406,7 +452,9 @@ impl std::error::Error for SharedObjectError {
             | Self::MissingImportPltGotEntry { .. }
             | Self::ExternalPltUnsupportedType { .. }
             | Self::ExternalPltTargetNotExecutable { .. }
-            | Self::TlsUnsupported { .. }
+            | Self::TlsRelocationUnsupported { .. }
+            | Self::TlsImportUnsupported { .. }
+            | Self::TlsSymbolOutsideImage { .. }
             | Self::EmptyNeededName { .. }
             | Self::NeededNameContainsNul { .. }
             | Self::EmptySoname
