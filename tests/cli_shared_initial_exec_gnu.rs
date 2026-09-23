@@ -126,6 +126,18 @@ bump_tls_ie:
     assert!(headers.status.success());
     assert!(String::from_utf8_lossy(&headers.stdout).contains("TLS"));
 
+    let dynamic = Command::new("readelf")
+        .args(["-dW"])
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(dynamic.status.success());
+    let dynamic = String::from_utf8_lossy(&dynamic.stdout);
+    assert!(
+        dynamic.contains("FLAGS") && dynamic.contains("STATIC_TLS"),
+        "initial-exec DSO must advertise DF_STATIC_TLS: {dynamic}"
+    );
+
     let relocations = Command::new("readelf")
         .args(["-rW", "--use-dynamic"])
         .arg(&shared)
