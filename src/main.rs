@@ -25,6 +25,7 @@ use mini_elf_toolchain::static_link::{
 use std::env;
 use std::ffi::OsString;
 use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 const DEFAULT_PAGE_ALIGNMENT: u64 = 0x1000;
@@ -251,9 +252,11 @@ where
             ));
         }
 
+        let mut provider_search_paths = Vec::new();
         let remaining = if shared_object {
             let resolution =
                 resolve_shared_library_arguments(&remaining).map_err(library_search_error)?;
+            provider_search_paths = resolution.search_paths;
             needed.specs.extend(
                 resolution
                     .providers
@@ -275,6 +278,7 @@ where
             shared_object,
             soname: soname.soname.as_deref(),
             needed: &needed.specs,
+            provider_search_paths: &provider_search_paths,
             forced_undefined: &forced.symbols,
         };
         return link_files(&output, &options, &remaining);
@@ -696,6 +700,7 @@ struct LinkFilesOptions<'a> {
     shared_object: bool,
     soname: Option<&'a [u8]>,
     needed: &'a [NeededSpec],
+    provider_search_paths: &'a [PathBuf],
     forced_undefined: &'a [Vec<u8>],
 }
 
@@ -776,7 +781,8 @@ fn link_files(
     if options.shared_object {
         let imports = shared_import_requirements(&prepared.objects)
             .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
-        let needed = resolve_needed_dependencies(options.needed, &imports)?;
+        let needed =
+            resolve_needed_dependencies(options.needed, &imports, options.provider_search_paths)?;
         let image = link_shared_object_with_needed_and_soname(
             &prepared.objects,
             DEFAULT_PAGE_ALIGNMENT,
