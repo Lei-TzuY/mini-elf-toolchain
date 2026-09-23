@@ -58,13 +58,7 @@ fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
     object
 }
 
-fn versioned_provider(
-    dir: &Path,
-    stem: &str,
-    source: &str,
-    script: &str,
-    soname: &str,
-) -> PathBuf {
+fn versioned_provider(dir: &Path, stem: &str, source: &str, script: &str, soname: &str) -> PathBuf {
     let object = assemble(dir, stem, source);
     let script_path = dir.join(format!("{stem}.map"));
     fs::write(&script_path, script).unwrap();
@@ -238,8 +232,7 @@ provider_impl:
     assert!(symbols.status.success());
     let symbols = String::from_utf8_lossy(&symbols.stdout);
     assert!(
-        symbols.contains("provider_value@VERS_1")
-            && !symbols.contains("provider_value@@VERS_1"),
+        symbols.contains("provider_value@VERS_1") && !symbols.contains("provider_value@@VERS_1"),
         "fixture must expose only a non-default GNU symbol version: {symbols}"
     );
 
