@@ -825,7 +825,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
             imports.uses_tls_ld,
             &tls_ie_import_symbols,
         )
-    .map_err(SharedObjectError::Relocation)?;
+        .map_err(SharedObjectError::Relocation)?;
     let mut relocated = relocated_output.sections;
     let got_entries = relocated_output.got_entries;
     let tls_got_entries = relocated_output.tls_got_entries;
@@ -1179,13 +1179,14 @@ fn validate_inputs(
                     let binding = symbol.symbol.info >> 4;
                     let unresolved = symbol.symbol.section_index == SHN_UNDEF
                         && !definitions.contains_key(symbol.name);
-                    let supported_definition = definitions.get(symbol.name).is_some_and(|definition| {
-                        let definition_binding = definition.symbol.info >> 4;
-                        let definition_type = definition.symbol.info & 0x0f;
-                        definition_binding == STB_GLOBAL
-                            && definition_type == STT_TLS
-                            && definition.symbol.other == 0
-                    });
+                    let supported_definition =
+                        definitions.get(symbol.name).is_some_and(|definition| {
+                            let definition_binding = definition.symbol.info >> 4;
+                            let definition_type = definition.symbol.info & 0x0f;
+                            definition_binding == STB_GLOBAL
+                                && definition_type == STT_TLS
+                                && definition.symbol.other == 0
+                        });
                     if symbol_type != STT_TLS
                         || binding != STB_GLOBAL
                         || symbol.symbol.other != 0
