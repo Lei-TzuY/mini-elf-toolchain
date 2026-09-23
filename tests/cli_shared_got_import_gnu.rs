@@ -171,7 +171,10 @@ int main(int argc, char **argv) {
         );
 
         let status = Command::new(&consumer).arg(&shared).status().unwrap();
-        assert!(status.success(), "GLOB_DAT dlopen consumer returned {status}");
+        assert!(
+            status.success(),
+            "GLOB_DAT dlopen consumer returned {status}"
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
