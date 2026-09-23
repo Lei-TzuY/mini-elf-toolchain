@@ -240,31 +240,30 @@ int main(int argc, char **argv) {{
 }
 
 #[test]
-fn shared_plt_rejects_weak_function_import() {
+fn shared_plt_rejects_weak_notype_import() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("weak");
+    let dir = temp_dir("weak-notype");
     let object = assemble(
         &dir,
-        "weak-plt",
+        "weak",
         r#".section .text
 .globl call_weak
 .type call_weak,@function
-.weak weak_host
-.type weak_host,@function
+.weak weak_target
 call_weak:
-    call weak_host
+    call weak_target@PLT
     ret
 .size call_weak, .-call_weak
 "#,
     );
-    let output = dir.join("must-not-exist.so");
+    let shared = dir.join("must-not-exist.so");
 
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
-        .arg(&output)
+        .arg(&shared)
         .arg("--shared")
         .arg(&object)
         .output()
@@ -274,10 +273,10 @@ call_weak:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("strong global") || stderr.contains("binding"),
+        stderr.contains("PLT") || stderr.contains("symbol type"),
         "{stderr}"
     );
-    assert!(!output.exists());
+    assert!(!shared.exists());
 
     let _ = fs::remove_dir_all(dir);
 }
