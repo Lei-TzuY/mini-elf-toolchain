@@ -46,6 +46,7 @@ const STT_NOTYPE: u8 = 0;
 const STT_OBJECT: u8 = 1;
 const STT_FUNC: u8 = 2;
 const STT_TLS: u8 = 6;
+const STV_PROTECTED: u8 = 3;
 const GLOBAL_OFFSET_TABLE_SYMBOL: &[u8] = b"_GLOBAL_OFFSET_TABLE_";
 
 const DT_NULL: i64 = 0;
@@ -834,6 +835,7 @@ struct ExportSymbol {
     version: Option<Vec<u8>>,
     is_default_version: bool,
     info: u8,
+    other: u8,
     section_index: u16,
     value: u64,
     size: u64,
@@ -1274,6 +1276,7 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
             version: identity.version,
             is_default_version: identity.is_default_version,
             info: definition.symbol.info,
+            other: definition.symbol.other,
             section_index: if definition.symbol.section_index == SHN_ABS {
                 SHN_ABS
             } else {
@@ -1891,6 +1894,27 @@ fn validate_inputs(
                         plt_symbols.insert(symbol.name.to_vec());
                         continue;
                     }
+                    let protected_plt_definition = is_plt_import
+                        && definitions.get(symbol.name).is_some_and(|definition| {
+                            let definition_binding = definition.symbol.info >> 4;
+                            let definition_type = definition.symbol.info & 0x0f;
+                            definition_binding == STB_GLOBAL
+                                && definition_type == STT_FUNC
+                                && definition.symbol.other == STV_PROTECTED
+                                && definition.symbol.section_index != SHN_ABS
+                        });
+                    if protected_plt_definition {
+                        if target.flags & SHF_ALLOC == 0 || target.flags & SHF_EXECINSTR == 0 {
+                            return Err(SharedObjectError::ExternalPltTargetNotExecutable {
+                                object_index: input.object_index,
+                                rela_section_index: table.section_index,
+                                relocation_index,
+                                target_section_index: table.target_section_index,
+                                flags: target.flags,
+                            });
+                        }
+                        continue;
+                    }
                     if relocation.relocation_type == R_X86_64_64 && supported_definition {
                         if target.flags & SHF_ALLOC == 0 || target.flags & SHF_WRITE == 0 {
                             return Err(
@@ -2040,7 +2064,13 @@ fn validate_inputs(
                         binding,
                     });
                 }
-                if symbol.symbol.other != 0 {
+                let symbol_type = symbol.symbol.info & 0x0f;
+                let protected_function_definition = symbol.symbol.other == STV_PROTECTED
+                    && binding == STB_GLOBAL
+                    && symbol_type == STT_FUNC
+                    && symbol.symbol.section_index != SHN_UNDEF
+                    && symbol.symbol.section_index != SHN_ABS;
+                if symbol.symbol.other != 0 && !protected_function_definition {
                     return Err(SharedObjectError::NondefaultVisibility {
                         object_index: input.object_index,
                         symbol_index: symbol.symbol_index,
@@ -2049,7 +2079,9 @@ fn validate_inputs(
                     });
                 }
                 if symbol.symbol.section_index == SHN_UNDEF && !symbol.name.is_empty() {
-                    let symbol_type = symbol.symbol.info & 0x0f;
+                    if definitions.contains_key(symbol.name) {
+                        continue;
+                    }
                     if symbol_type == STT_TLS {
                         let supported_tls_model = (binding == STB_GLOBAL
                             && (tls_gd_symbols.contains(symbol.name)
@@ -3032,7 +3064,7 @@ fn build_dynamic_metadata(
         let offset = dynsym_offset + (index + 1) * ELF64_SYMBOL_SIZE;
         put_u32(&mut bytes, offset, export_name_offsets[index]);
         bytes[offset + 4] = export.info;
-        bytes[offset + 5] = 0;
+        bytes[offset + 5] = export.other;
         put_u16(&mut bytes, offset + 6, export.section_index);
         put_u64(&mut bytes, offset + 8, export.value);
         put_u64(&mut bytes, offset + 16, export.size);
