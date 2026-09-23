@@ -104,7 +104,7 @@ imported_pointer:
     );
 
     let symbols = Command::new("readelf")
-        .args(["--dyn-syms", "-W"])
+        .arg("-sDW")
         .arg(&shared)
         .output()
         .unwrap();
