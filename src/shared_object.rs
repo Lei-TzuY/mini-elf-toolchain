@@ -1041,7 +1041,10 @@ fn validate_inputs(
                     });
                 }
 
-                if is_plt_import && symbol_type != STT_FUNC {
+                let tls_get_addr_notype = is_plt_import
+                    && symbol.name == b"__tls_get_addr"
+                    && symbol_type == STT_NOTYPE;
+                if is_plt_import && symbol_type != STT_FUNC && !tls_get_addr_notype {
                     return Err(SharedObjectError::ExternalPltUnsupportedType {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
@@ -1158,10 +1161,13 @@ fn validate_inputs(
                     if linker_owned_got_symbol {
                         continue;
                     }
+                    let tls_get_addr_notype =
+                        symbol.name == b"__tls_get_addr" && symbol_type == STT_NOTYPE;
                     let supported_import = import_symbols.contains_key(symbol.name)
                         && (binding == STB_GLOBAL
                             || (binding == STB_WEAK && symbol_type == STT_OBJECT))
-                        && matches!(symbol_type, STT_OBJECT | STT_FUNC);
+                        && (matches!(symbol_type, STT_OBJECT | STT_FUNC)
+                            || tls_get_addr_notype);
                     if !supported_import {
                         return Err(SharedObjectError::UndefinedNonlocal {
                             object_index: input.object_index,
