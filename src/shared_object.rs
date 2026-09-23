@@ -1695,13 +1695,6 @@ fn validate_inputs(
                                 name: symbol.name.to_vec(),
                             });
                         }
-                        if binding == STB_WEAK && parse_import_identity(symbol.name)?.1.is_some() {
-                            return Err(SharedObjectError::TlsImportUnsupported {
-                                object_index: input.object_index,
-                                symbol_index: symbol.symbol_index,
-                                name: symbol.name.to_vec(),
-                            });
-                        }
                         if symbol.symbol.other != 0 {
                             return Err(SharedObjectError::NondefaultVisibility {
                                 object_index: input.object_index,
