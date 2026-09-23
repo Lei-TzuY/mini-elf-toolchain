@@ -17,8 +17,7 @@ use crate::program_headers::{
     map_runtime_program_headers_with_dynamic, RuntimeDynamicProgramHeader,
 };
 use crate::relocated_sections::{
-    relocate_allocatable_sections_with_external_got, RelocatedSectionError,
-    RelocatedSectionImage,
+    relocate_allocatable_sections_with_external_got, RelocatedSectionError, RelocatedSectionImage,
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
@@ -518,10 +517,7 @@ fn validate_inputs(
 
         for table in &input.object.rela_tables {
             if table.relocations.iter().any(|relocation| {
-                !matches!(
-                    relocation.relocation_type,
-                    R_X86_64_64 | R_X86_64_GOTPCREL
-                )
+                !matches!(relocation.relocation_type, R_X86_64_64 | R_X86_64_GOTPCREL)
             }) {
                 return Err(SharedObjectError::RelocationUnsupported {
                     object_index: input.object_index,
@@ -867,9 +863,10 @@ fn build_got_import_relocation_table(
             .get(name)
             .copied()
             .ok_or_else(|| SharedObjectError::MissingImportGotEntry { name: name.clone() })?;
-        let dynamic_index = dynamic_indices.get(name).copied().ok_or_else(|| {
-            SharedObjectError::MissingImportDynamicSymbol { name: name.clone() }
-        })?;
+        let dynamic_index = dynamic_indices
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingImportDynamicSymbol { name: name.clone() })?;
         let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_GLOB_DAT);
         bytes.extend_from_slice(&offset.to_le_bytes());
         bytes.extend_from_slice(&info.to_le_bytes());
