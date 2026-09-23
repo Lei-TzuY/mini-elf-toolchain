@@ -330,9 +330,7 @@ fn relative_provider_runpath_fails_before_output() {
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("DT_RUNPATH")
-            && stderr.contains("relative")
-            && stderr.contains("$ORIGIN"),
+        stderr.contains("DT_RUNPATH") && stderr.contains("relative") && stderr.contains("$ORIGIN"),
         "{stderr}"
     );
     assert!(!output.exists());
