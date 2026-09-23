@@ -272,7 +272,10 @@ int main(int argc, char **argv) {
         );
 
         let status = Command::new(&runner).arg(&consumer).status().unwrap();
-        assert!(status.success(), "cross-DSO TLSDESC runner returned {status}");
+        assert!(
+            status.success(),
+            "cross-DSO TLSDESC runner returned {status}"
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
