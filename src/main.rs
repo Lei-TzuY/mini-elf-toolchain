@@ -16,6 +16,7 @@ use mini_elf_toolchain::ordered_inputs::{
 use mini_elf_toolchain::partial_link::{
     link_relocatable_objects_with_forced_undefined, PartialLinkInput,
 };
+use mini_elf_toolchain::provider_closure::resolve_provider_path;
 use mini_elf_toolchain::shared_object::{
     link_shared_object_with_needed_soname_runpath_versions_and_checked_providers,
     shared_import_requirements, SharedImportRequirement, SharedVersionRequirement,
@@ -959,12 +960,13 @@ fn inspect_transitive_provider_exports(
     let mut version_requirements = BTreeMap::<Vec<u8>, SharedVersionRequirement>::new();
 
     while let Some((needed, provider_directory, runpath)) = queue.pop_front() {
-        let dependency_path = resolve_transitive_provider_path(
+        let dependency_path = resolve_provider_path(
             &needed,
             &provider_directory,
             runpath.as_deref(),
             search_paths,
-        )?;
+        )
+        .map_err(|error| CliError::Failure(error.to_string()))?;
         let canonical = fs::canonicalize(&dependency_path).map_err(|error| {
             CliError::Failure(format!(
                 "{}: cannot canonicalize transitive shared provider dependency {:?}: {error}",
@@ -1029,114 +1031,6 @@ fn inspect_transitive_provider_exports(
         matched_any,
         version_requirements: version_requirements.into_values().collect(),
     })
-}
-
-fn resolve_transitive_provider_path(
-    name: &[u8],
-    provider_directory: &Path,
-    runpath: Option<&[u8]>,
-    search_paths: &[PathBuf],
-) -> Result<PathBuf, CliError> {
-    let name = std::str::from_utf8(name).map_err(|_| {
-        CliError::Failure(format!(
-            "transitive shared provider dependency name {:?} is not valid UTF-8",
-            String::from_utf8_lossy(name)
-        ))
-    })?;
-    if name.is_empty() {
-        return Err(CliError::Failure(
-            "transitive shared provider dependency name is empty".to_owned(),
-        ));
-    }
-    if name.contains('/') || name.contains('\\') {
-        return Err(CliError::Failure(format!(
-            "transitive shared provider dependency '{name}' contains a path separator; bounded closure resolution accepts SONAME-style filenames only"
-        )));
-    }
-
-    let mut directories = Vec::new();
-    push_unique_directory(&mut directories, provider_directory.to_path_buf());
-
-    if let Some(runpath) = runpath {
-        for directory in expand_provider_runpath(runpath, provider_directory)? {
-            push_unique_directory(&mut directories, directory);
-        }
-    }
-    for path in search_paths {
-        push_unique_directory(&mut directories, path.clone());
-    }
-
-    for directory in &directories {
-        let candidate = directory.join(name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
-    }
-
-    let mut message = format!("cannot resolve transitive shared provider dependency '{name}'");
-    if directories.is_empty() {
-        message.push_str("; no bounded provider search directories are available");
-    } else {
-        message.push_str(" in");
-        for directory in directories {
-            message.push_str(&format!(" '{}'", directory.display()));
-        }
-    }
-    Err(CliError::Failure(message))
-}
-
-fn push_unique_directory(directories: &mut Vec<PathBuf>, directory: PathBuf) {
-    if !directories.iter().any(|candidate| candidate == &directory) {
-        directories.push(directory);
-    }
-}
-
-fn expand_provider_runpath(
-    runpath: &[u8],
-    provider_directory: &Path,
-) -> Result<Vec<PathBuf>, CliError> {
-    let runpath = std::str::from_utf8(runpath).map_err(|_| {
-        CliError::Failure(format!(
-            "provider DT_RUNPATH {:?} is not valid UTF-8",
-            String::from_utf8_lossy(runpath)
-        ))
-    })?;
-    if runpath.is_empty() {
-        return Err(CliError::Failure(
-            "provider DT_RUNPATH is empty; bounded closure resolution rejects empty search entries"
-                .to_owned(),
-        ));
-    }
-
-    let mut result = Vec::new();
-    for entry in runpath.split(':') {
-        if entry.is_empty() {
-            return Err(CliError::Failure(format!(
-                "provider DT_RUNPATH '{runpath}' contains an empty search entry"
-            )));
-        }
-        let path = if entry == "$ORIGIN" || entry == "${ORIGIN}" {
-            provider_directory.to_path_buf()
-        } else if let Some(suffix) = entry.strip_prefix("$ORIGIN/") {
-            provider_directory.join(suffix)
-        } else if let Some(suffix) = entry.strip_prefix("${ORIGIN}/") {
-            provider_directory.join(suffix)
-        } else if entry.contains('$') {
-            return Err(CliError::Failure(format!(
-                "provider DT_RUNPATH entry '{entry}' uses an unsupported loader token; bounded closure resolution supports only $ORIGIN"
-            )));
-        } else {
-            let path = PathBuf::from(entry);
-            if !path.is_absolute() {
-                return Err(CliError::Failure(format!(
-                    "provider DT_RUNPATH entry '{entry}' is relative; bounded closure resolution accepts only absolute paths or $ORIGIN-based entries"
-                )));
-            }
-            path
-        };
-        push_unique_directory(&mut result, path);
-    }
-    Ok(result)
 }
 
 fn read_provider_file(path: &Path, role: &str) -> Result<Vec<u8>, CliError> {
