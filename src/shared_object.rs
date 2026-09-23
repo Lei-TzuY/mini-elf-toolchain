@@ -29,8 +29,9 @@ use crate::tls::{
 };
 use crate::x86_64_relocations::{
     apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_DTPMOD64, R_X86_64_DTPOFF32,
-    R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPCREL, R_X86_64_GOTTPOFF, R_X86_64_JUMP_SLOT,
-    R_X86_64_PLT32, R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
+    R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPC32_TLSDESC, R_X86_64_GOTPCREL,
+    R_X86_64_GOTTPOFF, R_X86_64_JUMP_SLOT, R_X86_64_PLT32, R_X86_64_TLSDESC, R_X86_64_TLSDESC_CALL,
+    R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
 };
 
 const SHT_PROGBITS: u32 = 1;
@@ -158,6 +159,24 @@ pub enum SharedObjectError {
         flags: u64,
     },
     MissingTlsIeEntry {
+        name: Vec<u8>,
+    },
+    TlsDescUnsupported {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        symbol_index: u32,
+        name: Vec<u8>,
+    },
+    TlsDescTargetNotExecutable {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        target_section_index: u16,
+        flags: u64,
+    },
+    IncompleteTlsDescSequence,
+    MissingTlsDescEntry {
         name: Vec<u8>,
     },
     TlsLdUnsupported {
@@ -411,6 +430,36 @@ impl fmt::Display for SharedObjectError {
                 "shared object initial-exec TLS symbol {:?} has no synthetic TLS GOT entry",
                 String::from_utf8_lossy(name)
             ),
+            Self::TlsDescUnsupported {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                symbol_index,
+                name,
+            } => write!(
+                f,
+                "shared object TLSDESC relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} references TLS symbol {symbol_index} ({:?}); the first TLSDESC slice requires a defined default-visible strong STT_TLS symbol in the output DSO",
+                String::from_utf8_lossy(name)
+            ),
+            Self::TlsDescTargetNotExecutable {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                target_section_index,
+                flags,
+            } => write!(
+                f,
+                "shared object TLSDESC relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} targets section {target_section_index} with flags {flags:#x}; bounded TLSDESC access requires an allocated executable instruction site"
+            ),
+            Self::IncompleteTlsDescSequence => write!(
+                f,
+                "shared object TLSDESC access requires matching GOTPC32_TLSDESC address and TLSDESC_CALL marker relocations"
+            ),
+            Self::MissingTlsDescEntry { name } => write!(
+                f,
+                "shared object TLSDESC symbol {:?} has no synthetic 16-byte descriptor",
+                String::from_utf8_lossy(name)
+            ),
             Self::TlsLdUnsupported {
                 object_index,
                 rela_section_index,
@@ -619,6 +668,10 @@ impl std::error::Error for SharedObjectError {
             | Self::TlsIeUnsupported { .. }
             | Self::TlsIeTargetNotExecutable { .. }
             | Self::MissingTlsIeEntry { .. }
+            | Self::TlsDescUnsupported { .. }
+            | Self::TlsDescTargetNotExecutable { .. }
+            | Self::IncompleteTlsDescSequence
+            | Self::MissingTlsDescEntry { .. }
             | Self::TlsLdUnsupported { .. }
             | Self::TlsLdTargetNotExecutable { .. }
             | Self::IncompleteTlsLdSequence
@@ -718,6 +771,8 @@ struct ImportPlan {
     plt_symbols: BTreeSet<Vec<u8>>,
     tls_gd_symbols: BTreeSet<Vec<u8>>,
     tls_ie_symbols: BTreeSet<Vec<u8>>,
+    tls_desc_symbols: BTreeSet<Vec<u8>>,
+    tls_desc_call_sites: BTreeSet<ImportRelocationSite>,
     tls_ld_dtpoff_sites: BTreeSet<ImportRelocationSite>,
     uses_tls_ld: bool,
 }
@@ -812,6 +867,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         .collect::<BTreeSet<_>>();
     let mut masked_sites = imports.sites.clone();
     masked_sites.extend(imports.tls_ld_dtpoff_sites.iter().copied());
+    masked_sites.extend(imports.tls_desc_call_sites.iter().copied());
     let relocation_inputs = mask_import_relocations(inputs, &masked_sites);
 
     let relocated_output = relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
@@ -823,6 +879,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         TlsSyntheticRequests {
             tls_gd_symbols: &imports.tls_gd_symbols,
             tls_ld_enabled: imports.uses_tls_ld,
+            tls_desc_symbols: &imports.tls_desc_symbols,
             external_tls_got_symbols: &tls_ie_import_symbols,
         },
     )
@@ -832,6 +889,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     let tls_got_entries = relocated_output.tls_got_entries;
     let tls_gd_entries = relocated_output.tls_gd_entries;
     let tls_ld_entry = relocated_output.tls_ld_entry;
+    let tls_desc_entries = relocated_output.tls_desc_entries;
     let plt_got_entries = relocated_output.plt_got_entries;
     let plt_got_base = relocated_output.plt_got_base;
     let layout = relocated
@@ -925,6 +983,12 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         &import_dynamic_indices,
     )?;
     rela_bytes.extend_from_slice(&tls_ie_rela_bytes);
+    let tls_desc_rela_bytes = build_tls_desc_relocation_table(
+        &imports.tls_desc_symbols,
+        &tls_desc_entries,
+        &export_dynamic_indices,
+    )?;
+    rela_bytes.extend_from_slice(&tls_desc_rela_bytes);
     let jmprel_bytes = build_plt_import_relocation_table(
         &imports.plt_symbols,
         &plt_got_entries,
@@ -1095,6 +1159,9 @@ fn validate_inputs(
     let mut plt_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_gd_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_ie_symbols = BTreeSet::<Vec<u8>>::new();
+    let mut tls_desc_symbols = BTreeSet::<Vec<u8>>::new();
+    let mut tls_desc_call_symbols = BTreeSet::<Vec<u8>>::new();
+    let mut tls_desc_call_sites = BTreeSet::<ImportRelocationSite>::new();
     let mut tls_ld_dtpoff_sites = BTreeSet::<ImportRelocationSite>::new();
     let mut uses_tls_ld = false;
 
@@ -1121,6 +1188,54 @@ fn validate_inputs(
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 let symbol = &symbols[relocation.symbol_index as usize];
                 let symbol_type = symbol.symbol.info & 0x0f;
+                if relocation.relocation_type == R_X86_64_GOTPC32_TLSDESC
+                    || relocation.relocation_type == R_X86_64_TLSDESC_CALL
+                {
+                    let binding = symbol.symbol.info >> 4;
+                    let supported_definition =
+                        definitions.get(symbol.name).is_some_and(|definition| {
+                            let definition_binding = definition.symbol.info >> 4;
+                            let definition_type = definition.symbol.info & 0x0f;
+                            definition_binding == STB_GLOBAL
+                                && definition_type == STT_TLS
+                                && definition.symbol.other == 0
+                        });
+                    if symbol_type != STT_TLS
+                        || binding != STB_GLOBAL
+                        || symbol.symbol.other != 0
+                        || symbol.name.is_empty()
+                        || symbol.symbol.section_index == SHN_UNDEF
+                        || !supported_definition
+                    {
+                        return Err(SharedObjectError::TlsDescUnsupported {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                            symbol_index: relocation.symbol_index,
+                            name: symbol.name.to_vec(),
+                        });
+                    }
+                    if target.flags & SHF_ALLOC == 0 || target.flags & SHF_EXECINSTR == 0 {
+                        return Err(SharedObjectError::TlsDescTargetNotExecutable {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                            target_section_index: table.target_section_index,
+                            flags: target.flags,
+                        });
+                    }
+                    if relocation.relocation_type == R_X86_64_GOTPC32_TLSDESC {
+                        tls_desc_symbols.insert(symbol.name.to_vec());
+                    } else {
+                        tls_desc_call_symbols.insert(symbol.name.to_vec());
+                        tls_desc_call_sites.insert(ImportRelocationSite {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                        });
+                    }
+                    continue;
+                }
                 if relocation.relocation_type == R_X86_64_TLSGD {
                     if symbol_type != STT_TLS {
                         return Err(SharedObjectError::TlsImportUnsupported {
@@ -1277,6 +1392,8 @@ fn validate_inputs(
                         | R_X86_64_GOTPCREL
                         | R_X86_64_PLT32
                         | R_X86_64_TLSGD
+                        | R_X86_64_GOTPC32_TLSDESC
+                        | R_X86_64_TLSDESC_CALL
                         | R_X86_64_GOTTPOFF
                         | R_X86_64_TLSLD
                         | R_X86_64_DTPOFF32
@@ -1297,7 +1414,12 @@ fn validate_inputs(
                 let is_plt_import = relocation.relocation_type == R_X86_64_PLT32;
                 if matches!(
                     relocation.relocation_type,
-                    R_X86_64_TLSGD | R_X86_64_GOTTPOFF | R_X86_64_TLSLD | R_X86_64_DTPOFF32
+                    R_X86_64_TLSGD
+                        | R_X86_64_GOTPC32_TLSDESC
+                        | R_X86_64_TLSDESC_CALL
+                        | R_X86_64_GOTTPOFF
+                        | R_X86_64_TLSLD
+                        | R_X86_64_DTPOFF32
                 ) {
                     continue;
                 }
@@ -1468,6 +1590,7 @@ fn validate_inputs(
                     let linker_owned_got_symbol = (!got_symbols.is_empty()
                         || !tls_gd_symbols.is_empty()
                         || !tls_ie_symbols.is_empty()
+                        || !tls_desc_symbols.is_empty()
                         || uses_tls_ld)
                         && symbol.name == GLOBAL_OFFSET_TABLE_SYMBOL
                         && binding == STB_GLOBAL
@@ -1496,6 +1619,9 @@ fn validate_inputs(
     if uses_tls_ld != !tls_ld_dtpoff_sites.is_empty() {
         return Err(SharedObjectError::IncompleteTlsLdSequence);
     }
+    if tls_desc_symbols != tls_desc_call_symbols {
+        return Err(SharedObjectError::IncompleteTlsDescSequence);
+    }
 
     Ok(ImportPlan {
         symbols: import_symbols,
@@ -1504,6 +1630,8 @@ fn validate_inputs(
         plt_symbols,
         tls_gd_symbols,
         tls_ie_symbols,
+        tls_desc_symbols,
+        tls_desc_call_sites,
         tls_ld_dtpoff_sites,
         uses_tls_ld,
     })
@@ -1684,6 +1812,35 @@ fn build_tls_ie_relocation_table(
             .ok_or_else(|| SharedObjectError::MissingTlsDynamicSymbol { name: name.clone() })?;
         let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_TPOFF64);
         bytes.extend_from_slice(&offset.to_le_bytes());
+        bytes.extend_from_slice(&info.to_le_bytes());
+        bytes.extend_from_slice(&0_i64.to_le_bytes());
+    }
+
+    Ok(bytes)
+}
+
+fn build_tls_desc_relocation_table(
+    symbols: &BTreeSet<Vec<u8>>,
+    entries: &BTreeMap<Vec<u8>, u64>,
+    export_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+) -> Result<Vec<u8>, SharedObjectError> {
+    let capacity = symbols
+        .len()
+        .checked_mul(ELF64_RELA_SIZE)
+        .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let mut bytes = Vec::with_capacity(capacity);
+
+    for name in symbols {
+        let descriptor = entries
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingTlsDescEntry { name: name.clone() })?;
+        let dynamic_index = export_dynamic_indices
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingTlsDynamicSymbol { name: name.clone() })?;
+        let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_TLSDESC);
+        bytes.extend_from_slice(&descriptor.to_le_bytes());
         bytes.extend_from_slice(&info.to_le_bytes());
         bytes.extend_from_slice(&0_i64.to_le_bytes());
     }
