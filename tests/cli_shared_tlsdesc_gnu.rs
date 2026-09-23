@@ -237,19 +237,19 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_tlsdesc_rejects_undefined_tls_symbol_in_first_slice() {
+fn shared_tlsdesc_rejects_weak_undefined_tls_symbol() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("undefined");
+    let dir = temp_dir("weak-undefined");
     let object = assemble(
         &dir,
-        "undefined",
+        "weak-undefined",
         r#".section .text
 .globl read_external_tlsdesc
 .type read_external_tlsdesc,@function
-.extern external_tlsdesc
+.weak external_tlsdesc
 .type external_tlsdesc,@tls_object
 read_external_tlsdesc:
     leaq external_tlsdesc@TLSDESC(%rip), %rax
@@ -273,7 +273,7 @@ read_external_tlsdesc:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("TLSDESC") || stderr.contains("defined"),
+        stderr.contains("TLSDESC") || stderr.contains("weak") || stderr.contains("binding"),
         "{stderr}"
     );
     assert!(!output.exists());
