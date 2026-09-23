@@ -159,6 +159,20 @@ fn shared_named_version_import_emits_verneed_and_loads_requested_provider_versio
     assert!(dynamic.contains("VERNEED"), "{dynamic}");
     assert!(dynamic.contains("VERNEEDNUM"), "{dynamic}");
 
+    let gnu_versions = Command::new("readelf")
+        .arg("-VW")
+        .arg(&consumer)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_versions.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_versions.stderr)
+    );
+    let gnu_versions = String::from_utf8_lossy(&gnu_versions.stdout);
+    assert!(gnu_versions.contains("libprovider.so"), "{gnu_versions}");
+    assert!(gnu_versions.contains("VERS_1"), "{gnu_versions}");
+
     let versions = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym-needed"))
         .arg(&consumer)
         .output()
