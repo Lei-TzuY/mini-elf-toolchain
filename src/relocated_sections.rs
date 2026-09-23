@@ -5,7 +5,8 @@ use crate::elf64::SHT_NOBITS;
 use crate::executable_pipeline::ExecutableSectionInput;
 use crate::layout::LaidOutSection;
 use crate::link_context::{
-    build_link_context_with_got_entry_maps, LinkContextBuildError, LinkContextRelocationError,
+    build_link_context_with_got_entry_maps_and_unresolved_got, LinkContextBuildError,
+    LinkContextRelocationError,
 };
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
 use crate::linker_input::{LinkerInputError, LinkerInputObject};
@@ -319,11 +320,12 @@ pub fn relocate_allocatable_sections_with_external_got(
     let got_entries_output = got_entries.clone();
     let tls_got_entries_output = tls_got_entries.clone();
 
-    let context = build_link_context_with_got_entry_maps(
+    let context = build_link_context_with_got_entry_maps_and_unresolved_got(
         &validated_objects,
         &layout,
         got_entries,
         tls_got_entries,
+        external_got_symbols.clone(),
     )
     .map_err(RelocatedSectionError::LinkContext)?;
 
