@@ -388,7 +388,7 @@ impl fmt::Display for SharedObjectError {
             ),
             Self::UnsupportedVersionedImportType { name, symbol_type } => write!(
                 f,
-                "shared object external import {:?} requests a GNU symbol version with ELF symbol type {symbol_type}; bounded named-version imports currently require STT_OBJECT",
+                "shared object external import {:?} requests a GNU symbol version with ELF symbol type {symbol_type}; bounded named-version imports currently require STT_OBJECT or STT_FUNC",
                 String::from_utf8_lossy(name)
             ),
             Self::InvalidVersionRequirement { name, version } => write!(
@@ -861,7 +861,7 @@ fn record_import_symbol(
     let symbol_type = info & 0x0f;
     let binding = info >> 4;
     let (dynamic_name, version) = parse_import_identity(name)?;
-    if version.is_some() && symbol_type != STT_OBJECT {
+    if version.is_some() && !matches!(symbol_type, STT_OBJECT | STT_FUNC) {
         return Err(SharedObjectError::UnsupportedVersionedImportType {
             name: name.to_vec(),
             symbol_type,
