@@ -179,7 +179,7 @@ pub enum SharedObjectError {
     MissingGotDynamicSymbol {
         name: Vec<u8>,
     },
-    MissingImportGotEntry {
+    MissingGotEntry {
         name: Vec<u8>,
     },
     MissingImportPltGotEntry {
@@ -359,7 +359,7 @@ impl fmt::Display for SharedObjectError {
                 binding,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded shared relocation handling requires a local non-preemptible target or an undefined external data import because general interposition is not implemented",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded shared relocation handling currently permits undefined external imports plus defined default-visible STT_OBJECT symbols only through ordinary GOTPCREL/GLOB_DAT interposition",
                 String::from_utf8_lossy(name)
             ),
             Self::ExternalImportUnsupportedBinding {
@@ -491,9 +491,9 @@ impl fmt::Display for SharedObjectError {
                 "shared object GOT symbol {:?} has no usable dynamic-symbol index",
                 String::from_utf8_lossy(name)
             ),
-            Self::MissingImportGotEntry { name } => write!(
+            Self::MissingGotEntry { name } => write!(
                 f,
-                "shared object external GOT import {:?} has no synthetic GOT slot",
+                "shared object GOT symbol {:?} has no synthetic GOT slot",
                 String::from_utf8_lossy(name)
             ),
             Self::MissingImportPltGotEntry { name } => write!(
@@ -788,7 +788,7 @@ impl std::error::Error for SharedObjectError {
             | Self::MissingImportRelocationTarget { .. }
             | Self::MissingImportDynamicSymbol { .. }
             | Self::MissingGotDynamicSymbol { .. }
-            | Self::MissingImportGotEntry { .. }
+            | Self::MissingGotEntry { .. }
             | Self::MissingImportPltGotEntry { .. }
             | Self::MissingTlsGdEntry { .. }
             | Self::MissingTlsDynamicSymbol { .. }
@@ -2465,7 +2465,7 @@ fn build_got_relocation_table(
         let offset = got_entries
             .get(name)
             .copied()
-            .ok_or_else(|| SharedObjectError::MissingImportGotEntry { name: name.clone() })?;
+            .ok_or_else(|| SharedObjectError::MissingGotEntry { name: name.clone() })?;
         let dynamic_index = export_dynamic_indices
             .get(name)
             .or_else(|| import_dynamic_indices.get(name))
