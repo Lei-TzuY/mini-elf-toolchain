@@ -176,6 +176,9 @@ pub enum SharedObjectError {
     MissingImportDynamicSymbol {
         name: Vec<u8>,
     },
+    MissingGotDynamicSymbol {
+        name: Vec<u8>,
+    },
     MissingImportGotEntry {
         name: Vec<u8>,
     },
@@ -483,6 +486,11 @@ impl fmt::Display for SharedObjectError {
                 "shared object external import {:?} has no dynamic symbol index",
                 String::from_utf8_lossy(name)
             ),
+            Self::MissingGotDynamicSymbol { name } => write!(
+                f,
+                "shared object GOT symbol {:?} has no usable dynamic-symbol index",
+                String::from_utf8_lossy(name)
+            ),
             Self::MissingImportGotEntry { name } => write!(
                 f,
                 "shared object external GOT import {:?} has no synthetic GOT slot",
@@ -779,6 +787,7 @@ impl std::error::Error for SharedObjectError {
             | Self::ExternalImportRelocationOutOfBounds { .. }
             | Self::MissingImportRelocationTarget { .. }
             | Self::MissingImportDynamicSymbol { .. }
+            | Self::MissingGotDynamicSymbol { .. }
             | Self::MissingImportGotEntry { .. }
             | Self::MissingImportPltGotEntry { .. }
             | Self::MissingTlsGdEntry { .. }
@@ -1316,9 +1325,10 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
     let import_rela_bytes =
         build_import_relocation_table(inputs, &relocated, &imports.sites, &import_dynamic_indices)?;
     rela_bytes.extend_from_slice(&import_rela_bytes);
-    let got_import_rela_bytes = build_got_import_relocation_table(
+    let got_import_rela_bytes = build_got_relocation_table(
         &imports.got_symbols,
         &got_entries,
+        &export_dynamic_indices,
         &import_dynamic_indices,
     )?;
     rela_bytes.extend_from_slice(&got_import_rela_bytes);
@@ -1842,6 +1852,19 @@ fn validate_inputs(
 
                 if symbol.symbol.section_index != SHN_UNDEF || definitions.contains_key(symbol.name)
                 {
+                    let defined_got_object = is_got_import
+                        && !symbol.name.is_empty()
+                        && definitions.get(symbol.name).is_some_and(|definition| {
+                            let definition_binding = definition.symbol.info >> 4;
+                            let definition_type = definition.symbol.info & 0x0f;
+                            matches!(definition_binding, STB_GLOBAL | STB_WEAK)
+                                && definition_type == STT_OBJECT
+                                && definition.symbol.other == 0
+                        });
+                    if defined_got_object {
+                        got_symbols.insert(symbol.name.to_vec());
+                        continue;
+                    }
                     return Err(SharedObjectError::PreemptibleRelativeTarget {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
@@ -2426,10 +2449,11 @@ fn build_import_relocation_table(
     Ok(bytes)
 }
 
-fn build_got_import_relocation_table(
+fn build_got_relocation_table(
     got_symbols: &BTreeSet<Vec<u8>>,
     got_entries: &BTreeMap<Vec<u8>, u64>,
-    dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+    export_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+    import_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
 ) -> Result<Vec<u8>, SharedObjectError> {
     let capacity = got_symbols
         .len()
@@ -2442,10 +2466,11 @@ fn build_got_import_relocation_table(
             .get(name)
             .copied()
             .ok_or_else(|| SharedObjectError::MissingImportGotEntry { name: name.clone() })?;
-        let dynamic_index = dynamic_indices
+        let dynamic_index = export_dynamic_indices
             .get(name)
+            .or_else(|| import_dynamic_indices.get(name))
             .copied()
-            .ok_or_else(|| SharedObjectError::MissingImportDynamicSymbol { name: name.clone() })?;
+            .ok_or_else(|| SharedObjectError::MissingGotDynamicSymbol { name: name.clone() })?;
         let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_GLOB_DAT);
         bytes.extend_from_slice(&offset.to_le_bytes());
         bytes.extend_from_slice(&info.to_le_bytes());
