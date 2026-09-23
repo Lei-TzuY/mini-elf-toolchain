@@ -387,9 +387,7 @@ fn extract_shared_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString
     Ok((shared, remaining))
 }
 
-fn extract_symbolic_argument(
-    arguments: &[OsString],
-) -> Result<(bool, Vec<OsString>), CliError> {
+fn extract_symbolic_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>), CliError> {
     let mut symbolic = false;
     let mut remaining = Vec::with_capacity(arguments.len());
 
