@@ -539,7 +539,10 @@ fn link_files(
         .map(|input| loaded.paths[input.file_index].clone())
         .collect::<Vec<_>>();
     let prepared =
-        prepare_ordered_link_inputs_with_forced_undefined(&ordered_inputs, forced_undefined)
+        prepare_ordered_link_inputs_with_forced_undefined(
+            &ordered_inputs,
+            options.forced_undefined,
+        )
             .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     if shared_object {
         let image = link_shared_object(&prepared.objects, DEFAULT_PAGE_ALIGNMENT)
@@ -583,7 +586,7 @@ fn link_files(
 
     Ok(format!(
         "{}: output={}, objects={}, bytes={}, entry={:#x}",
-        if position_independent {
+        if options.position_independent {
             "linked static PIE ELF64 x86-64"
         } else {
             "linked static ELF64 x86-64"
