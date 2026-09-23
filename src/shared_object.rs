@@ -430,6 +430,12 @@ struct ImportPlan {
     plt_symbols: BTreeSet<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct DynamicNames<'a> {
+    needed: &'a [Vec<u8>],
+    soname: Option<&'a [u8]>,
+}
+
 #[derive(Debug)]
 struct DynamicMetadata {
     bytes: Vec<u8>,
@@ -574,8 +580,7 @@ pub fn link_shared_object_with_needed_and_soname(
         metadata_address,
         &exports,
         &imports.symbols,
-        needed,
-        soname,
+        DynamicNames { needed, soname },
         &rela_bytes,
         relative_relocation_count,
         &jmprel_bytes,
@@ -1102,8 +1107,7 @@ fn build_dynamic_metadata(
     base_address: u64,
     exports: &[ExportSymbol],
     imports: &BTreeMap<Vec<u8>, ImportSymbol>,
-    needed: &[Vec<u8>],
-    soname: Option<&[u8]>,
+    names: DynamicNames<'_>,
     rela_bytes: &[u8],
     relative_relocation_count: usize,
     jmprel_bytes: &[u8],
@@ -1147,15 +1151,15 @@ fn build_dynamic_metadata(
         dynstr.extend_from_slice(&import.name);
         dynstr.push(0);
     }
-    let mut needed_name_offsets = Vec::with_capacity(needed.len());
-    for name in needed {
+    let mut needed_name_offsets = Vec::with_capacity(names.needed.len());
+    for name in names.needed {
         let offset =
             u32::try_from(dynstr.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
         needed_name_offsets.push(offset);
         dynstr.extend_from_slice(name);
         dynstr.push(0);
     }
-    let soname_offset = if let Some(name) = soname {
+    let soname_offset = if let Some(name) = names.soname {
         let offset =
             u32::try_from(dynstr.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
         dynstr.extend_from_slice(name);
@@ -1193,7 +1197,7 @@ fn build_dynamic_metadata(
     let has_relocations = !rela_bytes.is_empty();
     let has_plt_relocations = !jmprel_bytes.is_empty();
     let dynamic_entry_count = 5usize
-        .checked_add(needed.len())
+        .checked_add(names.needed.len())
         .and_then(|count| count.checked_add(usize::from(soname_offset.is_some())))
         .and_then(|count| count.checked_add(if has_relocations { 3 } else { 0 }))
         .and_then(|count| count.checked_add(usize::from(relative_relocation_count != 0)))
