@@ -16,8 +16,19 @@ const DT_STRSZ: i64 = 10;
 const DT_SYMENT: i64 = 11;
 const DT_SONAME: i64 = 14;
 const DT_RUNPATH: i64 = 29;
+const DT_VERSYM: i64 = 0x6fff_fff0;
+const DT_VERDEF: i64 = 0x6fff_fffc;
+const DT_VERDEFNUM: i64 = 0x6fff_fffd;
 const ELF64_DYNAMIC_SIZE: u64 = 16;
 const ELF64_SYMBOL_SIZE: u64 = 24;
+const ELF64_VERSYM_SIZE: u64 = 2;
+const ELF64_VERDEF_SIZE: u64 = 20;
+const ELF64_VERDAUX_SIZE: u64 = 8;
+const VER_DEF_CURRENT: u16 = 1;
+const VER_FLG_BASE: u16 = 0x1;
+const VER_FLG_WEAK: u16 = 0x2;
+const VERSYM_HIDDEN: u16 = 0x8000;
+const VERSYM_INDEX_MASK: u16 = 0x7fff;
 const SHN_UNDEF: u16 = 0;
 const STB_GLOBAL: u8 = 1;
 const STB_WEAK: u8 = 2;
@@ -75,6 +86,12 @@ struct ProgramHeader {
 struct DynamicEntry {
     tag: i64,
     value: u64,
+}
+
+#[derive(Debug)]
+struct ProviderVersionMetadata {
+    versym_offset: usize,
+    definition_indices: BTreeSet<u16>,
 }
 
 pub fn inspect_dynamic_provider(
@@ -183,6 +200,8 @@ pub fn inspect_dynamic_provider(
     )?;
     let dynsym_offset = usize::try_from(dynsym_offset)
         .map_err(|_| malformed("provider DT_SYMTAB file offset does not fit usize"))?;
+    let versions =
+        provider_version_metadata(&entries, &headers, file, symbol_count, strtab_offset, strsz)?;
 
     let mut exports = BTreeMap::<Vec<u8>, BTreeSet<u8>>::new();
     for symbol_index in 0..symbol_count {
@@ -213,11 +232,14 @@ pub fn inspect_dynamic_provider(
 
         let binding = info >> 4;
         let visibility = other & 0x03;
+        let version_allows_unversioned =
+            version_allows_unversioned_export(&versions, file, symbol_index, section_index)?;
         if section_index != SHN_UNDEF
             && (binding == STB_GLOBAL || binding == STB_WEAK)
             && visibility != STV_INTERNAL
             && visibility != STV_HIDDEN
             && !name.is_empty()
+            && version_allows_unversioned
         {
             exports.entry(name).or_default().insert(info & 0x0f);
         }
@@ -229,6 +251,275 @@ pub fn inspect_dynamic_provider(
         runpath,
         exports,
     })
+}
+
+fn provider_version_metadata(
+    entries: &[DynamicEntry],
+    headers: &[ProgramHeader],
+    file: &[u8],
+    symbol_count: u64,
+    strtab_offset: u64,
+    strsz: u64,
+) -> Result<Option<ProviderVersionMetadata>, DynamicProviderError> {
+    let versym = optional_unique_tag(entries, DT_VERSYM, "DT_VERSYM")?;
+    let verdef = optional_unique_tag(entries, DT_VERDEF, "DT_VERDEF")?;
+    let verdefnum = optional_unique_tag(entries, DT_VERDEFNUM, "DT_VERDEFNUM")?;
+
+    if versym.is_none() {
+        if verdef.is_some() || verdefnum.is_some() {
+            return Err(malformed(
+                "provider version definitions require DT_VERSYM to associate versions with dynamic symbols",
+            ));
+        }
+        return Ok(None);
+    }
+
+    let versym_size = symbol_count
+        .checked_mul(ELF64_VERSYM_SIZE)
+        .ok_or_else(|| malformed("provider DT_VERSYM table size overflows u64"))?;
+    let versym_offset = map_virtual_range(
+        headers,
+        file.len(),
+        versym.unwrap(),
+        versym_size,
+        "provider DT_VERSYM table",
+    )?;
+    let versym_offset = usize::try_from(versym_offset)
+        .map_err(|_| malformed("provider DT_VERSYM file offset does not fit usize"))?;
+
+    let present = usize::from(verdef.is_some()) + usize::from(verdefnum.is_some());
+    if present == 1 {
+        return Err(malformed(
+            "provider PT_DYNAMIC must provide DT_VERDEF and DT_VERDEFNUM together",
+        ));
+    }
+    let definition_indices = if present == 2 {
+        parse_version_definition_indices(
+            headers,
+            file,
+            verdef.unwrap(),
+            verdefnum.unwrap(),
+            strtab_offset,
+            strsz,
+        )?
+    } else {
+        BTreeSet::new()
+    };
+
+    Ok(Some(ProviderVersionMetadata {
+        versym_offset,
+        definition_indices,
+    }))
+}
+
+fn version_allows_unversioned_export(
+    versions: &Option<ProviderVersionMetadata>,
+    file: &[u8],
+    symbol_index: u64,
+    section_index: u16,
+) -> Result<bool, DynamicProviderError> {
+    let Some(versions) = versions else {
+        return Ok(true);
+    };
+    let relative = symbol_index
+        .checked_mul(ELF64_VERSYM_SIZE)
+        .ok_or_else(|| malformed("provider DT_VERSYM symbol offset overflows u64"))?;
+    let relative = usize::try_from(relative)
+        .map_err(|_| malformed("provider DT_VERSYM symbol offset does not fit usize"))?;
+    let offset = versions
+        .versym_offset
+        .checked_add(relative)
+        .ok_or_else(|| malformed("provider DT_VERSYM file offset overflows usize"))?;
+    let raw = read_u16(file, offset);
+    let version_index = raw & VERSYM_INDEX_MASK;
+    let hidden = raw & VERSYM_HIDDEN != 0;
+
+    if hidden && version_index < 2 {
+        return Err(malformed(format!(
+            "provider DT_VERSYM symbol {symbol_index} sets the hidden bit on reserved version index {version_index}"
+        )));
+    }
+
+    if section_index != SHN_UNDEF
+        && version_index >= 2
+        && !versions.definition_indices.contains(&version_index)
+    {
+        return Err(malformed(format!(
+            "provider DT_VERSYM defined symbol {symbol_index} references version index {version_index} with no matching DT_VERDEF"
+        )));
+    }
+
+    Ok(match version_index {
+        0 => false,
+        1 => true,
+        _ => !hidden,
+    })
+}
+
+fn parse_version_definition_indices(
+    headers: &[ProgramHeader],
+    file: &[u8],
+    mut address: u64,
+    count: u64,
+    strtab_offset: u64,
+    strsz: u64,
+) -> Result<BTreeSet<u16>, DynamicProviderError> {
+    if count == 0 {
+        return Err(malformed(
+            "provider DT_VERDEFNUM must be non-zero when DT_VERDEF is present",
+        ));
+    }
+
+    let mut indices = BTreeSet::new();
+    for definition_index in 0..count {
+        let offset = map_virtual_range(
+            headers,
+            file.len(),
+            address,
+            ELF64_VERDEF_SIZE,
+            &format!("provider DT_VERDEF entry {definition_index}"),
+        )?;
+        let offset = usize::try_from(offset)
+            .map_err(|_| malformed("provider DT_VERDEF file offset does not fit usize"))?;
+        let version = read_u16(file, offset);
+        let flags = read_u16(file, offset + 2);
+        let raw_index = read_u16(file, offset + 4);
+        let version_index = raw_index & VERSYM_INDEX_MASK;
+        let aux_count = read_u16(file, offset + 6);
+        let stored_hash = read_u32(file, offset + 8);
+        let aux_relative = read_u32(file, offset + 12);
+        let next_relative = read_u32(file, offset + 16);
+
+        if version != VER_DEF_CURRENT {
+            return Err(malformed(format!(
+                "provider DT_VERDEF entry {definition_index} has version {version}, expected {VER_DEF_CURRENT}"
+            )));
+        }
+        if flags & !(VER_FLG_BASE | VER_FLG_WEAK) != 0 {
+            return Err(malformed(format!(
+                "provider DT_VERDEF entry {definition_index} has unsupported flags {flags:#06x}"
+            )));
+        }
+        if raw_index & VERSYM_HIDDEN != 0 {
+            return Err(malformed(format!(
+                "provider DT_VERDEF entry {definition_index} sets the reserved hidden bit in vd_ndx"
+            )));
+        }
+        if version_index == 0 {
+            return Err(malformed(format!(
+                "provider DT_VERDEF entry {definition_index} uses reserved local version index 0"
+            )));
+        }
+        if aux_count == 0 || aux_relative == 0 {
+            return Err(malformed(format!(
+                "provider DT_VERDEF entry {definition_index} has an invalid Verdaux chain"
+            )));
+        }
+        if !indices.insert(version_index) {
+            return Err(malformed(format!(
+                "provider DT_VERDEF contains duplicate version index {version_index}"
+            )));
+        }
+
+        let mut aux_address = address
+            .checked_add(u64::from(aux_relative))
+            .ok_or_else(|| {
+                malformed(format!(
+                    "provider DT_VERDEF entry {definition_index} vd_aux address overflows u64"
+                ))
+            })?;
+        let mut first_name = None;
+        for aux_index in 0..u64::from(aux_count) {
+            let aux_offset = map_virtual_range(
+                headers,
+                file.len(),
+                aux_address,
+                ELF64_VERDAUX_SIZE,
+                &format!("provider DT_VERDEF entry {definition_index} Verdaux {aux_index}"),
+            )?;
+            let aux_offset = usize::try_from(aux_offset)
+                .map_err(|_| malformed("provider Verdaux file offset does not fit usize"))?;
+            let name_offset = u64::from(read_u32(file, aux_offset));
+            let next = read_u32(file, aux_offset + 4);
+            let name = dynamic_string(
+                file,
+                strtab_offset,
+                strsz,
+                name_offset,
+                "provider Verdaux version name",
+            )?;
+            if name.is_empty() {
+                return Err(malformed(format!(
+                    "provider DT_VERDEF entry {definition_index} has an empty version name"
+                )));
+            }
+            if aux_index == 0 {
+                first_name = Some(name);
+            }
+
+            let last = aux_index + 1 == u64::from(aux_count);
+            if last {
+                if next != 0 {
+                    return Err(malformed(format!(
+                        "provider DT_VERDEF entry {definition_index} final Verdaux has non-zero vda_next {next}"
+                    )));
+                }
+            } else {
+                if next == 0 {
+                    return Err(malformed(format!(
+                        "provider DT_VERDEF entry {definition_index} Verdaux chain ends before vd_cnt {aux_count}"
+                    )));
+                }
+                aux_address = aux_address.checked_add(u64::from(next)).ok_or_else(|| {
+                    malformed(format!(
+                        "provider DT_VERDEF entry {definition_index} Verdaux address overflows u64"
+                    ))
+                })?;
+            }
+        }
+
+        let first_name = first_name.expect("non-zero aux count guarantees a first version name");
+        if stored_hash != sysv_elf_hash(&first_name) {
+            return Err(malformed(format!(
+                "provider DT_VERDEF entry {definition_index} has vd_hash {stored_hash:#010x}, expected {:#010x} for version {:?}",
+                sysv_elf_hash(&first_name),
+                String::from_utf8_lossy(&first_name)
+            )));
+        }
+
+        let last = definition_index + 1 == count;
+        if last {
+            if next_relative != 0 {
+                return Err(malformed(format!(
+                    "provider final DT_VERDEF entry has non-zero vd_next {next_relative} beyond DT_VERDEFNUM {count}"
+                )));
+            }
+        } else {
+            if next_relative == 0 {
+                return Err(malformed(format!(
+                    "provider DT_VERDEF chain ends before DT_VERDEFNUM {count}"
+                )));
+            }
+            address = address
+                .checked_add(u64::from(next_relative))
+                .ok_or_else(|| malformed("provider DT_VERDEF next-entry address overflows u64"))?;
+        }
+    }
+
+    Ok(indices)
+}
+
+fn sysv_elf_hash(name: &[u8]) -> u32 {
+    let mut hash = 0u32;
+    for byte in name {
+        hash = hash.wrapping_shl(4).wrapping_add(u32::from(*byte));
+        let high = hash & 0xf000_0000;
+        if high != 0 {
+            hash ^= high >> 24;
+        }
+        hash &= !high;
+    }
+    hash
 }
 
 fn program_headers(
