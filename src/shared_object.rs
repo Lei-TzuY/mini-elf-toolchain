@@ -154,14 +154,14 @@ pub enum SharedObjectError {
         name: Vec<u8>,
         symbol_type: u8,
     },
-    ExternalImportTargetNotWritable {
+    DynamicSymbolRelocationTargetNotWritable {
         object_index: usize,
         rela_section_index: u16,
         relocation_index: usize,
         target_section_index: u16,
         flags: u64,
     },
-    ExternalImportRelocationOutOfBounds {
+    DynamicSymbolRelocationOutOfBounds {
         object_index: usize,
         rela_section_index: u16,
         relocation_index: usize,
@@ -169,11 +169,11 @@ pub enum SharedObjectError {
         offset: u64,
         target_size: u64,
     },
-    MissingImportRelocationTarget {
+    MissingDynamicSymbolRelocationTarget {
         object_index: usize,
         target_section_index: u16,
     },
-    MissingImportDynamicSymbol {
+    MissingDynamicSymbol {
         name: Vec<u8>,
     },
     MissingGotDynamicSymbol {
@@ -359,7 +359,7 @@ impl fmt::Display for SharedObjectError {
                 binding,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded shared relocation handling currently permits undefined external imports plus defined default-visible strong STT_OBJECT/STT_FUNC symbols only through ordinary GOTPCREL/GLOB_DAT interposition",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded shared relocation handling currently permits undefined external imports plus defined default-visible strong STT_OBJECT/STT_FUNC symbols through writable R_X86_64_64 dynamic relocations or ordinary GOTPCREL/GLOB_DAT interposition",
                 String::from_utf8_lossy(name)
             ),
             Self::ExternalImportUnsupportedBinding {
@@ -453,7 +453,7 @@ impl fmt::Display for SharedObjectError {
                 "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references undefined symbol {symbol_index} ({:?}) with ELF symbol type {symbol_type}; bounded external imports require STT_OBJECT or STT_FUNC",
                 String::from_utf8_lossy(name)
             ),
-            Self::ExternalImportTargetNotWritable {
+            Self::DynamicSymbolRelocationTargetNotWritable {
                 object_index,
                 rela_section_index,
                 relocation_index,
@@ -461,9 +461,9 @@ impl fmt::Display for SharedObjectError {
                 flags,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} targets section {target_section_index} with flags {flags:#x}; bounded external imports require an allocated writable relocation target"
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} targets section {target_section_index} with flags {flags:#x}; bounded dynamic symbol relocations require an allocated writable relocation target"
             ),
-            Self::ExternalImportRelocationOutOfBounds {
+            Self::DynamicSymbolRelocationOutOfBounds {
                 object_index,
                 rela_section_index,
                 relocation_index,
@@ -474,16 +474,16 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} writes 8 bytes at offset {offset} beyond target section {target_section_index} size {target_size}"
             ),
-            Self::MissingImportRelocationTarget {
+            Self::MissingDynamicSymbolRelocationTarget {
                 object_index,
                 target_section_index,
             } => write!(
                 f,
-                "shared object external import target object {object_index} section {target_section_index} has no relocated output section"
+                "shared object dynamic symbol relocation target object {object_index} section {target_section_index} has no relocated output section"
             ),
-            Self::MissingImportDynamicSymbol { name } => write!(
+            Self::MissingDynamicSymbol { name } => write!(
                 f,
-                "shared object external import {:?} has no dynamic symbol index",
+                "shared object runtime symbol {:?} has no usable dynamic-symbol index",
                 String::from_utf8_lossy(name)
             ),
             Self::MissingGotDynamicSymbol { name } => write!(
@@ -783,10 +783,10 @@ impl std::error::Error for SharedObjectError {
             | Self::InvalidVersionRequirement { .. }
             | Self::VersionRequirementProviderMissing { .. }
             | Self::ExternalImportUnsupportedType { .. }
-            | Self::ExternalImportTargetNotWritable { .. }
-            | Self::ExternalImportRelocationOutOfBounds { .. }
-            | Self::MissingImportRelocationTarget { .. }
-            | Self::MissingImportDynamicSymbol { .. }
+            | Self::DynamicSymbolRelocationTargetNotWritable { .. }
+            | Self::DynamicSymbolRelocationOutOfBounds { .. }
+            | Self::MissingDynamicSymbolRelocationTarget { .. }
+            | Self::MissingDynamicSymbol { .. }
             | Self::MissingGotDynamicSymbol { .. }
             | Self::MissingGotEntry { .. }
             | Self::MissingImportPltGotEntry { .. }
@@ -968,7 +968,7 @@ fn record_import_symbol(
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct ImportRelocationSite {
+struct DynamicSymbolRelocationSite {
     object_index: usize,
     rela_section_index: u16,
     relocation_index: usize,
@@ -977,14 +977,14 @@ struct ImportRelocationSite {
 #[derive(Debug)]
 struct ImportPlan {
     symbols: BTreeMap<Vec<u8>, ImportSymbol>,
-    sites: BTreeSet<ImportRelocationSite>,
+    symbol_relocation_sites: BTreeSet<DynamicSymbolRelocationSite>,
     got_symbols: BTreeSet<Vec<u8>>,
     plt_symbols: BTreeSet<Vec<u8>>,
     tls_gd_symbols: BTreeSet<Vec<u8>>,
     tls_ie_symbols: BTreeSet<Vec<u8>>,
     tls_desc_symbols: BTreeSet<Vec<u8>>,
-    tls_desc_call_sites: BTreeSet<ImportRelocationSite>,
-    tls_ld_dtpoff_sites: BTreeSet<ImportRelocationSite>,
+    tls_desc_call_sites: BTreeSet<DynamicSymbolRelocationSite>,
+    tls_ld_dtpoff_sites: BTreeSet<DynamicSymbolRelocationSite>,
     uses_tls_ld: bool,
 }
 
@@ -1164,10 +1164,10 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
         .filter(|name| imports.symbols.contains_key(*name))
         .cloned()
         .collect::<BTreeSet<_>>();
-    let mut masked_sites = imports.sites.clone();
+    let mut masked_sites = imports.symbol_relocation_sites.clone();
     masked_sites.extend(imports.tls_ld_dtpoff_sites.iter().copied());
     masked_sites.extend(imports.tls_desc_call_sites.iter().copied());
-    let relocation_inputs = mask_import_relocations(inputs, &masked_sites);
+    let relocation_inputs = mask_deferred_relocations(inputs, &masked_sites);
 
     let relocated_output = relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
         &relocation_inputs,
@@ -1322,9 +1322,14 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
         &BTreeMap::new(),
     )
     .map_err(SharedObjectError::RuntimeRelative)?;
-    let import_rela_bytes =
-        build_import_relocation_table(inputs, &relocated, &imports.sites, &import_dynamic_indices)?;
-    rela_bytes.extend_from_slice(&import_rela_bytes);
+    let symbol_rela_bytes = build_dynamic_symbol_relocation_table(
+        inputs,
+        &relocated,
+        &imports.symbol_relocation_sites,
+        &export_dynamic_indices,
+        &import_dynamic_indices,
+    )?;
+    rela_bytes.extend_from_slice(&symbol_rela_bytes);
     let got_rela_bytes = build_got_relocation_table(
         &imports.got_symbols,
         &got_entries,
@@ -1553,15 +1558,15 @@ fn validate_inputs(
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
 ) -> Result<ImportPlan, SharedObjectError> {
     let mut import_symbols = BTreeMap::<Vec<u8>, ImportSymbol>::new();
-    let mut import_sites = BTreeSet::<ImportRelocationSite>::new();
+    let mut symbol_relocation_sites = BTreeSet::<DynamicSymbolRelocationSite>::new();
     let mut got_symbols = BTreeSet::<Vec<u8>>::new();
     let mut plt_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_gd_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_ie_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_desc_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_desc_call_symbols = BTreeSet::<Vec<u8>>::new();
-    let mut tls_desc_call_sites = BTreeSet::<ImportRelocationSite>::new();
-    let mut tls_ld_dtpoff_sites = BTreeSet::<ImportRelocationSite>::new();
+    let mut tls_desc_call_sites = BTreeSet::<DynamicSymbolRelocationSite>::new();
+    let mut tls_ld_dtpoff_sites = BTreeSet::<DynamicSymbolRelocationSite>::new();
     let mut uses_tls_ld = false;
 
     for input in inputs {
@@ -1636,7 +1641,7 @@ fn validate_inputs(
                         tls_desc_symbols.insert(symbol.name.to_vec());
                     } else {
                         tls_desc_call_symbols.insert(symbol.name.to_vec());
-                        tls_desc_call_sites.insert(ImportRelocationSite {
+                        tls_desc_call_sites.insert(DynamicSymbolRelocationSite {
                             object_index: input.object_index,
                             rela_section_index: table.section_index,
                             relocation_index,
@@ -1781,7 +1786,7 @@ fn validate_inputs(
                     if relocation.relocation_type == R_X86_64_TLSLD {
                         uses_tls_ld = true;
                     } else {
-                        tls_ld_dtpoff_sites.insert(ImportRelocationSite {
+                        tls_ld_dtpoff_sites.insert(DynamicSymbolRelocationSite {
                             object_index: input.object_index,
                             rela_section_index: table.section_index,
                             relocation_index,
@@ -1852,8 +1857,7 @@ fn validate_inputs(
 
                 if symbol.symbol.section_index != SHN_UNDEF || definitions.contains_key(symbol.name)
                 {
-                    let defined_got_symbol = is_got_import
-                        && !symbol.name.is_empty()
+                    let supported_definition = !symbol.name.is_empty()
                         && definitions.get(symbol.name).is_some_and(|definition| {
                             let definition_binding = definition.symbol.info >> 4;
                             let definition_type = definition.symbol.info & 0x0f;
@@ -1861,8 +1865,27 @@ fn validate_inputs(
                                 && matches!(definition_type, STT_OBJECT | STT_FUNC)
                                 && definition.symbol.other == 0
                         });
-                    if defined_got_symbol {
+                    if is_got_import && supported_definition {
                         got_symbols.insert(symbol.name.to_vec());
+                        continue;
+                    }
+                    if relocation.relocation_type == R_X86_64_64 && supported_definition {
+                        if target.flags & SHF_ALLOC == 0 || target.flags & SHF_WRITE == 0 {
+                            return Err(
+                                SharedObjectError::DynamicSymbolRelocationTargetNotWritable {
+                                    object_index: input.object_index,
+                                    rela_section_index: table.section_index,
+                                    relocation_index,
+                                    target_section_index: table.target_section_index,
+                                    flags: target.flags,
+                                },
+                            );
+                        }
+                        symbol_relocation_sites.insert(DynamicSymbolRelocationSite {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                        });
                         continue;
                     }
                     return Err(SharedObjectError::PreemptibleRelativeTarget {
@@ -1954,15 +1977,17 @@ fn validate_inputs(
                 }
 
                 if target.flags & SHF_ALLOC == 0 || target.flags & SHF_WRITE == 0 {
-                    return Err(SharedObjectError::ExternalImportTargetNotWritable {
-                        object_index: input.object_index,
-                        rela_section_index: table.section_index,
-                        relocation_index,
-                        target_section_index: table.target_section_index,
-                        flags: target.flags,
-                    });
+                    return Err(
+                        SharedObjectError::DynamicSymbolRelocationTargetNotWritable {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                            target_section_index: table.target_section_index,
+                            flags: target.flags,
+                        },
+                    );
                 }
-                import_sites.insert(ImportRelocationSite {
+                symbol_relocation_sites.insert(DynamicSymbolRelocationSite {
                     object_index: input.object_index,
                     rela_section_index: table.section_index,
                     relocation_index,
@@ -2059,7 +2084,7 @@ fn validate_inputs(
 
     Ok(ImportPlan {
         symbols: import_symbols,
-        sites: import_sites,
+        symbol_relocation_sites,
         got_symbols,
         plt_symbols,
         tls_gd_symbols,
@@ -2071,9 +2096,9 @@ fn validate_inputs(
     })
 }
 
-fn mask_import_relocations<'a>(
+fn mask_deferred_relocations<'a>(
     inputs: &[LinkerInputObject<'a>],
-    sites: &BTreeSet<ImportRelocationSite>,
+    sites: &BTreeSet<DynamicSymbolRelocationSite>,
 ) -> Vec<LinkerInputObject<'a>> {
     inputs
         .iter()
@@ -2081,7 +2106,7 @@ fn mask_import_relocations<'a>(
             let mut object = input.object.clone();
             for table in &mut object.rela_tables {
                 for (relocation_index, relocation) in table.relocations.iter_mut().enumerate() {
-                    if sites.contains(&ImportRelocationSite {
+                    if sites.contains(&DynamicSymbolRelocationSite {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
                         relocation_index,
@@ -2118,7 +2143,7 @@ fn export_dynamic_symbol_indices(
 fn apply_tls_ld_dtpoff32_relocations(
     inputs: &[LinkerInputObject<'_>],
     sections: &mut [RelocatedSectionImage],
-    sites: &BTreeSet<ImportRelocationSite>,
+    sites: &BTreeSet<DynamicSymbolRelocationSite>,
     tls: Option<StaticTlsLayout>,
     layout: &[LaidOutSection],
 ) -> Result<(), SharedObjectError> {
@@ -2345,11 +2370,12 @@ fn import_dynamic_symbol_indices(
         .collect()
 }
 
-fn build_import_relocation_table(
+fn build_dynamic_symbol_relocation_table(
     inputs: &[LinkerInputObject<'_>],
     sections: &[RelocatedSectionImage],
-    sites: &BTreeSet<ImportRelocationSite>,
-    dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+    sites: &BTreeSet<DynamicSymbolRelocationSite>,
+    export_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+    import_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
 ) -> Result<Vec<u8>, SharedObjectError> {
     let mut bytes = Vec::new();
 
@@ -2360,7 +2386,7 @@ fn build_import_relocation_table(
                 .iter()
                 .enumerate()
                 .any(|(relocation_index, _)| {
-                    sites.contains(&ImportRelocationSite {
+                    sites.contains(&DynamicSymbolRelocationSite {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
                         relocation_index,
@@ -2376,7 +2402,7 @@ fn build_import_relocation_table(
                     section.object_index == input.object_index
                         && section.section_index == table.target_section_index
                 })
-                .ok_or(SharedObjectError::MissingImportRelocationTarget {
+                .ok_or(SharedObjectError::MissingDynamicSymbolRelocationTarget {
                     object_index: input.object_index,
                     target_section_index: table.target_section_index,
                 })?;
@@ -2398,7 +2424,7 @@ fn build_import_relocation_table(
             })?;
 
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
-                let site = ImportRelocationSite {
+                let site = DynamicSymbolRelocationSite {
                     object_index: input.object_index,
                     rela_section_index: table.section_index,
                     relocation_index,
@@ -2408,7 +2434,7 @@ fn build_import_relocation_table(
                 }
 
                 let end = relocation.offset.checked_add(8).ok_or(
-                    SharedObjectError::ExternalImportRelocationOutOfBounds {
+                    SharedObjectError::DynamicSymbolRelocationOutOfBounds {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
                         relocation_index,
@@ -2418,7 +2444,7 @@ fn build_import_relocation_table(
                     },
                 )?;
                 if end > target.size {
-                    return Err(SharedObjectError::ExternalImportRelocationOutOfBounds {
+                    return Err(SharedObjectError::DynamicSymbolRelocationOutOfBounds {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
                         relocation_index,
@@ -2429,11 +2455,13 @@ fn build_import_relocation_table(
                 }
 
                 let symbol = &symbols[relocation.symbol_index as usize];
-                let dynamic_index = dynamic_indices.get(symbol.name).copied().ok_or_else(|| {
-                    SharedObjectError::MissingImportDynamicSymbol {
+                let dynamic_index = export_dynamic_indices
+                    .get(symbol.name)
+                    .or_else(|| import_dynamic_indices.get(symbol.name))
+                    .copied()
+                    .ok_or_else(|| SharedObjectError::MissingDynamicSymbol {
                         name: symbol.name.to_vec(),
-                    }
-                })?;
+                    })?;
                 let offset = target
                     .address
                     .checked_add(relocation.offset)
@@ -2499,7 +2527,7 @@ fn build_plt_import_relocation_table(
         let dynamic_index = dynamic_indices
             .get(name)
             .copied()
-            .ok_or_else(|| SharedObjectError::MissingImportDynamicSymbol { name: name.clone() })?;
+            .ok_or_else(|| SharedObjectError::MissingDynamicSymbol { name: name.clone() })?;
         let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_JUMP_SLOT);
         bytes.extend_from_slice(&offset.to_le_bytes());
         bytes.extend_from_slice(&info.to_le_bytes());

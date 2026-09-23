@@ -186,23 +186,23 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_relative_relocation_rejects_default_visible_global_target() {
+fn shared_dynamic_symbol_relocation_rejects_nonwritable_target() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("preemptible");
+    let dir = temp_dir("nonwritable-symbol-relocation");
     let object = assemble(
         &dir,
-        "preemptible",
-        r#".section .rodata
+        "nonwritable",
+        r#".section .data
 .globl target_value
 .type target_value,@object
 target_value:
     .quad 7
 .size target_value, .-target_value
 
-.section .data
+.section .rodata
 .globl exported_pointer
 .type exported_pointer,@object
 exported_pointer:
@@ -224,7 +224,7 @@ exported_pointer:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("preempt") || stderr.contains("interposition"),
+        stderr.contains("writable") && stderr.contains("dynamic symbol"),
         "{stderr}"
     );
     assert!(!output.exists());
