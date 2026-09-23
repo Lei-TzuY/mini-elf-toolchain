@@ -140,12 +140,18 @@ pub fn inspect_dynamic_provider(
     let hash_size = hash_words
         .checked_mul(4)
         .ok_or_else(|| malformed("provider DT_HASH byte size overflows u64"))?;
-    map_virtual_range(
+    let hash_offset = map_virtual_range(
         &headers,
         file.len(),
         hash_address,
         hash_size,
         "provider DT_HASH table",
+    )?;
+    validate_sysv_hash_table(
+        file,
+        hash_offset,
+        bucket_count,
+        symbol_count,
     )?;
 
     let dynsym_size = symbol_count
@@ -309,6 +315,76 @@ fn dynamic_entries(
     }
 
     Err(malformed("provider PT_DYNAMIC has no DT_NULL terminator"))
+}
+
+fn validate_sysv_hash_table(
+    file: &[u8],
+    hash_offset: u64,
+    bucket_count: u64,
+    symbol_count: u64,
+) -> Result<(), DynamicProviderError> {
+    let hash_offset = usize::try_from(hash_offset)
+        .map_err(|_| malformed("provider DT_HASH file offset does not fit usize"))?;
+    let bucket_count_usize = usize::try_from(bucket_count)
+        .map_err(|_| malformed("provider DT_HASH bucket count does not fit usize"))?;
+    let symbol_count_usize = usize::try_from(symbol_count)
+        .map_err(|_| malformed("provider DT_HASH symbol count does not fit usize"))?;
+    let buckets_offset = hash_offset
+        .checked_add(8)
+        .ok_or_else(|| malformed("provider DT_HASH bucket offset overflows usize"))?;
+    let chains_offset = buckets_offset
+        .checked_add(
+            bucket_count_usize
+                .checked_mul(4)
+                .ok_or_else(|| malformed("provider DT_HASH bucket byte size overflows usize"))?,
+        )
+        .ok_or_else(|| malformed("provider DT_HASH chain offset overflows usize"))?;
+
+    let mut buckets = Vec::with_capacity(bucket_count_usize);
+    for index in 0..bucket_count_usize {
+        let offset = buckets_offset
+            .checked_add(index * 4)
+            .ok_or_else(|| malformed("provider DT_HASH bucket file offset overflows usize"))?;
+        let value = read_u32(file, offset);
+        if u64::from(value) >= symbol_count && value != 0 {
+            return Err(malformed(format!(
+                "provider DT_HASH bucket {index} references symbol {value}, outside nchain {symbol_count}"
+            )));
+        }
+        buckets.push(value);
+    }
+
+    let mut chains = Vec::with_capacity(symbol_count_usize);
+    for index in 0..symbol_count_usize {
+        let offset = chains_offset
+            .checked_add(index * 4)
+            .ok_or_else(|| malformed("provider DT_HASH chain file offset overflows usize"))?;
+        let value = read_u32(file, offset);
+        if u64::from(value) >= symbol_count && value != 0 {
+            return Err(malformed(format!(
+                "provider DT_HASH chain {index} references symbol {value}, outside nchain {symbol_count}"
+            )));
+        }
+        chains.push(value);
+    }
+
+    for (bucket_index, start) in buckets.into_iter().enumerate() {
+        let mut current = start;
+        let mut steps = 0usize;
+        while current != 0 {
+            steps = steps
+                .checked_add(1)
+                .ok_or_else(|| malformed("provider DT_HASH chain step count overflows usize"))?;
+            if steps > symbol_count_usize {
+                return Err(malformed(format!(
+                    "provider DT_HASH bucket {bucket_index} contains a cycle"
+                )));
+            }
+            current = chains[current as usize];
+        }
+    }
+
+    Ok(())
 }
 
 fn required_unique_tag(
