@@ -93,6 +93,18 @@ read_host:
     );
     assert!(input_relocations.contains("host_value"));
 
+    let input_symbols = Command::new("readelf")
+        .args(["-sW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(input_symbols.status.success());
+    let input_symbols = String::from_utf8_lossy(&input_symbols.stdout);
+    assert!(
+        input_symbols.contains("_GLOBAL_OFFSET_TABLE_"),
+        "GNU GOTPCREL fixture should expose the linker-owned GOT base symbol: {input_symbols}"
+    );
+
     let shared = dir.join("libgotimport.so");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
@@ -119,6 +131,10 @@ read_host:
             .lines()
             .any(|line| line.contains("UND") && line.ends_with(" host_value")),
         "{symbols}"
+    );
+    assert!(
+        !symbols.contains("_GLOBAL_OFFSET_TABLE_"),
+        "linker-owned GOT base must not become a loader import: {symbols}"
     );
 
     let relocations = Command::new("readelf")
@@ -216,6 +232,50 @@ address_of_host_function:
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
         stderr.contains("STT_OBJECT") || stderr.contains("symbol type"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn static_link_does_not_inherit_shared_unresolved_got_semantics() {
+    if !command_reports("as", "GNU assembler") {
+        return;
+    }
+
+    let dir = temp_dir("static-fail-closed");
+    let object = assemble(
+        &dir,
+        "static-unresolved-got",
+        r#".section .text
+.globl _start
+.type _start,@function
+.extern host_value
+.type host_value,@object
+_start:
+    mov host_value@GOTPCREL(%rip), %rax
+    mov (%rax), %edi
+    mov $60, %eax
+    syscall
+.size _start, .-_start
+"#,
+    );
+    let output = dir.join("must-not-link");
+
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(
+        stderr.contains("host_value") && stderr.contains("resolved global address"),
         "{stderr}"
     );
     assert!(!output.exists());
