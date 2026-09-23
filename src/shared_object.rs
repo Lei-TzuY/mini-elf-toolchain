@@ -52,6 +52,7 @@ const DT_RELA: i64 = 7;
 const DT_PLTREL: i64 = 20;
 const DT_JMPREL: i64 = 23;
 const DT_BIND_NOW: i64 = 24;
+const DT_RUNPATH: i64 = 29;
 const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
 const DT_RELACOUNT: i64 = 0x6fff_fff9;
@@ -142,6 +143,8 @@ pub enum SharedObjectError {
     },
     EmptySoname,
     SonameContainsNul,
+    EmptyRunpath,
+    RunpathContainsNul,
     Symbols(LinkSymbolError),
     ObjectSymbols {
         object_index: usize,
@@ -304,6 +307,10 @@ impl fmt::Display for SharedObjectError {
             Self::SonameContainsNul => {
                 write!(f, "shared object DT_SONAME cannot contain an embedded NUL byte")
             }
+            Self::EmptyRunpath => write!(f, "shared object DT_RUNPATH cannot be empty"),
+            Self::RunpathContainsNul => {
+                write!(f, "shared object DT_RUNPATH cannot contain an embedded NUL byte")
+            }
             Self::Symbols(source) => write!(f, "cannot resolve shared object symbols: {source}"),
             Self::ObjectSymbols {
                 object_index,
@@ -389,6 +396,8 @@ impl std::error::Error for SharedObjectError {
             | Self::NeededNameContainsNul { .. }
             | Self::EmptySoname
             | Self::SonameContainsNul
+            | Self::EmptyRunpath
+            | Self::RunpathContainsNul
             | Self::UnsupportedBinding { .. }
             | Self::UndefinedNonlocal { .. }
             | Self::NondefaultVisibility { .. }
@@ -434,6 +443,7 @@ struct ImportPlan {
 struct DynamicNames<'a> {
     needed: &'a [Vec<u8>],
     soname: Option<&'a [u8]>,
+    runpath: Option<&'a [u8]>,
 }
 
 #[derive(Debug)]
@@ -481,8 +491,19 @@ pub fn link_shared_object_with_needed_and_soname(
     needed: &[Vec<u8>],
     soname: Option<&[u8]>,
 ) -> Result<ExecutableImage, SharedObjectError> {
+    link_shared_object_with_needed_soname_and_runpath(inputs, page_alignment, needed, soname, None)
+}
+
+pub fn link_shared_object_with_needed_soname_and_runpath(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    needed: &[Vec<u8>],
+    soname: Option<&[u8]>,
+    runpath: Option<&[u8]>,
+) -> Result<ExecutableImage, SharedObjectError> {
     validate_needed_names(needed)?;
     validate_soname(soname)?;
+    validate_runpath(runpath)?;
 
     let validated = inputs
         .iter()
@@ -580,7 +601,11 @@ pub fn link_shared_object_with_needed_and_soname(
         metadata_address,
         &exports,
         &imports.symbols,
-        DynamicNames { needed, soname },
+        DynamicNames {
+            needed,
+            soname,
+            runpath,
+        },
         &rela_bytes,
         relative_relocation_count,
         &jmprel_bytes,
@@ -654,6 +679,18 @@ fn validate_soname(soname: Option<&[u8]>) -> Result<(), SharedObjectError> {
         }
         if name.contains(&0) {
             return Err(SharedObjectError::SonameContainsNul);
+        }
+    }
+    Ok(())
+}
+
+fn validate_runpath(runpath: Option<&[u8]>) -> Result<(), SharedObjectError> {
+    if let Some(path) = runpath {
+        if path.is_empty() {
+            return Err(SharedObjectError::EmptyRunpath);
+        }
+        if path.contains(&0) {
+            return Err(SharedObjectError::RunpathContainsNul);
         }
     }
     Ok(())
@@ -1168,6 +1205,15 @@ fn build_dynamic_metadata(
     } else {
         None
     };
+    let runpath_offset = if let Some(path) = names.runpath {
+        let offset =
+            u32::try_from(dynstr.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        dynstr.extend_from_slice(path);
+        dynstr.push(0);
+        Some(offset)
+    } else {
+        None
+    };
 
     let dynstr_offset = dynsym_offset
         .checked_add(dynsym_size)
@@ -1199,6 +1245,7 @@ fn build_dynamic_metadata(
     let dynamic_entry_count = 5usize
         .checked_add(names.needed.len())
         .and_then(|count| count.checked_add(usize::from(soname_offset.is_some())))
+        .and_then(|count| count.checked_add(usize::from(runpath_offset.is_some())))
         .and_then(|count| count.checked_add(if has_relocations { 3 } else { 0 }))
         .and_then(|count| count.checked_add(usize::from(relative_relocation_count != 0)))
         .and_then(|count| count.checked_add(if has_plt_relocations { 4 } else { 0 }))
@@ -1256,6 +1303,9 @@ fn build_dynamic_metadata(
     }
     if let Some(offset) = soname_offset {
         entries.push((DT_SONAME, u64::from(offset)));
+    }
+    if let Some(offset) = runpath_offset {
+        entries.push((DT_RUNPATH, u64::from(offset)));
     }
     entries.extend_from_slice(&[
         (DT_HASH, hash_address),
