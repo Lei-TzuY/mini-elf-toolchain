@@ -530,7 +530,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a default-visible STT_TLS symbol that is either a strong supported definition/import or an unresolved weak import",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a default-visible global/weak STT_TLS symbol with a supported definition or unresolved import",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsIeTargetNotExecutable {
@@ -556,7 +556,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object TLSDESC relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} references TLS symbol {symbol_index} ({:?}); bounded TLSDESC requires a default-visible STT_TLS symbol that is either a strong supported definition/import or an unresolved weak import",
+                "shared object TLSDESC relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} references TLS symbol {symbol_index} ({:?}); bounded TLSDESC requires a default-visible global/weak STT_TLS symbol with a supported definition or unresolved import",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsDescTargetNotExecutable {
@@ -668,7 +668,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object symbol {symbol_index} in object {object_index} ({:?}) is an undefined TLS import; this slice supports defined TLS exports only",
+                "shared object symbol {symbol_index} in object {object_index} ({:?}) is not supported by bounded TLSGD; TLSGD requires a default-visible global/weak STT_TLS symbol with a supported definition or unresolved import",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsSymbolOutsideImage { name, address } => write!(
@@ -967,6 +967,14 @@ fn record_import_symbol(
     }
 
     Ok(())
+}
+
+fn is_supported_dynamic_tls_definition(definition: &SymbolDefinition) -> bool {
+    let binding = definition.symbol.info >> 4;
+    let symbol_type = definition.symbol.info & 0x0f;
+    matches!(binding, STB_GLOBAL | STB_WEAK)
+        && symbol_type == STT_TLS
+        && definition.symbol.other == 0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -1615,16 +1623,10 @@ fn validate_inputs(
                     let binding = symbol.symbol.info >> 4;
                     let unresolved = symbol.symbol.section_index == SHN_UNDEF
                         && !definitions.contains_key(symbol.name);
-                    let supported_definition =
-                        definitions.get(symbol.name).is_some_and(|definition| {
-                            let definition_binding = definition.symbol.info >> 4;
-                            let definition_type = definition.symbol.info & 0x0f;
-                            definition_binding == STB_GLOBAL
-                                && definition_type == STT_TLS
-                                && definition.symbol.other == 0
-                        });
-                    let supported_reference_binding =
-                        binding == STB_GLOBAL || (unresolved && binding == STB_WEAK);
+                    let supported_definition = definitions
+                        .get(symbol.name)
+                        .is_some_and(is_supported_dynamic_tls_definition);
+                    let supported_reference_binding = binding == STB_GLOBAL || binding == STB_WEAK;
                     if symbol_type != STT_TLS
                         || !supported_reference_binding
                         || symbol.symbol.other != 0
@@ -1669,7 +1671,19 @@ fn validate_inputs(
                     continue;
                 }
                 if relocation.relocation_type == R_X86_64_TLSGD {
-                    if symbol_type != STT_TLS {
+                    let binding = symbol.symbol.info >> 4;
+                    let unresolved = symbol.symbol.section_index == SHN_UNDEF
+                        && !definitions.contains_key(symbol.name);
+                    let supported_definition = definitions
+                        .get(symbol.name)
+                        .is_some_and(is_supported_dynamic_tls_definition);
+                    let supported_reference_binding = binding == STB_GLOBAL || binding == STB_WEAK;
+                    if symbol_type != STT_TLS
+                        || !supported_reference_binding
+                        || symbol.symbol.other != 0
+                        || symbol.name.is_empty()
+                        || (!unresolved && !supported_definition)
+                    {
                         return Err(SharedObjectError::TlsImportUnsupported {
                             object_index: input.object_index,
                             symbol_index: symbol.symbol_index,
@@ -1686,32 +1700,7 @@ fn validate_inputs(
                         });
                     }
 
-                    let unresolved = symbol.symbol.section_index == SHN_UNDEF
-                        && !definitions.contains_key(symbol.name);
                     if unresolved {
-                        let binding = symbol.symbol.info >> 4;
-                        if binding != STB_GLOBAL && binding != STB_WEAK {
-                            return Err(SharedObjectError::TlsImportUnsupported {
-                                object_index: input.object_index,
-                                symbol_index: symbol.symbol_index,
-                                name: symbol.name.to_vec(),
-                            });
-                        }
-                        if symbol.symbol.other != 0 {
-                            return Err(SharedObjectError::NondefaultVisibility {
-                                object_index: input.object_index,
-                                symbol_index: symbol.symbol_index,
-                                name: symbol.name.to_vec(),
-                                other: symbol.symbol.other,
-                            });
-                        }
-                        if symbol.name.is_empty() {
-                            return Err(SharedObjectError::UndefinedNonlocal {
-                                object_index: input.object_index,
-                                symbol_index: symbol.symbol_index,
-                                name: Vec::new(),
-                            });
-                        }
                         record_import_symbol(
                             &mut import_symbols,
                             symbol.name,
@@ -1727,16 +1716,10 @@ fn validate_inputs(
                     let binding = symbol.symbol.info >> 4;
                     let unresolved = symbol.symbol.section_index == SHN_UNDEF
                         && !definitions.contains_key(symbol.name);
-                    let supported_definition =
-                        definitions.get(symbol.name).is_some_and(|definition| {
-                            let definition_binding = definition.symbol.info >> 4;
-                            let definition_type = definition.symbol.info & 0x0f;
-                            definition_binding == STB_GLOBAL
-                                && definition_type == STT_TLS
-                                && definition.symbol.other == 0
-                        });
-                    let supported_reference_binding =
-                        binding == STB_GLOBAL || (unresolved && binding == STB_WEAK);
+                    let supported_definition = definitions
+                        .get(symbol.name)
+                        .is_some_and(is_supported_dynamic_tls_definition);
+                    let supported_reference_binding = binding == STB_GLOBAL || binding == STB_WEAK;
                     if symbol_type != STT_TLS
                         || !supported_reference_binding
                         || symbol.symbol.other != 0

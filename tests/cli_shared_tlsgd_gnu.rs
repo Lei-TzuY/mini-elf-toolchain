@@ -263,7 +263,8 @@ read_external_tls:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("visibility") || stderr.contains("TLS import"),
+        stderr.contains("bounded TLSGD")
+            && stderr.contains("default-visible global/weak STT_TLS symbol"),
         "{stderr}"
     );
     assert!(!output.exists());
