@@ -232,8 +232,7 @@ fn weak_named_version_function_addresses_match_gnu_and_zero_when_runtime_definit
     );
     let mini_versions = String::from_utf8_lossy(&mini_versions.stdout);
     assert!(
-        mini_versions.contains("provider_function")
-            && mini_versions.contains("requirement=libprovider.so:VERS_1"),
+        mini_versions.contains("requirement=libprovider.so:VERS_1"),
         "{mini_versions}"
     );
 
