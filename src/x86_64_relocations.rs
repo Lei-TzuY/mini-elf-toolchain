@@ -33,6 +33,9 @@ pub const R_X86_64_GOTPLT64: u32 = 30;
 pub const R_X86_64_PLTOFF64: u32 = 31;
 pub const R_X86_64_SIZE32: u32 = 32;
 pub const R_X86_64_SIZE64: u32 = 33;
+pub const R_X86_64_GOTPC32_TLSDESC: u32 = 34;
+pub const R_X86_64_TLSDESC_CALL: u32 = 35;
+pub const R_X86_64_TLSDESC: u32 = 36;
 pub const R_X86_64_GOTPCRELX: u32 = 41;
 pub const R_X86_64_REX_GOTPCRELX: u32 = 42;
 
@@ -70,6 +73,14 @@ pub fn is_tls_gd_relocation_type(relocation_type: u32) -> bool {
 
 pub fn is_tls_ld_relocation_type(relocation_type: u32) -> bool {
     relocation_type == R_X86_64_TLSLD
+}
+
+pub fn is_tls_desc_address_relocation_type(relocation_type: u32) -> bool {
+    relocation_type == R_X86_64_GOTPC32_TLSDESC
+}
+
+pub fn is_tls_desc_call_relocation_type(relocation_type: u32) -> bool {
+    relocation_type == R_X86_64_TLSDESC_CALL
 }
 
 pub fn is_static_got_offset_type(relocation_type: u32) -> bool {
@@ -248,6 +259,7 @@ pub fn evaluate_relocation(
         | R_X86_64_GOTTPOFF
         | R_X86_64_TLSGD
         | R_X86_64_TLSLD
+        | R_X86_64_GOTPC32_TLSDESC
         | R_X86_64_GOTPCRELX
         | R_X86_64_REX_GOTPCRELX => {
             let value = symbol_value + addend - place;
