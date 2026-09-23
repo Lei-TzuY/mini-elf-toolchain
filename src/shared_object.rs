@@ -18,7 +18,7 @@ use crate::program_headers::{
     map_runtime_program_headers_with_dynamic, RuntimeDynamicProgramHeader,
 };
 use crate::relocated_sections::{
-    relocate_allocatable_sections_with_external_got_and_plt, RelocatedSectionError,
+    relocate_allocatable_sections_with_external_got_plt_and_tls_gd, RelocatedSectionError,
     RelocatedSectionImage,
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
@@ -28,7 +28,8 @@ use crate::tls::{
     StaticTlsLayoutError, StaticTlsProgramHeaderError,
 };
 use crate::x86_64_relocations::{
-    R_X86_64_64, R_X86_64_GLOB_DAT, R_X86_64_GOTPCREL, R_X86_64_JUMP_SLOT, R_X86_64_PLT32,
+    R_X86_64_64, R_X86_64_DTPMOD64, R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPCREL,
+    R_X86_64_JUMP_SLOT, R_X86_64_PLT32, R_X86_64_TLSGD,
 };
 
 const SHT_PROGBITS: u32 = 1;
@@ -125,6 +126,19 @@ pub enum SharedObjectError {
     },
     MissingImportPltGotEntry {
         name: Vec<u8>,
+    },
+    MissingTlsGdEntry {
+        name: Vec<u8>,
+    },
+    MissingTlsDynamicSymbol {
+        name: Vec<u8>,
+    },
+    TlsGdTargetNotExecutable {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        target_section_index: u16,
+        flags: u64,
     },
     ExternalPltUnsupportedType {
         object_index: usize,
@@ -300,6 +314,26 @@ impl fmt::Display for SharedObjectError {
                 "shared object external PLT import {:?} has no synthetic PLT-GOT slot",
                 String::from_utf8_lossy(name)
             ),
+            Self::MissingTlsGdEntry { name } => write!(
+                f,
+                "shared object TLSGD symbol {:?} has no synthetic general-dynamic descriptor",
+                String::from_utf8_lossy(name)
+            ),
+            Self::MissingTlsDynamicSymbol { name } => write!(
+                f,
+                "shared object TLSGD symbol {:?} has no defined dynamic-symbol index",
+                String::from_utf8_lossy(name)
+            ),
+            Self::TlsGdTargetNotExecutable {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                target_section_index,
+                flags,
+            } => write!(
+                f,
+                "shared object TLSGD relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} targets section {target_section_index} with flags {flags:#x}; bounded TLSGD access requires an allocated executable instruction site"
+            ),
             Self::ExternalPltUnsupportedType {
                 object_index,
                 rela_section_index,
@@ -330,7 +364,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object TLS export slice rejects TLS relocation use in object {object_index} RELA section {rela_section_index} relocation {relocation_index} symbol {symbol_index} ({:?}); dynamic TLS relocation/codegen is not implemented",
+                "shared object bounded TLS slice rejects TLS relocation use in object {object_index} RELA section {rela_section_index} relocation {relocation_index} symbol {symbol_index} ({:?}); only defined-symbol TLSGD access is implemented",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsImportUnsupported {
@@ -450,6 +484,9 @@ impl std::error::Error for SharedObjectError {
             | Self::MissingImportDynamicSymbol { .. }
             | Self::MissingImportGotEntry { .. }
             | Self::MissingImportPltGotEntry { .. }
+            | Self::MissingTlsGdEntry { .. }
+            | Self::MissingTlsDynamicSymbol { .. }
+            | Self::TlsGdTargetNotExecutable { .. }
             | Self::ExternalPltUnsupportedType { .. }
             | Self::ExternalPltTargetNotExecutable { .. }
             | Self::TlsRelocationUnsupported { .. }
@@ -541,6 +578,7 @@ struct ImportPlan {
     sites: BTreeSet<ImportRelocationSite>,
     got_symbols: BTreeSet<Vec<u8>>,
     plt_symbols: BTreeSet<Vec<u8>>,
+    tls_gd_symbols: BTreeSet<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -626,16 +664,18 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     let imports = validate_inputs(inputs, &resolved.definitions)?;
     let relocation_inputs = mask_import_relocations(inputs, &imports.sites);
 
-    let relocated_output = relocate_allocatable_sections_with_external_got_and_plt(
+    let relocated_output = relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
         &relocation_inputs,
         page_alignment,
         page_alignment,
         &imports.got_symbols,
         &imports.plt_symbols,
+        &imports.tls_gd_symbols,
     )
     .map_err(SharedObjectError::Relocation)?;
     let relocated = relocated_output.sections;
     let got_entries = relocated_output.got_entries;
+    let tls_gd_entries = relocated_output.tls_gd_entries;
     let plt_got_entries = relocated_output.plt_got_entries;
     let plt_got_base = relocated_output.plt_got_base;
     let layout = relocated
@@ -688,6 +728,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         return Err(SharedObjectError::NoExports);
     }
 
+    let export_dynamic_indices = export_dynamic_symbol_indices(&exports)?;
     let import_dynamic_indices = import_dynamic_symbol_indices(exports.len(), &imports.symbols)?;
     let (mut rela_bytes, relative_relocation_count) = build_relative_relocation_table(
         &relocation_inputs,
@@ -705,6 +746,12 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         &import_dynamic_indices,
     )?;
     rela_bytes.extend_from_slice(&got_import_rela_bytes);
+    let tls_gd_rela_bytes = build_tls_gd_relocation_table(
+        &imports.tls_gd_symbols,
+        &tls_gd_entries,
+        &export_dynamic_indices,
+    )?;
+    rela_bytes.extend_from_slice(&tls_gd_rela_bytes);
     let jmprel_bytes = build_plt_import_relocation_table(
         &imports.plt_symbols,
         &plt_got_entries,
@@ -868,6 +915,7 @@ fn validate_inputs(
     let mut import_sites = BTreeSet::<ImportRelocationSite>::new();
     let mut got_symbols = BTreeSet::<Vec<u8>>::new();
     let mut plt_symbols = BTreeSet::<Vec<u8>>::new();
+    let mut tls_gd_symbols = BTreeSet::<Vec<u8>>::new();
 
     for input in inputs {
         for table in &input.object.rela_tables {
@@ -892,6 +940,29 @@ fn validate_inputs(
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 let symbol = &symbols[relocation.symbol_index as usize];
                 let symbol_type = symbol.symbol.info & 0x0f;
+                if relocation.relocation_type == R_X86_64_TLSGD {
+                    if symbol_type != STT_TLS
+                        || (symbol.symbol.section_index == SHN_UNDEF
+                            && !definitions.contains_key(symbol.name))
+                    {
+                        return Err(SharedObjectError::TlsImportUnsupported {
+                            object_index: input.object_index,
+                            symbol_index: symbol.symbol_index,
+                            name: symbol.name.to_vec(),
+                        });
+                    }
+                    if target.flags & SHF_ALLOC == 0 || target.flags & SHF_EXECINSTR == 0 {
+                        return Err(SharedObjectError::TlsGdTargetNotExecutable {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                            target_section_index: table.target_section_index,
+                            flags: target.flags,
+                        });
+                    }
+                    tls_gd_symbols.insert(symbol.name.to_vec());
+                    continue;
+                }
                 if target.flags & SHF_TLS != 0 || symbol_type == STT_TLS {
                     return Err(SharedObjectError::TlsRelocationUnsupported {
                         object_index: input.object_index,
@@ -906,7 +977,7 @@ fn validate_inputs(
             if table.relocations.iter().any(|relocation| {
                 !matches!(
                     relocation.relocation_type,
-                    R_X86_64_64 | R_X86_64_GOTPCREL | R_X86_64_PLT32
+                    R_X86_64_64 | R_X86_64_GOTPCREL | R_X86_64_PLT32 | R_X86_64_TLSGD
                 )
             }) {
                 return Err(SharedObjectError::RelocationUnsupported {
@@ -922,6 +993,9 @@ fn validate_inputs(
                 let symbol_type = symbol.symbol.info & 0x0f;
                 let is_got_import = relocation.relocation_type == R_X86_64_GOTPCREL;
                 let is_plt_import = relocation.relocation_type == R_X86_64_PLT32;
+                if relocation.relocation_type == R_X86_64_TLSGD {
+                    continue;
+                }
 
                 if binding == STB_LOCAL {
                     if is_got_import {
@@ -967,7 +1041,9 @@ fn validate_inputs(
                     });
                 }
 
-                if is_plt_import && symbol_type != STT_FUNC {
+                let tls_get_addr_notype =
+                    is_plt_import && symbol.name == b"__tls_get_addr" && symbol_type == STT_NOTYPE;
+                if is_plt_import && symbol_type != STT_FUNC && !tls_get_addr_notype {
                     return Err(SharedObjectError::ExternalPltUnsupportedType {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
@@ -1077,17 +1153,20 @@ fn validate_inputs(
                             name: symbol.name.to_vec(),
                         });
                     }
-                    let linker_owned_got_symbol = !got_symbols.is_empty()
+                    let linker_owned_got_symbol = (!got_symbols.is_empty()
+                        || !tls_gd_symbols.is_empty())
                         && symbol.name == GLOBAL_OFFSET_TABLE_SYMBOL
                         && binding == STB_GLOBAL
                         && symbol_type == STT_NOTYPE;
                     if linker_owned_got_symbol {
                         continue;
                     }
+                    let tls_get_addr_notype =
+                        symbol.name == b"__tls_get_addr" && symbol_type == STT_NOTYPE;
                     let supported_import = import_symbols.contains_key(symbol.name)
                         && (binding == STB_GLOBAL
                             || (binding == STB_WEAK && symbol_type == STT_OBJECT))
-                        && matches!(symbol_type, STT_OBJECT | STT_FUNC);
+                        && (matches!(symbol_type, STT_OBJECT | STT_FUNC) || tls_get_addr_notype);
                     if !supported_import {
                         return Err(SharedObjectError::UndefinedNonlocal {
                             object_index: input.object_index,
@@ -1105,6 +1184,7 @@ fn validate_inputs(
         sites: import_sites,
         got_symbols,
         plt_symbols,
+        tls_gd_symbols,
     })
 }
 
@@ -1134,6 +1214,61 @@ fn mask_import_relocations<'a>(
             }
         })
         .collect()
+}
+
+fn export_dynamic_symbol_indices(
+    exports: &[ExportSymbol],
+) -> Result<BTreeMap<Vec<u8>, u32>, SharedObjectError> {
+    exports
+        .iter()
+        .enumerate()
+        .map(|(offset, export)| {
+            let index = offset
+                .checked_add(1)
+                .ok_or(SharedObjectError::MetadataTooLarge)?;
+            let index = u32::try_from(index).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+            Ok((export.name.clone(), index))
+        })
+        .collect()
+}
+
+fn build_tls_gd_relocation_table(
+    symbols: &BTreeSet<Vec<u8>>,
+    entries: &BTreeMap<Vec<u8>, u64>,
+    dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+) -> Result<Vec<u8>, SharedObjectError> {
+    let capacity = symbols
+        .len()
+        .checked_mul(2)
+        .and_then(|count| count.checked_mul(ELF64_RELA_SIZE))
+        .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let mut bytes = Vec::with_capacity(capacity);
+
+    for name in symbols {
+        let descriptor = entries
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingTlsGdEntry { name: name.clone() })?;
+        let dynamic_index = dynamic_indices
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingTlsDynamicSymbol { name: name.clone() })?;
+
+        let dtpmod_info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_DTPMOD64);
+        bytes.extend_from_slice(&descriptor.to_le_bytes());
+        bytes.extend_from_slice(&dtpmod_info.to_le_bytes());
+        bytes.extend_from_slice(&0_i64.to_le_bytes());
+
+        let dtpoff_target = descriptor
+            .checked_add(8)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let dtpoff_info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_DTPOFF64);
+        bytes.extend_from_slice(&dtpoff_target.to_le_bytes());
+        bytes.extend_from_slice(&dtpoff_info.to_le_bytes());
+        bytes.extend_from_slice(&0_i64.to_le_bytes());
+    }
+
+    Ok(bytes)
 }
 
 fn import_dynamic_symbol_indices(

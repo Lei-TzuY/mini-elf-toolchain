@@ -12,6 +12,16 @@ use crate::relocations::Elf64RelaTable;
 use crate::resolve::{resolve_symbols, NamedSymbol, ResolutionError, SymbolDefinition};
 use crate::symbol_addresses::{final_symbol_addresses, FinalSymbolAddressError};
 
+#[derive(Debug, Default)]
+pub struct LinkSyntheticEntries {
+    pub got_entries: BTreeMap<Vec<u8>, u64>,
+    pub tls_got_entries: BTreeMap<Vec<u8>, u64>,
+    pub tls_gd_entries: BTreeMap<Vec<u8>, u64>,
+    pub unresolved_got_symbols: BTreeSet<Vec<u8>>,
+    pub plt_entries: BTreeMap<Vec<u8>, u64>,
+    pub unresolved_plt_symbols: BTreeSet<Vec<u8>>,
+}
+
 #[derive(Debug)]
 pub struct LinkContext<'a> {
     symbols_by_object: Vec<Vec<NamedSymbol<'a>>>,
@@ -19,6 +29,7 @@ pub struct LinkContext<'a> {
     global_addresses: BTreeMap<Vec<u8>, u64>,
     got_entries: BTreeMap<Vec<u8>, u64>,
     tls_got_entries: BTreeMap<Vec<u8>, u64>,
+    tls_gd_entries: BTreeMap<Vec<u8>, u64>,
     unresolved_got_symbols: BTreeSet<Vec<u8>>,
     plt_entries: BTreeMap<Vec<u8>, u64>,
     unresolved_plt_symbols: BTreeSet<Vec<u8>>,
@@ -136,22 +147,19 @@ pub fn build_link_context_with_got_entry_maps_and_unresolved_got<'a>(
     build_link_context_with_got_plt_maps_and_unresolved(
         objects,
         layout,
-        got_entries,
-        tls_got_entries,
-        unresolved_got_symbols,
-        BTreeMap::new(),
-        BTreeSet::new(),
+        LinkSyntheticEntries {
+            got_entries,
+            tls_got_entries,
+            unresolved_got_symbols,
+            ..LinkSyntheticEntries::default()
+        },
     )
 }
 
 pub fn build_link_context_with_got_plt_maps_and_unresolved<'a>(
     objects: &[ValidatedObject<'a>],
     layout: &[LaidOutSection],
-    got_entries: BTreeMap<Vec<u8>, u64>,
-    tls_got_entries: BTreeMap<Vec<u8>, u64>,
-    unresolved_got_symbols: BTreeSet<Vec<u8>>,
-    plt_entries: BTreeMap<Vec<u8>, u64>,
-    unresolved_plt_symbols: BTreeSet<Vec<u8>>,
+    synthetic: LinkSyntheticEntries,
 ) -> Result<LinkContext<'a>, LinkContextBuildError> {
     let mut symbols_by_object = Vec::with_capacity(objects.len());
 
@@ -181,11 +189,12 @@ pub fn build_link_context_with_got_plt_maps_and_unresolved<'a>(
         symbols_by_object,
         definitions,
         global_addresses,
-        got_entries,
-        tls_got_entries,
-        unresolved_got_symbols,
-        plt_entries,
-        unresolved_plt_symbols,
+        got_entries: synthetic.got_entries,
+        tls_got_entries: synthetic.tls_got_entries,
+        tls_gd_entries: synthetic.tls_gd_entries,
+        unresolved_got_symbols: synthetic.unresolved_got_symbols,
+        plt_entries: synthetic.plt_entries,
+        unresolved_plt_symbols: synthetic.unresolved_plt_symbols,
         layout: layout.to_vec(),
     })
 }
@@ -205,6 +214,10 @@ impl LinkContext<'_> {
 
     pub fn tls_got_entries(&self) -> &BTreeMap<Vec<u8>, u64> {
         &self.tls_got_entries
+    }
+
+    pub fn tls_gd_entries(&self) -> &BTreeMap<Vec<u8>, u64> {
+        &self.tls_gd_entries
     }
 
     pub fn layout(&self) -> &[LaidOutSection] {
@@ -236,6 +249,7 @@ impl LinkContext<'_> {
                 definitions: &self.definitions,
                 got_entries: &self.got_entries,
                 tls_got_entries: &self.tls_got_entries,
+                tls_gd_entries: &self.tls_gd_entries,
                 unresolved_got_symbols: &self.unresolved_got_symbols,
                 plt_entries: &self.plt_entries,
                 unresolved_plt_symbols: &self.unresolved_plt_symbols,
