@@ -307,7 +307,7 @@ new_value:
     let script = dir.join("provider.map");
     fs::write(
         &script,
-        "VERS_1 { global: old_value; };\nVERS_2 { global: new_value; local: *; } VERS_1;\n",
+        "VERS_2 { global: new_value; local: *; } VERS_1;\nVERS_1 { global: old_value; };\n",
     )
     .unwrap();
     let shared = dir.join("libinherit.so");
