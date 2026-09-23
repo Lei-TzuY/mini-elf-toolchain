@@ -236,25 +236,31 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_initial_exec_tls_rejects_weak_undefined_tls_symbol() {
+fn shared_initial_exec_tls_keeps_defined_weak_tls_fail_closed() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("undefined");
+    let dir = temp_dir("defined-weak");
     let object = assemble(
         &dir,
-        "weak-undefined",
-        r#".section .text
-.globl read_external_ie
-.type read_external_ie,@function
-.weak external_tls
-.type external_tls,@tls_object
-read_external_ie:
-    mov external_tls@gottpoff(%rip), %rax
+        "weak-defined",
+        r#".section .tdata,"awT",@progbits
+.align 8
+.weak local_weak_tls
+.type local_weak_tls,@tls_object
+local_weak_tls:
+    .quad 7
+.size local_weak_tls, .-local_weak_tls
+
+.section .text
+.globl read_local_weak_ie
+.type read_local_weak_ie,@function
+read_local_weak_ie:
+    mov local_weak_tls@gottpoff(%rip), %rax
     mov %fs:(%rax), %rax
     ret
-.size read_external_ie, .-read_external_ie
+.size read_local_weak_ie, .-read_local_weak_ie
 "#,
     );
     let output = dir.join("must-not-exist.so");
