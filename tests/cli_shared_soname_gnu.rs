@@ -154,7 +154,10 @@ read_provider_value:
     assert!(consumer_dynamic.status.success());
     let consumer_dynamic = String::from_utf8_lossy(&consumer_dynamic.stdout);
     assert!(consumer_dynamic.contains("(NEEDED)"), "{consumer_dynamic}");
-    assert!(consumer_dynamic.contains("[libprovider.so]"), "{consumer_dynamic}");
+    assert!(
+        consumer_dynamic.contains("[libprovider.so]"),
+        "{consumer_dynamic}"
+    );
 
     #[cfg(target_os = "linux")]
     {
@@ -199,7 +202,10 @@ int main(int argc, char **argv) {
             .env("LD_LIBRARY_PATH", &dir)
             .status()
             .unwrap();
-        assert!(status.success(), "self-hosted provider consumer returned {status}");
+        assert!(
+            status.success(),
+            "self-hosted provider consumer returned {status}"
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
@@ -261,7 +267,10 @@ fn soname_is_rejected_outside_shared_mode_before_input_io() {
     assert!(!result.status.success());
     assert!(result.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&result.stderr);
-    assert!(stderr.contains("--soname is only supported with --shared"), "{stderr}");
+    assert!(
+        stderr.contains("--soname is only supported with --shared"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("missing.o"), "{stderr}");
     assert!(!output.exists());
 
