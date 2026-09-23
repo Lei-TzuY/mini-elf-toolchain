@@ -134,16 +134,16 @@ tls_zero:
         assert!(symbols.status.success());
         let symbols = String::from_utf8_lossy(&symbols.stdout);
         assert!(
-            symbols.lines().any(|line| {
-                line.contains(" TLS ") && line.ends_with(" tls_init")
-            }),
+            symbols
+                .lines()
+                .any(|line| { line.contains(" TLS ") && line.ends_with(" tls_init") }),
             "{} is missing dynamic STT_TLS tls_init: {symbols}",
             shared.display()
         );
         assert!(
-            symbols.lines().any(|line| {
-                line.contains(" TLS ") && line.ends_with(" tls_zero")
-            }),
+            symbols
+                .lines()
+                .any(|line| { line.contains(" TLS ") && line.ends_with(" tls_zero") }),
             "{} is missing dynamic STT_TLS tls_zero: {symbols}",
             shared.display()
         );
