@@ -265,6 +265,22 @@ int main(int argc, char **argv) {
         "{versions}"
     );
 
+    let hidden_leaf = dir.join("libdeep.hidden");
+    fs::rename(&leaf, &hidden_leaf).unwrap();
+    let missing_leaf = Command::new(env!("CARGO_BIN_EXE_mini-elf-versym-needed"))
+        .arg(&consumer)
+        .output()
+        .unwrap();
+    assert!(!missing_leaf.status.success());
+    assert!(missing_leaf.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&missing_leaf.stderr);
+    assert!(
+        stderr.contains("cannot resolve transitive shared provider dependency")
+            || stderr.contains("checked dependency closure"),
+        "{stderr}"
+    );
+    fs::rename(&hidden_leaf, &leaf).unwrap();
+
     let _ = fs::remove_dir_all(dir);
 }
 
