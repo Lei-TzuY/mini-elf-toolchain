@@ -2298,8 +2298,10 @@ fn build_plt_import_relocation_table(
 }
 
 #[derive(Debug)]
-struct ConsumerVersionMetadata {
+struct VersionMetadata {
     versym: Vec<u8>,
+    verdef: Vec<u8>,
+    definition_count: usize,
     verneed: Vec<u8>,
     provider_count: usize,
 }
@@ -2311,19 +2313,16 @@ fn append_dynamic_string(table: &mut Vec<u8>, value: &[u8]) -> Result<u32, Share
     Ok(offset)
 }
 
-fn build_consumer_version_metadata(
-    exports_len: usize,
+fn build_version_metadata(
+    exports: &[ExportSymbol],
     imports: &BTreeMap<Vec<u8>, ImportSymbol>,
     requirements: &[SharedVersionRequirement],
     dynstr: &mut Vec<u8>,
-) -> Result<ConsumerVersionMetadata, SharedObjectError> {
-    if requirements.is_empty() {
-        return Ok(ConsumerVersionMetadata {
-            versym: Vec::new(),
-            verneed: Vec::new(),
-            provider_count: 0,
-        });
-    }
+) -> Result<VersionMetadata, SharedObjectError> {
+    let local_versions = exports
+        .iter()
+        .filter_map(|export| export.version.clone())
+        .collect::<BTreeSet<_>>();
 
     let mut group_keys = BTreeSet::<(Vec<u8>, Vec<u8>)>::new();
     let mut requirement_by_linker = BTreeMap::<Vec<u8>, (Vec<u8>, Vec<u8>)>::new();
@@ -2344,19 +2343,43 @@ fn build_consumer_version_metadata(
         }
     }
 
-    let mut group_indices = BTreeMap::<(Vec<u8>, Vec<u8>), u16>::new();
-    for (offset, key) in group_keys.into_iter().enumerate() {
-        let raw = usize::from(VERSYM_FIRST_VERSION)
-            .checked_add(offset)
+    if local_versions.is_empty() && group_keys.is_empty() {
+        return Ok(VersionMetadata {
+            versym: Vec::new(),
+            verdef: Vec::new(),
+            definition_count: 0,
+            verneed: Vec::new(),
+            provider_count: 0,
+        });
+    }
+
+    let mut next_index = usize::from(VERSYM_FIRST_VERSION);
+    let mut local_indices = BTreeMap::<Vec<u8>, u16>::new();
+    for version in &local_versions {
+        let index = u16::try_from(next_index).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        if index > VERSYM_INDEX_MASK {
+            return Err(SharedObjectError::MetadataTooLarge);
+        }
+        local_indices.insert(version.clone(), index);
+        next_index = next_index
+            .checked_add(1)
             .ok_or(SharedObjectError::MetadataTooLarge)?;
-        let index = u16::try_from(raw).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+    }
+
+    let mut group_indices = BTreeMap::<(Vec<u8>, Vec<u8>), u16>::new();
+    for key in group_keys {
+        let index = u16::try_from(next_index).map_err(|_| SharedObjectError::MetadataTooLarge)?;
         if index > VERSYM_INDEX_MASK {
             return Err(SharedObjectError::MetadataTooLarge);
         }
         group_indices.insert(key, index);
+        next_index = next_index
+            .checked_add(1)
+            .ok_or(SharedObjectError::MetadataTooLarge)?;
     }
 
-    let symbol_count = exports_len
+    let symbol_count = exports
+        .len()
         .checked_add(imports.len())
         .and_then(|count| count.checked_add(1))
         .ok_or(SharedObjectError::MetadataTooLarge)?;
@@ -2366,6 +2389,17 @@ fn build_consumer_version_metadata(
     let mut versym = vec![0_u8; versym_size];
     for symbol_index in 1..symbol_count {
         put_u16(&mut versym, symbol_index * 2, VERSYM_GLOBAL);
+    }
+
+    for (offset, export) in exports.iter().enumerate() {
+        let Some(version) = export.version.as_ref() else {
+            continue;
+        };
+        let index = local_indices
+            .get(version)
+            .copied()
+            .ok_or(SharedObjectError::MetadataTooLarge)?;
+        put_u16(&mut versym, (offset + 1) * 2, index);
     }
 
     for (offset, (linker_name, import)) in imports.iter().enumerate() {
@@ -2389,10 +2423,48 @@ fn build_consumer_version_metadata(
             .copied()
             .ok_or(SharedObjectError::MetadataTooLarge)?;
         let symbol_index = 1usize
-            .checked_add(exports_len)
+            .checked_add(exports.len())
             .and_then(|index| index.checked_add(offset))
             .ok_or(SharedObjectError::MetadataTooLarge)?;
         put_u16(&mut versym, symbol_index * 2, version_index);
+    }
+
+    let mut local_name_offsets = BTreeMap::<Vec<u8>, u32>::new();
+    for version in &local_versions {
+        local_name_offsets.insert(version.clone(), append_dynamic_string(dynstr, version)?);
+    }
+
+    let mut verdef = Vec::new();
+    let definition_count = local_versions.len();
+    for (definition_index, version) in local_versions.iter().enumerate() {
+        let index = local_indices
+            .get(version)
+            .copied()
+            .ok_or(SharedObjectError::MetadataTooLarge)?;
+        let record_size = ELF64_VERDEF_SIZE
+            .checked_add(ELF64_VERDAUX_SIZE)
+            .ok_or(SharedObjectError::MetadataTooLarge)?;
+        let next = if definition_index + 1 == definition_count {
+            0
+        } else {
+            u32::try_from(record_size).map_err(|_| SharedObjectError::MetadataTooLarge)?
+        };
+
+        verdef.extend_from_slice(&VER_DEF_CURRENT.to_le_bytes());
+        verdef.extend_from_slice(&0_u16.to_le_bytes());
+        verdef.extend_from_slice(&index.to_le_bytes());
+        verdef.extend_from_slice(&1_u16.to_le_bytes());
+        verdef.extend_from_slice(&sysv_elf_hash(version).to_le_bytes());
+        verdef.extend_from_slice(&(ELF64_VERDEF_SIZE as u32).to_le_bytes());
+        verdef.extend_from_slice(&next.to_le_bytes());
+        verdef.extend_from_slice(
+            &local_name_offsets
+                .get(version)
+                .copied()
+                .ok_or(SharedObjectError::MetadataTooLarge)?
+                .to_le_bytes(),
+        );
+        verdef.extend_from_slice(&0_u32.to_le_bytes());
     }
 
     let mut providers = BTreeMap::<Vec<u8>, Vec<(Vec<u8>, u16)>>::new();
@@ -2466,8 +2538,10 @@ fn build_consumer_version_metadata(
         }
     }
 
-    Ok(ConsumerVersionMetadata {
+    Ok(VersionMetadata {
         versym,
+        verdef,
+        definition_count,
         verneed,
         provider_count,
     })
