@@ -12,10 +12,18 @@ fn command_reports(program: &str, marker: &str) -> bool {
             || String::from_utf8_lossy(&output.stderr).contains(marker))
 }
 
+fn command_available(program: &str) -> bool {
+    Command::new(program)
+        .arg("--version")
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
 fn have_tools() -> bool {
     command_reports("as", "GNU assembler")
         && command_reports("readelf", "GNU readelf")
-        && command_reports("cc", "gcc")
+        && command_available("cc")
 }
 
 fn temp_dir(label: &str) -> PathBuf {
@@ -91,8 +99,9 @@ exported_pointer:
 
     let shared = dir.join("librelative.so");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
-        .args(["link", "--shared", "-o"])
+        .args(["link", "-o"])
         .arg(&shared)
+        .arg("--shared")
         .arg(&object)
         .output()
         .unwrap();
@@ -204,8 +213,9 @@ exported_pointer:
     let output = dir.join("must-not-exist.so");
 
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
-        .args(["link", "--shared", "-o"])
+        .args(["link", "-o"])
         .arg(&output)
+        .arg("--shared")
         .arg(&object)
         .output()
         .unwrap();
