@@ -145,8 +145,17 @@ where
         let (shared_object, raw_remaining) = extract_shared_argument(&raw_remaining)?;
         let needed = extract_needed_arguments(&raw_remaining)?;
         if !shared_object && !needed.specs.is_empty() {
+            let provider_requested = needed
+                .specs
+                .iter()
+                .any(|spec| matches!(spec, NeededSpec::Provider(_)));
             return Err(CliError::Usage(
-                "--needed/--needed-from are only supported with --shared".to_owned(),
+                if provider_requested {
+                    "--needed-from is only supported with --shared"
+                } else {
+                    "--needed is only supported with --shared"
+                }
+                .to_owned(),
             ));
         }
         let raw_remaining = needed.arguments;
