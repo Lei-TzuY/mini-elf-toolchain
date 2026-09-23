@@ -436,11 +436,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld(
         .ok_or(RelocatedSectionError::GotSizeOverflow {
             symbol_count: tls_gd_symbols.len(),
         })?;
-    let tls_ld_size = if tls_ld_enabled {
-        TLS_LD_ENTRY_SIZE
-    } else {
-        0
-    };
+    let tls_ld_size = if tls_ld_enabled { TLS_LD_ENTRY_SIZE } else { 0 };
     let got_size = fixed_got_size
         .checked_add(tls_gd_size)
         .and_then(|size| size.checked_add(tls_ld_size))
