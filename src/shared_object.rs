@@ -27,7 +27,7 @@ use crate::tls::{
     compute_static_tls_layout, inject_static_tls_program_header, StaticTlsLayout,
     StaticTlsLayoutError, StaticTlsProgramHeaderError,
 };
-use crate::version_script::VersionScript;
+use crate::version_script::{VersionScript, VersionScriptMatchError};
 use crate::x86_64_relocations::{
     apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_DTPMOD64, R_X86_64_DTPOFF32,
     R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPC32_TLSDESC, R_X86_64_GOTPCREL,
@@ -126,6 +126,11 @@ pub enum SharedObjectError {
     VersionScriptUnknownSymbol {
         name: Vec<u8>,
         version: Vec<u8>,
+    },
+    VersionScriptPatternConflict {
+        name: Vec<u8>,
+        first_version: Vec<u8>,
+        second_version: Vec<u8>,
     },
     ConflictingDynamicExportName {
         name: Vec<u8>,
@@ -400,6 +405,17 @@ impl fmt::Display for SharedObjectError {
                 "version script assigns undefined/non-exportable symbol {:?} to version {:?}",
                 String::from_utf8_lossy(name),
                 String::from_utf8_lossy(version)
+            ),
+            Self::VersionScriptPatternConflict {
+                name,
+                first_version,
+                second_version,
+            } => write!(
+                f,
+                "version script symbol {:?} matches multiple bounded prefix patterns assigned to different versions {:?} and {:?}",
+                String::from_utf8_lossy(name),
+                String::from_utf8_lossy(first_version),
+                String::from_utf8_lossy(second_version)
             ),
             Self::ConflictingDynamicExportName { name } => write!(
                 f,
@@ -746,6 +762,7 @@ impl std::error::Error for SharedObjectError {
             Self::TlsLdOffset { source, .. } => Some(source),
             Self::RelocationUnsupported { .. }
             | Self::PreemptibleRelativeTarget { .. }
+            | Self::VersionScriptPatternConflict { .. }
             | Self::ExternalImportUnsupportedBinding { .. }
             | Self::ConflictingImportSymbolType { .. }
             | Self::MalformedVersionedImportName { .. }
@@ -1202,8 +1219,24 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
                     name: definition.name.clone(),
                 });
             }
-            if let Some(version) = script.version_for(&definition.name) {
-                matched_script_symbols.insert(definition.name.clone());
+            let version =
+                script
+                    .resolve_version(&definition.name)
+                    .map_err(|source| match source {
+                        VersionScriptMatchError::MultiplePrefixVersions {
+                            symbol,
+                            first_version,
+                            second_version,
+                        } => SharedObjectError::VersionScriptPatternConflict {
+                            name: symbol,
+                            first_version,
+                            second_version,
+                        },
+                    })?;
+            if let Some(version) = version {
+                if script.version_for(&definition.name).is_some() {
+                    matched_script_symbols.insert(definition.name.clone());
+                }
                 ExportIdentity {
                     dynamic_name: definition.name.clone(),
                     version: Some(version.to_vec()),
@@ -2462,10 +2495,13 @@ fn build_version_metadata(
     version_script: Option<&VersionScript>,
     dynstr: &mut Vec<u8>,
 ) -> Result<VersionMetadata, SharedObjectError> {
-    let local_versions = exports
+    let mut local_versions = exports
         .iter()
         .filter_map(|export| export.version.clone())
         .collect::<BTreeSet<_>>();
+    if let Some(script) = version_script {
+        local_versions.extend(script.versions().map(ToOwned::to_owned));
+    }
 
     let mut group_keys = BTreeSet::<(Vec<u8>, Vec<u8>)>::new();
     let mut requirement_by_linker = BTreeMap::<Vec<u8>, (Vec<u8>, Vec<u8>)>::new();
