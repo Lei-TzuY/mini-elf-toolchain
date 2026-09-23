@@ -570,10 +570,16 @@ pub fn relocate_allocatable_sections_with_external_got_and_plt(
             got_link_map,
             b"<plt0-link-map>",
         )?;
+        let plt0_second = plt_layout
+            .address
+            .checked_add(6)
+            .ok_or(RelocatedSectionError::PltSizeOverflow {
+                symbol_count: external_plt_symbols.len(),
+            })?;
         append_rip_indirect(
             &mut plt_bytes,
             [0xff, 0x25],
-            plt_layout.address + 6,
+            plt0_second,
             got_resolver,
             b"<plt0-resolver>",
         )?;
