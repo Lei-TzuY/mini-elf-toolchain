@@ -278,9 +278,7 @@ pub fn relocate_allocatable_sections_with_external_got(
     let got_symbols = collect_static_got_symbols(inputs)?;
     for name in external_got_symbols {
         if !got_symbols.iter().any(|candidate| candidate == name) {
-            return Err(RelocatedSectionError::MissingExternalGotSymbol {
-                name: name.clone(),
-            });
+            return Err(RelocatedSectionError::MissingExternalGotSymbol { name: name.clone() });
         }
     }
     let tls_got_symbols = collect_static_tls_got_symbols(inputs)?;
