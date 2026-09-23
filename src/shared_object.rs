@@ -30,7 +30,9 @@ const ELF64_SYMBOL_SIZE: usize = 24;
 const ELF64_DYNAMIC_SIZE: usize = 16;
 const ELF64_RELA_SIZE: usize = 24;
 const R_X86_64_NONE: u32 = 0;
+const STT_NOTYPE: u8 = 0;
 const STT_OBJECT: u8 = 1;
+const GLOBAL_OFFSET_TABLE_SYMBOL: &[u8] = b"_GLOBAL_OFFSET_TABLE_";
 
 const DT_NULL: i64 = 0;
 const DT_HASH: i64 = 4;
@@ -248,7 +250,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object symbol {symbol_index} in object {object_index} ({:?}) is undefined; external dynamic binding is not implemented",
+                "shared object symbol {symbol_index} in object {object_index} ({:?}) is undefined and is outside the bounded external import surface",
                 String::from_utf8_lossy(name)
             ),
             Self::NondefaultVisibility {
@@ -673,6 +675,13 @@ fn validate_inputs(
                 }
                 if symbol.symbol.section_index == SHN_UNDEF && !symbol.name.is_empty() {
                     let symbol_type = symbol.symbol.info & 0x0f;
+                    let linker_owned_got_symbol = !got_symbols.is_empty()
+                        && symbol.name == GLOBAL_OFFSET_TABLE_SYMBOL
+                        && binding == STB_GLOBAL
+                        && symbol_type == STT_NOTYPE;
+                    if linker_owned_got_symbol {
+                        continue;
+                    }
                     let supported_import = import_symbols.contains_key(symbol.name)
                         && binding == STB_GLOBAL
                         && symbol_type == STT_OBJECT;
