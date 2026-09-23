@@ -299,10 +299,9 @@ int main(int argc, char **argv) {
         );
 
         for shared in [&mini, &gnu] {
-            for (provider_dir, expect_present) in [
-                (&link_provider_dir, "1"),
-                (&runtime_provider_dir, "0"),
-            ] {
+            for (provider_dir, expect_present) in
+                [(&link_provider_dir, "1"), (&runtime_provider_dir, "0")]
+            {
                 let status = Command::new(&runner)
                     .arg(shared)
                     .arg(expect_present)
