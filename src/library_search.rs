@@ -80,6 +80,7 @@ impl std::error::Error for LibrarySearchError {
 pub struct SharedLibraryResolution {
     pub arguments: Vec<OsString>,
     pub providers: Vec<PathBuf>,
+    pub search_paths: Vec<PathBuf>,
 }
 
 enum SharedLibraryChoice {
@@ -172,6 +173,7 @@ pub fn resolve_shared_library_arguments(
     Ok(SharedLibraryResolution {
         arguments: resolved,
         providers,
+        search_paths,
     })
 }
 
