@@ -265,3 +265,55 @@ int main(int argc, char **argv) {{
 
     let _ = fs::remove_dir_all(dir);
 }
+
+
+#[test]
+fn defined_function_got_interposition_remains_fail_closed() {
+    if !command_reports("as", "GNU assembler") {
+        return;
+    }
+
+    let dir = temp_dir("function-boundary");
+    let object = assemble(
+        &dir,
+        "function-provider",
+        r#".section .note.GNU-stack,"",@progbits
+.text
+.globl interposable_function
+.type interposable_function,@function
+interposable_function:
+    mov $7, %eax
+    ret
+.size interposable_function, .-interposable_function
+
+.globl address_of_interposable_function
+.type address_of_interposable_function,@function
+address_of_interposable_function:
+    movq interposable_function@GOTPCREL(%rip), %rax
+    ret
+.size address_of_interposable_function, .-address_of_interposable_function
+"#,
+    );
+    let output = dir.join("must-not-exist.so");
+
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--shared")
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(
+        stderr.contains("default-visible nonlocal")
+            || stderr.contains("interposition")
+            || stderr.contains("preemptible"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
