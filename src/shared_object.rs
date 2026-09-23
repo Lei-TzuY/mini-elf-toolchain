@@ -2625,12 +2625,8 @@ fn build_dynamic_metadata(
         None
     };
 
-    let version_metadata = build_consumer_version_metadata(
-        exports.len(),
-        imports,
-        names.version_requirements,
-        &mut dynstr,
-    )?;
+    let version_metadata =
+        build_version_metadata(exports, imports, names.version_requirements, &mut dynstr)?;
     let dynstr_offset = dynsym_offset
         .checked_add(dynsym_size)
         .ok_or(SharedObjectError::MetadataTooLarge)?;
@@ -2641,9 +2637,16 @@ fn build_dynamic_metadata(
         2,
     )
     .ok_or(SharedObjectError::MetadataTooLarge)?;
-    let verneed_offset = align_up_usize(
+    let verdef_offset = align_up_usize(
         versym_offset
             .checked_add(version_metadata.versym.len())
+            .ok_or(SharedObjectError::MetadataTooLarge)?,
+        8,
+    )
+    .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let verneed_offset = align_up_usize(
+        verdef_offset
+            .checked_add(version_metadata.verdef.len())
             .ok_or(SharedObjectError::MetadataTooLarge)?,
         8,
     )
@@ -2681,8 +2684,20 @@ fn build_dynamic_metadata(
         .and_then(|count| count.checked_add(usize::from(relative_relocation_count != 0)))
         .and_then(|count| count.checked_add(if has_plt_relocations { 4 } else { 0 }))
         .and_then(|count| {
+            count.checked_add(usize::from(
+                version_metadata.definition_count != 0 || version_metadata.provider_count != 0,
+            ))
+        })
+        .and_then(|count| {
+            count.checked_add(if version_metadata.definition_count != 0 {
+                2
+            } else {
+                0
+            })
+        })
+        .and_then(|count| {
             count.checked_add(if version_metadata.provider_count != 0 {
-                3
+                2
             } else {
                 0
             })
@@ -2732,6 +2747,8 @@ fn build_dynamic_metadata(
     bytes[dynstr_offset..dynstr_offset + dynstr.len()].copy_from_slice(&dynstr);
     bytes[versym_offset..versym_offset + version_metadata.versym.len()]
         .copy_from_slice(&version_metadata.versym);
+    bytes[verdef_offset..verdef_offset + version_metadata.verdef.len()]
+        .copy_from_slice(&version_metadata.verdef);
     bytes[verneed_offset..verneed_offset + version_metadata.verneed.len()]
         .copy_from_slice(&version_metadata.verneed);
     bytes[rela_offset..rela_offset + rela_bytes.len()].copy_from_slice(rela_bytes);
@@ -2757,11 +2774,24 @@ fn build_dynamic_metadata(
         (DT_STRSZ, dynstr.len() as u64),
         (DT_SYMENT, ELF64_SYMBOL_SIZE as u64),
     ]);
-    if version_metadata.provider_count != 0 {
+    if version_metadata.definition_count != 0 || version_metadata.provider_count != 0 {
         let versym_address = checked_metadata_address(base_address, versym_offset)?;
+        entries.push((DT_VERSYM, versym_address));
+    }
+    if version_metadata.definition_count != 0 {
+        let verdef_address = checked_metadata_address(base_address, verdef_offset)?;
+        entries.extend_from_slice(&[
+            (DT_VERDEF, verdef_address),
+            (
+                DT_VERDEFNUM,
+                u64::try_from(version_metadata.definition_count)
+                    .map_err(|_| SharedObjectError::MetadataTooLarge)?,
+            ),
+        ]);
+    }
+    if version_metadata.provider_count != 0 {
         let verneed_address = checked_metadata_address(base_address, verneed_offset)?;
         entries.extend_from_slice(&[
-            (DT_VERSYM, versym_address),
             (DT_VERNEED, verneed_address),
             (
                 DT_VERNEEDNUM,
