@@ -182,7 +182,7 @@ pub enum SharedObjectError {
     MissingGotEntry {
         name: Vec<u8>,
     },
-    MissingImportPltGotEntry {
+    MissingPltGotEntry {
         name: Vec<u8>,
     },
     MissingTlsGdEntry {
@@ -496,7 +496,7 @@ impl fmt::Display for SharedObjectError {
                 "shared object GOT symbol {:?} has no synthetic GOT slot",
                 String::from_utf8_lossy(name)
             ),
-            Self::MissingImportPltGotEntry { name } => write!(
+            Self::MissingPltGotEntry { name } => write!(
                 f,
                 "shared object external PLT import {:?} has no synthetic PLT-GOT slot",
                 String::from_utf8_lossy(name)
@@ -789,7 +789,7 @@ impl std::error::Error for SharedObjectError {
             | Self::MissingDynamicSymbol { .. }
             | Self::MissingGotDynamicSymbol { .. }
             | Self::MissingGotEntry { .. }
-            | Self::MissingImportPltGotEntry { .. }
+            | Self::MissingPltGotEntry { .. }
             | Self::MissingTlsGdEntry { .. }
             | Self::MissingTlsDynamicSymbol { .. }
             | Self::TlsGdTargetNotExecutable { .. }
@@ -1360,9 +1360,10 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
         &import_dynamic_indices,
     )?;
     rela_bytes.extend_from_slice(&tls_desc_rela_bytes);
-    let jmprel_bytes = build_plt_import_relocation_table(
+    let jmprel_bytes = build_plt_relocation_table(
         &imports.plt_symbols,
         &plt_got_entries,
+        &export_dynamic_indices,
         &import_dynamic_indices,
     )?;
 
@@ -1867,6 +1868,27 @@ fn validate_inputs(
                         });
                     if is_got_import && supported_definition {
                         got_symbols.insert(symbol.name.to_vec());
+                        continue;
+                    }
+                    let supported_plt_definition = is_plt_import
+                        && definitions.get(symbol.name).is_some_and(|definition| {
+                            let definition_binding = definition.symbol.info >> 4;
+                            let definition_type = definition.symbol.info & 0x0f;
+                            definition_binding == STB_GLOBAL
+                                && definition_type == STT_FUNC
+                                && definition.symbol.other == 0
+                        });
+                    if supported_plt_definition {
+                        if target.flags & SHF_ALLOC == 0 || target.flags & SHF_EXECINSTR == 0 {
+                            return Err(SharedObjectError::ExternalPltTargetNotExecutable {
+                                object_index: input.object_index,
+                                rela_section_index: table.section_index,
+                                relocation_index,
+                                target_section_index: table.target_section_index,
+                                flags: target.flags,
+                            });
+                        }
+                        plt_symbols.insert(symbol.name.to_vec());
                         continue;
                     }
                     if relocation.relocation_type == R_X86_64_64 && supported_definition {
@@ -2508,10 +2530,11 @@ fn build_got_relocation_table(
     Ok(bytes)
 }
 
-fn build_plt_import_relocation_table(
+fn build_plt_relocation_table(
     plt_symbols: &BTreeSet<Vec<u8>>,
     plt_got_entries: &BTreeMap<Vec<u8>, u64>,
-    dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+    export_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+    import_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
 ) -> Result<Vec<u8>, SharedObjectError> {
     let capacity = plt_symbols
         .len()
@@ -2523,9 +2546,10 @@ fn build_plt_import_relocation_table(
         let offset = plt_got_entries
             .get(name)
             .copied()
-            .ok_or_else(|| SharedObjectError::MissingImportPltGotEntry { name: name.clone() })?;
-        let dynamic_index = dynamic_indices
+            .ok_or_else(|| SharedObjectError::MissingPltGotEntry { name: name.clone() })?;
+        let dynamic_index = export_dynamic_indices
             .get(name)
+            .or_else(|| import_dynamic_indices.get(name))
             .copied()
             .ok_or_else(|| SharedObjectError::MissingDynamicSymbol { name: name.clone() })?;
         let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_JUMP_SLOT);
