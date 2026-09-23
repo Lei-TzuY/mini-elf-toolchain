@@ -90,9 +90,9 @@ fn assert_weak_jump_slot(shared: &Path, name: &str, version: Option<&str>) {
     assert!(relocations.status.success());
     let relocations = String::from_utf8_lossy(&relocations.stdout);
     assert!(
-        relocations.lines().any(|line| {
-            line.contains("R_X86_64_JUMP_SLOT") && line.contains(&display_name)
-        }),
+        relocations
+            .lines()
+            .any(|line| { line.contains("R_X86_64_JUMP_SLOT") && line.contains(&display_name) }),
         "{} dynamic relocations:\n{relocations}",
         shared.display()
     );
