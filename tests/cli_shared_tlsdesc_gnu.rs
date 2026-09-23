@@ -237,18 +237,19 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_tlsdesc_keeps_defined_weak_tls_fail_closed() {
+fn shared_tlsdesc_keeps_hidden_defined_weak_tls_fail_closed() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("defined-weak");
+    let dir = temp_dir("hidden-defined-weak");
     let object = assemble(
         &dir,
         "weak-defined",
         r#".section .tdata,"awT",@progbits
 .align 8
 .weak local_weak_tlsdesc
+.hidden local_weak_tlsdesc
 .type local_weak_tlsdesc,@tls_object
 local_weak_tlsdesc:
     .quad 7
@@ -280,8 +281,7 @@ read_local_weak_tlsdesc:
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
         stderr.contains("TLSDESC")
-            && stderr.contains("strong supported definition/import")
-            && stderr.contains("unresolved weak import"),
+            && stderr.contains("default-visible global/weak STT_TLS symbol"),
         "{stderr}"
     );
     assert!(!output.exists());
