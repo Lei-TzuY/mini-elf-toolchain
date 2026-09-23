@@ -928,19 +928,6 @@ fn provider_matches_import(
     }
 }
 
-fn provider_matches_unversioned_imports(
-    provider: &DynamicProviderMetadata,
-    imports: &[SharedImportRequirement],
-) -> bool {
-    imports.iter().any(|import| {
-        import.version.is_none()
-            && provider
-                .exports
-                .get(&import.name)
-                .is_some_and(|types| types.contains(&import.symbol_type))
-    })
-}
-
 fn inspect_transitive_provider_exports(
     root_path: &Path,
     root: &DynamicProviderMetadata,
@@ -968,6 +955,10 @@ fn inspect_transitive_provider_exports(
         queue.push_back((needed.clone(), root_parent.clone(), root.runpath.clone()));
     }
 
+    let mut matched_any = false;
+    let mut version_requirements =
+        BTreeMap::<Vec<u8>, SharedVersionRequirement>::new();
+
     while let Some((needed, provider_directory, runpath)) = queue.pop_front() {
         let dependency_path = resolve_transitive_provider_path(
             &needed,
@@ -994,20 +985,19 @@ fn inspect_transitive_provider_exports(
                 String::from_utf8_lossy(&needed)
             ))
         })?;
-        let mut matched_here = false;
-        let mut found_versions = BTreeMap::<Vec<u8>, SharedVersionRequirement>::new();
+
         for import in imports {
             if !provider_matches_import(&provider, import) {
                 continue;
             }
-            matched_here = true;
+            matched_any = true;
             if !required_versioned.contains(&import.linker_name) {
                 continue;
             }
             let Some(version) = import.version.as_ref() else {
                 continue;
             };
-            found_versions
+            version_requirements
                 .entry(import.linker_name.clone())
                 .or_insert_with(|| SharedVersionRequirement {
                     linker_name: import.linker_name.clone(),
@@ -1016,90 +1006,15 @@ fn inspect_transitive_provider_exports(
                 });
         }
 
-        if matched_here {
-            let mut result = TransitiveProviderMatches {
-                matched_any: true,
-                version_requirements: found_versions.into_values().collect(),
-            };
-            let found = result
-                .version_requirements
+        if matched_any
+            && required_versioned
                 .iter()
-                .map(|requirement| requirement.linker_name.clone())
-                .collect::<BTreeSet<_>>();
-            if required_versioned.iter().all(|name| found.contains(name)) {
-                return Ok(result);
-            }
-
-            let parent = dependency_path
-                .parent()
-                .unwrap_or_else(|| Path::new("."))
-                .to_path_buf();
-            for child in &provider.needed {
-                queue.push_back((child.clone(), parent.clone(), provider.runpath.clone()));
-            }
-
-            while let Some((needed, provider_directory, runpath)) = queue.pop_front() {
-                let dependency_path = resolve_transitive_provider_path(
-                    &needed,
-                    &provider_directory,
-                    runpath.as_deref(),
-                    search_paths,
-                )?;
-                let canonical = fs::canonicalize(&dependency_path).map_err(|error| {
-                    CliError::Failure(format!(
-                        "{}: cannot canonicalize transitive shared provider dependency {:?}: {error}",
-                        dependency_path.display(),
-                        String::from_utf8_lossy(&needed)
-                    ))
-                })?;
-                if !visited.insert(canonical) {
-                    continue;
-                }
-                let file =
-                    read_provider_file(&dependency_path, "transitive shared provider dependency")?;
-                let provider = inspect_dynamic_provider(&file).map_err(|error| {
-                    CliError::Failure(format!(
-                        "{}: cannot inspect transitive shared provider dependency {:?}: {error}",
-                        dependency_path.display(),
-                        String::from_utf8_lossy(&needed)
-                    ))
-                })?;
-                for import in imports {
-                    if !required_versioned.contains(&import.linker_name)
-                        || result
-                            .version_requirements
-                            .iter()
-                            .any(|requirement| requirement.linker_name == import.linker_name)
-                        || !provider_matches_import(&provider, import)
-                    {
-                        continue;
-                    }
-                    let Some(version) = import.version.as_ref() else {
-                        continue;
-                    };
-                    result.version_requirements.push(SharedVersionRequirement {
-                        linker_name: import.linker_name.clone(),
-                        provider: provider.soname.clone(),
-                        version: version.clone(),
-                    });
-                }
-                if required_versioned.iter().all(|name| {
-                    result
-                        .version_requirements
-                        .iter()
-                        .any(|requirement| &requirement.linker_name == name)
-                }) {
-                    return Ok(result);
-                }
-                let parent = dependency_path
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .to_path_buf();
-                for child in &provider.needed {
-                    queue.push_back((child.clone(), parent.clone(), provider.runpath.clone()));
-                }
-            }
-            return Ok(result);
+                .all(|name| version_requirements.contains_key(name))
+        {
+            return Ok(TransitiveProviderMatches {
+                matched_any,
+                version_requirements: version_requirements.into_values().collect(),
+            });
         }
 
         let parent = dependency_path
@@ -1111,7 +1026,10 @@ fn inspect_transitive_provider_exports(
         }
     }
 
-    Ok(TransitiveProviderMatches::default())
+    Ok(TransitiveProviderMatches {
+        matched_any,
+        version_requirements: version_requirements.into_values().collect(),
+    })
 }
 
 fn resolve_transitive_provider_path(
