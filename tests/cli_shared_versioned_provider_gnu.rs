@@ -62,7 +62,7 @@ fn versioned_provider(dir: &Path, stem: &str, source: &str, script: &str, soname
     let object = assemble(dir, stem, source);
     let script_path = dir.join(format!("{stem}.map"));
     fs::write(&script_path, script).unwrap();
-    let shared = dir.join(format!("{stem}.so"));
+    let shared = dir.join(soname);
     let output = Command::new("ld")
         .arg("-shared")
         .arg("--hash-style=gnu")
