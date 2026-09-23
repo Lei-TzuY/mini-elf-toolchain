@@ -319,7 +319,7 @@ fn provider_version_metadata(
             strsz,
         )?
     } else {
-        BTreeSet::new()
+        BTreeMap::new()
     };
 
     Ok(Some(ProviderVersionMetadata {
