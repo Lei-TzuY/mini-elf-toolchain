@@ -1105,8 +1105,11 @@ pub fn link_shared_object_with_needed_soname_runpath_and_versions(
             } else {
                 absolute_value
             };
+            let (dynamic_name, version) = parse_export_identity(&definition.name)?;
             Ok(ExportSymbol {
-                name: definition.name.clone(),
+                linker_name: definition.name.clone(),
+                dynamic_name,
+                version,
                 info: definition.symbol.info,
                 section_index: if definition.symbol.section_index == SHN_ABS {
                     SHN_ABS
@@ -1120,6 +1123,14 @@ pub fn link_shared_object_with_needed_soname_runpath_and_versions(
         .collect::<Result<Vec<_>, SharedObjectError>>()?;
     if exports.is_empty() {
         return Err(SharedObjectError::NoExports);
+    }
+    let mut dynamic_export_names = BTreeSet::new();
+    for export in &exports {
+        if !dynamic_export_names.insert(export.dynamic_name.clone()) {
+            return Err(SharedObjectError::ConflictingDynamicExportName {
+                name: export.dynamic_name.clone(),
+            });
+        }
     }
 
     let export_dynamic_indices = export_dynamic_symbol_indices(&exports)?;
@@ -1889,7 +1900,7 @@ fn export_dynamic_symbol_indices(
                 .checked_add(1)
                 .ok_or(SharedObjectError::MetadataTooLarge)?;
             let index = u32::try_from(index).map_err(|_| SharedObjectError::MetadataTooLarge)?;
-            Ok((export.name.clone(), index))
+            Ok((export.linker_name.clone(), index))
         })
         .collect()
 }
@@ -2502,7 +2513,7 @@ fn build_dynamic_metadata(
         let offset =
             u32::try_from(dynstr.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
         export_name_offsets.push(offset);
-        dynstr.extend_from_slice(&export.name);
+        dynstr.extend_from_slice(&export.dynamic_name);
         dynstr.push(0);
     }
     let mut import_name_offsets = Vec::with_capacity(imports.len());
