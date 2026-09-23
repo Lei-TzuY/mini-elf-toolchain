@@ -197,24 +197,23 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_got_import_rejects_undefined_function_target() {
+fn shared_got_import_rejects_undefined_notype_target() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("function");
+    let dir = temp_dir("notype");
     let object = assemble(
         &dir,
-        "function-import",
+        "notype-import",
         r#".section .text
-.globl address_of_host_function
-.type address_of_host_function,@function
-.extern host_function
-.type host_function,@function
-address_of_host_function:
-    mov host_function@GOTPCREL(%rip), %rax
+.globl address_of_host_symbol
+.type address_of_host_symbol,@function
+.extern host_symbol
+address_of_host_symbol:
+    mov host_symbol@GOTPCREL(%rip), %rax
     ret
-.size address_of_host_function, .-address_of_host_function
+.size address_of_host_symbol, .-address_of_host_symbol
 "#,
     );
     let output = dir.join("must-not-exist.so");
@@ -231,7 +230,7 @@ address_of_host_function:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("STT_OBJECT") || stderr.contains("symbol type"),
+        stderr.contains("STT_OBJECT or STT_FUNC") || stderr.contains("symbol type"),
         "{stderr}"
     );
     assert!(!output.exists());
