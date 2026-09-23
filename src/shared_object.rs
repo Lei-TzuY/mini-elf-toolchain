@@ -64,7 +64,16 @@ const DT_RUNPATH: i64 = 29;
 const DT_FLAGS: i64 = 30;
 const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
+const DT_VERSYM: i64 = 0x6fff_fff0;
 const DT_RELACOUNT: i64 = 0x6fff_fff9;
+const DT_VERNEED: i64 = 0x6fff_fffe;
+const DT_VERNEEDNUM: i64 = 0x6fff_ffff;
+const VER_NEED_CURRENT: u16 = 1;
+const VERSYM_GLOBAL: u16 = 1;
+const VERSYM_FIRST_VERSION: u16 = 2;
+const VERSYM_INDEX_MASK: u16 = 0x7fff;
+const ELF64_VERNEED_SIZE: usize = 16;
+const ELF64_VERNAUX_SIZE: usize = 16;
 const DF_STATIC_TLS: u64 = 0x10;
 
 #[derive(Debug)]
@@ -94,6 +103,20 @@ pub enum SharedObjectError {
         name: Vec<u8>,
         first_type: u8,
         second_type: u8,
+    },
+    MalformedVersionedImportName {
+        name: Vec<u8>,
+    },
+    UnsupportedVersionedImportType {
+        name: Vec<u8>,
+        symbol_type: u8,
+    },
+    InvalidVersionRequirement {
+        name: Vec<u8>,
+        version: Vec<u8>,
+    },
+    VersionRequirementProviderMissing {
+        provider: Vec<u8>,
     },
     ExternalImportUnsupportedType {
         object_index: usize,
@@ -328,6 +351,27 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object import {:?} is referenced with conflicting ELF symbol types {first_type} and {second_type}",
                 String::from_utf8_lossy(name)
+            ),
+            Self::MalformedVersionedImportName { name } => write!(
+                f,
+                "shared object external import {:?} has malformed GNU version syntax; bounded named-version imports require name@VERSION",
+                String::from_utf8_lossy(name)
+            ),
+            Self::UnsupportedVersionedImportType { name, symbol_type } => write!(
+                f,
+                "shared object external import {:?} requests a GNU symbol version with ELF symbol type {symbol_type}; bounded named-version imports currently require STT_OBJECT",
+                String::from_utf8_lossy(name)
+            ),
+            Self::InvalidVersionRequirement { name, version } => write!(
+                f,
+                "shared object version requirement {:?}@{:?} does not match a planned external import",
+                String::from_utf8_lossy(name),
+                String::from_utf8_lossy(version)
+            ),
+            Self::VersionRequirementProviderMissing { provider } => write!(
+                f,
+                "shared object version requirement names provider {:?}, but that provider is not present in DT_NEEDED",
+                String::from_utf8_lossy(provider)
             ),
             Self::ExternalImportUnsupportedType {
                 object_index,
@@ -655,6 +699,10 @@ impl std::error::Error for SharedObjectError {
             | Self::PreemptibleRelativeTarget { .. }
             | Self::ExternalImportUnsupportedBinding { .. }
             | Self::ConflictingImportSymbolType { .. }
+            | Self::MalformedVersionedImportName { .. }
+            | Self::UnsupportedVersionedImportType { .. }
+            | Self::InvalidVersionRequirement { .. }
+            | Self::VersionRequirementProviderMissing { .. }
             | Self::ExternalImportUnsupportedType { .. }
             | Self::ExternalImportTargetNotWritable { .. }
             | Self::ExternalImportRelocationOutOfBounds { .. }
@@ -708,11 +756,46 @@ struct ExportSymbol {
     size: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedImportRequirement {
+    pub linker_name: Vec<u8>,
+    pub name: Vec<u8>,
+    pub symbol_type: u8,
+    pub version: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedVersionRequirement {
+    pub linker_name: Vec<u8>,
+    pub provider: Vec<u8>,
+    pub version: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 struct ImportSymbol {
     name: Vec<u8>,
+    dynamic_name: Vec<u8>,
+    version: Option<Vec<u8>>,
     info: u8,
     size: u64,
+}
+
+fn parse_import_identity(name: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>), SharedObjectError> {
+    let Some(separator) = name.iter().position(|byte| *byte == b'@') else {
+        return Ok((name.to_vec(), None));
+    };
+    let base = &name[..separator];
+    let version = &name[separator + 1..];
+    if base.is_empty()
+        || version.is_empty()
+        || version.contains(&b'@')
+        || name[separator..].starts_with(b"@@")
+    {
+        return Err(SharedObjectError::MalformedVersionedImportName {
+            name: name.to_vec(),
+        });
+    }
+    Ok((base.to_vec(), Some(version.to_vec())))
 }
 
 fn record_import_symbol(
@@ -723,6 +806,13 @@ fn record_import_symbol(
 ) -> Result<(), SharedObjectError> {
     let symbol_type = info & 0x0f;
     let binding = info >> 4;
+    let (dynamic_name, version) = parse_import_identity(name)?;
+    if version.is_some() && symbol_type != STT_OBJECT {
+        return Err(SharedObjectError::UnsupportedVersionedImportType {
+            name: name.to_vec(),
+            symbol_type,
+        });
+    }
 
     match imports.get_mut(name) {
         Some(existing) => {
@@ -746,6 +836,8 @@ fn record_import_symbol(
                 name.to_vec(),
                 ImportSymbol {
                     name: name.to_vec(),
+                    dynamic_name,
+                    version,
                     info,
                     size,
                 },
@@ -782,6 +874,7 @@ struct DynamicNames<'a> {
     needed: &'a [Vec<u8>],
     soname: Option<&'a [u8]>,
     runpath: Option<&'a [u8]>,
+    version_requirements: &'a [SharedVersionRequirement],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -802,7 +895,7 @@ struct DynamicMetadata {
 
 pub fn shared_import_requirements(
     inputs: &[LinkerInputObject<'_>],
-) -> Result<BTreeMap<Vec<u8>, u8>, SharedObjectError> {
+) -> Result<Vec<SharedImportRequirement>, SharedObjectError> {
     let validated = inputs
         .iter()
         .map(LinkerInputObject::validated_object)
@@ -812,8 +905,13 @@ pub fn shared_import_requirements(
     let plan = validate_inputs(inputs, &resolved.definitions)?;
     Ok(plan
         .symbols
-        .into_iter()
-        .map(|(name, symbol)| (name, symbol.info & 0x0f))
+        .into_values()
+        .map(|symbol| SharedImportRequirement {
+            linker_name: symbol.name,
+            name: symbol.dynamic_name,
+            symbol_type: symbol.info & 0x0f,
+            version: symbol.version,
+        })
         .collect())
 }
 
@@ -848,6 +946,24 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     soname: Option<&[u8]>,
     runpath: Option<&[u8]>,
 ) -> Result<ExecutableImage, SharedObjectError> {
+    link_shared_object_with_needed_soname_runpath_and_versions(
+        inputs,
+        page_alignment,
+        needed,
+        soname,
+        runpath,
+        &[],
+    )
+}
+
+pub fn link_shared_object_with_needed_soname_runpath_and_versions(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    needed: &[Vec<u8>],
+    soname: Option<&[u8]>,
+    runpath: Option<&[u8]>,
+    version_requirements: &[SharedVersionRequirement],
+) -> Result<ExecutableImage, SharedObjectError> {
     validate_needed_names(needed)?;
     validate_soname(soname)?;
     validate_runpath(runpath)?;
@@ -859,6 +975,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
     let imports = validate_inputs(inputs, &resolved.definitions)?;
+    validate_version_requirements(needed, &imports.symbols, version_requirements)?;
     let tls_ie_import_symbols = imports
         .tls_ie_symbols
         .iter()
@@ -1020,6 +1137,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
             needed,
             soname,
             runpath,
+            version_requirements,
         },
         DynamicRelocations {
             rela: &rela_bytes,
@@ -1121,6 +1239,34 @@ fn validate_needed_names(needed: &[Vec<u8>]) -> Result<(), SharedObjectError> {
         }
         if name.contains(&0) {
             return Err(SharedObjectError::NeededNameContainsNul { dependency_index });
+        }
+    }
+    Ok(())
+}
+
+fn validate_version_requirements(
+    needed: &[Vec<u8>],
+    imports: &BTreeMap<Vec<u8>, ImportSymbol>,
+    requirements: &[SharedVersionRequirement],
+) -> Result<(), SharedObjectError> {
+    for requirement in requirements {
+        if !needed.iter().any(|name| name == &requirement.provider) {
+            return Err(SharedObjectError::VersionRequirementProviderMissing {
+                provider: requirement.provider.clone(),
+            });
+        }
+        let valid = imports.get(&requirement.linker_name).is_some_and(|import| {
+            import.version.as_deref() == Some(requirement.version.as_slice())
+        });
+        if !valid {
+            let name = imports
+                .get(&requirement.linker_name)
+                .map(|import| import.dynamic_name.clone())
+                .unwrap_or_else(|| requirement.linker_name.clone());
+            return Err(SharedObjectError::InvalidVersionRequirement {
+                name,
+                version: requirement.version.clone(),
+            });
         }
     }
     Ok(())
@@ -2084,6 +2230,182 @@ fn build_plt_import_relocation_table(
     Ok(bytes)
 }
 
+#[derive(Debug)]
+struct ConsumerVersionMetadata {
+    versym: Vec<u8>,
+    verneed: Vec<u8>,
+    provider_count: usize,
+}
+
+fn append_dynamic_string(table: &mut Vec<u8>, value: &[u8]) -> Result<u32, SharedObjectError> {
+    let offset = u32::try_from(table.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+    table.extend_from_slice(value);
+    table.push(0);
+    Ok(offset)
+}
+
+fn build_consumer_version_metadata(
+    exports_len: usize,
+    imports: &BTreeMap<Vec<u8>, ImportSymbol>,
+    requirements: &[SharedVersionRequirement],
+    dynstr: &mut Vec<u8>,
+) -> Result<ConsumerVersionMetadata, SharedObjectError> {
+    if requirements.is_empty() {
+        return Ok(ConsumerVersionMetadata {
+            versym: Vec::new(),
+            verneed: Vec::new(),
+            provider_count: 0,
+        });
+    }
+
+    let mut group_keys = BTreeSet::<(Vec<u8>, Vec<u8>)>::new();
+    let mut requirement_by_linker = BTreeMap::<Vec<u8>, (Vec<u8>, Vec<u8>)>::new();
+    for requirement in requirements {
+        let key = (requirement.provider.clone(), requirement.version.clone());
+        group_keys.insert(key.clone());
+        match requirement_by_linker.get(&requirement.linker_name) {
+            Some(existing) if existing != &key => {
+                return Err(SharedObjectError::InvalidVersionRequirement {
+                    name: requirement.linker_name.clone(),
+                    version: requirement.version.clone(),
+                });
+            }
+            Some(_) => {}
+            None => {
+                requirement_by_linker.insert(requirement.linker_name.clone(), key);
+            }
+        }
+    }
+
+    let mut group_indices = BTreeMap::<(Vec<u8>, Vec<u8>), u16>::new();
+    for (offset, key) in group_keys.into_iter().enumerate() {
+        let raw = usize::from(VERSYM_FIRST_VERSION)
+            .checked_add(offset)
+            .ok_or(SharedObjectError::MetadataTooLarge)?;
+        let index = u16::try_from(raw).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        if index > VERSYM_INDEX_MASK {
+            return Err(SharedObjectError::MetadataTooLarge);
+        }
+        group_indices.insert(key, index);
+    }
+
+    let symbol_count = exports_len
+        .checked_add(imports.len())
+        .and_then(|count| count.checked_add(1))
+        .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let versym_size = symbol_count
+        .checked_mul(2)
+        .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let mut versym = vec![0_u8; versym_size];
+    for symbol_index in 1..symbol_count {
+        put_u16(&mut versym, symbol_index * 2, VERSYM_GLOBAL);
+    }
+
+    for (offset, (linker_name, import)) in imports.iter().enumerate() {
+        let Some(version) = import.version.as_ref() else {
+            continue;
+        };
+        let key = requirement_by_linker.get(linker_name).ok_or_else(|| {
+            SharedObjectError::InvalidVersionRequirement {
+                name: import.dynamic_name.clone(),
+                version: version.clone(),
+            }
+        })?;
+        if &key.1 != version {
+            return Err(SharedObjectError::InvalidVersionRequirement {
+                name: import.dynamic_name.clone(),
+                version: version.clone(),
+            });
+        }
+        let version_index = group_indices
+            .get(key)
+            .copied()
+            .ok_or(SharedObjectError::MetadataTooLarge)?;
+        let symbol_index = 1usize
+            .checked_add(exports_len)
+            .and_then(|index| index.checked_add(offset))
+            .ok_or(SharedObjectError::MetadataTooLarge)?;
+        put_u16(&mut versym, symbol_index * 2, version_index);
+    }
+
+    let mut providers = BTreeMap::<Vec<u8>, Vec<(Vec<u8>, u16)>>::new();
+    for ((provider, version), index) in &group_indices {
+        providers
+            .entry(provider.clone())
+            .or_default()
+            .push((version.clone(), *index));
+    }
+
+    let mut provider_offsets = BTreeMap::<Vec<u8>, u32>::new();
+    let mut version_offsets = BTreeMap::<(Vec<u8>, Vec<u8>), u32>::new();
+    for (provider, versions) in &providers {
+        let provider_offset = append_dynamic_string(dynstr, provider)?;
+        provider_offsets.insert(provider.clone(), provider_offset);
+        for (version, _) in versions {
+            let offset = append_dynamic_string(dynstr, version)?;
+            version_offsets.insert((provider.clone(), version.clone()), offset);
+        }
+    }
+
+    let mut verneed = Vec::new();
+    let provider_count = providers.len();
+    for (provider_index, (provider, versions)) in providers.iter().enumerate() {
+        let record_size = ELF64_VERNEED_SIZE
+            .checked_add(
+                versions
+                    .len()
+                    .checked_mul(ELF64_VERNAUX_SIZE)
+                    .ok_or(SharedObjectError::MetadataTooLarge)?,
+            )
+            .ok_or(SharedObjectError::MetadataTooLarge)?;
+        let next = if provider_index + 1 == provider_count {
+            0
+        } else {
+            u32::try_from(record_size).map_err(|_| SharedObjectError::MetadataTooLarge)?
+        };
+        verneed.extend_from_slice(&VER_NEED_CURRENT.to_le_bytes());
+        verneed.extend_from_slice(
+            &u16::try_from(versions.len())
+                .map_err(|_| SharedObjectError::MetadataTooLarge)?
+                .to_le_bytes(),
+        );
+        verneed.extend_from_slice(
+            &provider_offsets
+                .get(provider)
+                .copied()
+                .ok_or(SharedObjectError::MetadataTooLarge)?
+                .to_le_bytes(),
+        );
+        verneed.extend_from_slice(&(ELF64_VERNEED_SIZE as u32).to_le_bytes());
+        verneed.extend_from_slice(&next.to_le_bytes());
+
+        for (version_index, (version, index)) in versions.iter().enumerate() {
+            verneed.extend_from_slice(&sysv_elf_hash(version).to_le_bytes());
+            verneed.extend_from_slice(&0_u16.to_le_bytes());
+            verneed.extend_from_slice(&index.to_le_bytes());
+            verneed.extend_from_slice(
+                &version_offsets
+                    .get(&(provider.clone(), version.clone()))
+                    .copied()
+                    .ok_or(SharedObjectError::MetadataTooLarge)?
+                    .to_le_bytes(),
+            );
+            let next = if version_index + 1 == versions.len() {
+                0
+            } else {
+                ELF64_VERNAUX_SIZE as u32
+            };
+            verneed.extend_from_slice(&next.to_le_bytes());
+        }
+    }
+
+    Ok(ConsumerVersionMetadata {
+        versym,
+        verneed,
+        provider_count,
+    })
+}
+
 fn build_dynamic_metadata(
     base_address: u64,
     exports: &[ExportSymbol],
@@ -2132,7 +2454,7 @@ fn build_dynamic_metadata(
         let offset =
             u32::try_from(dynstr.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
         import_name_offsets.push(offset);
-        dynstr.extend_from_slice(&import.name);
+        dynstr.extend_from_slice(&import.dynamic_name);
         dynstr.push(0);
     }
     let mut needed_name_offsets = Vec::with_capacity(names.needed.len());
@@ -2162,12 +2484,32 @@ fn build_dynamic_metadata(
         None
     };
 
+    let version_metadata = build_consumer_version_metadata(
+        exports.len(),
+        imports,
+        names.version_requirements,
+        &mut dynstr,
+    )?;
     let dynstr_offset = dynsym_offset
         .checked_add(dynsym_size)
         .ok_or(SharedObjectError::MetadataTooLarge)?;
-    let rela_offset = align_up_usize(
+    let versym_offset = align_up_usize(
         dynstr_offset
             .checked_add(dynstr.len())
+            .ok_or(SharedObjectError::MetadataTooLarge)?,
+        2,
+    )
+    .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let verneed_offset = align_up_usize(
+        versym_offset
+            .checked_add(version_metadata.versym.len())
+            .ok_or(SharedObjectError::MetadataTooLarge)?,
+        8,
+    )
+    .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let rela_offset = align_up_usize(
+        verneed_offset
+            .checked_add(version_metadata.verneed.len())
             .ok_or(SharedObjectError::MetadataTooLarge)?,
         8,
     )
@@ -2197,6 +2539,13 @@ fn build_dynamic_metadata(
         .and_then(|count| count.checked_add(if has_relocations { 3 } else { 0 }))
         .and_then(|count| count.checked_add(usize::from(relative_relocation_count != 0)))
         .and_then(|count| count.checked_add(if has_plt_relocations { 4 } else { 0 }))
+        .and_then(|count| {
+            count.checked_add(if version_metadata.provider_count != 0 {
+                3
+            } else {
+                0
+            })
+        })
         .and_then(|count| count.checked_add(usize::from(dynamic_flags != 0)))
         .and_then(|count| count.checked_add(1))
         .ok_or(SharedObjectError::MetadataTooLarge)?;
@@ -2240,6 +2589,10 @@ fn build_dynamic_metadata(
         put_u64(&mut bytes, offset + 16, import.size);
     }
     bytes[dynstr_offset..dynstr_offset + dynstr.len()].copy_from_slice(&dynstr);
+    bytes[versym_offset..versym_offset + version_metadata.versym.len()]
+        .copy_from_slice(&version_metadata.versym);
+    bytes[verneed_offset..verneed_offset + version_metadata.verneed.len()]
+        .copy_from_slice(&version_metadata.verneed);
     bytes[rela_offset..rela_offset + rela_bytes.len()].copy_from_slice(rela_bytes);
     bytes[jmprel_offset..jmprel_offset + jmprel_bytes.len()].copy_from_slice(jmprel_bytes);
 
@@ -2263,6 +2616,19 @@ fn build_dynamic_metadata(
         (DT_STRSZ, dynstr.len() as u64),
         (DT_SYMENT, ELF64_SYMBOL_SIZE as u64),
     ]);
+    if version_metadata.provider_count != 0 {
+        let versym_address = checked_metadata_address(base_address, versym_offset)?;
+        let verneed_address = checked_metadata_address(base_address, verneed_offset)?;
+        entries.extend_from_slice(&[
+            (DT_VERSYM, versym_address),
+            (DT_VERNEED, verneed_address),
+            (
+                DT_VERNEEDNUM,
+                u64::try_from(version_metadata.provider_count)
+                    .map_err(|_| SharedObjectError::MetadataTooLarge)?,
+            ),
+        ]);
+    }
     if has_relocations {
         let rela_address = checked_metadata_address(base_address, rela_offset)?;
         let rela_size =
@@ -2309,6 +2675,19 @@ fn build_dynamic_metadata(
         dynamic_offset: dynamic_offset as u64,
         dynamic_size: dynamic_size as u64,
     })
+}
+
+fn sysv_elf_hash(name: &[u8]) -> u32 {
+    let mut hash = 0u32;
+    for byte in name {
+        hash = hash.wrapping_shl(4).wrapping_add(u32::from(*byte));
+        let high = hash & 0xf000_0000;
+        if high != 0 {
+            hash ^= high >> 24;
+        }
+        hash &= !high;
+    }
+    hash
 }
 
 fn checked_metadata_address(base_address: u64, offset: usize) -> Result<u64, SharedObjectError> {

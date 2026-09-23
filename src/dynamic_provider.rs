@@ -41,6 +41,7 @@ pub struct DynamicProviderMetadata {
     pub needed: Vec<Vec<u8>>,
     pub runpath: Option<Vec<u8>>,
     pub exports: BTreeMap<Vec<u8>, BTreeSet<u8>>,
+    pub versioned_exports: BTreeMap<(Vec<u8>, Vec<u8>), BTreeSet<u8>>,
 }
 
 #[derive(Debug)]
@@ -91,7 +92,7 @@ struct DynamicEntry {
 #[derive(Debug)]
 struct ProviderVersionMetadata {
     versym_offset: usize,
-    definition_indices: BTreeSet<u16>,
+    definition_names: BTreeMap<u16, Vec<u8>>,
 }
 
 pub fn inspect_dynamic_provider(
@@ -204,6 +205,7 @@ pub fn inspect_dynamic_provider(
         provider_version_metadata(&entries, &headers, file, symbol_count, strtab_offset, strsz)?;
 
     let mut exports = BTreeMap::<Vec<u8>, BTreeSet<u8>>::new();
+    let mut versioned_exports = BTreeMap::<(Vec<u8>, Vec<u8>), BTreeSet<u8>>::new();
     for symbol_index in 0..symbol_count {
         let relative = symbol_index
             .checked_mul(syment)
@@ -234,14 +236,23 @@ pub fn inspect_dynamic_provider(
         let visibility = other & 0x03;
         let version_allows_unversioned =
             version_allows_unversioned_export(&versions, file, symbol_index, section_index)?;
+        let version_name =
+            defined_symbol_version_name(&versions, file, symbol_index, section_index)?;
         if section_index != SHN_UNDEF
             && (binding == STB_GLOBAL || binding == STB_WEAK)
             && visibility != STV_INTERNAL
             && visibility != STV_HIDDEN
             && !name.is_empty()
-            && version_allows_unversioned
         {
-            exports.entry(name).or_default().insert(info & 0x0f);
+            if version_allows_unversioned {
+                exports.entry(name.clone()).or_default().insert(info & 0x0f);
+            }
+            if let Some(version_name) = version_name {
+                versioned_exports
+                    .entry((name, version_name))
+                    .or_default()
+                    .insert(info & 0x0f);
+            }
         }
     }
 
@@ -250,6 +261,7 @@ pub fn inspect_dynamic_provider(
         needed,
         runpath,
         exports,
+        versioned_exports,
     })
 }
 
@@ -293,7 +305,7 @@ fn provider_version_metadata(
             "provider PT_DYNAMIC must provide DT_VERDEF and DT_VERDEFNUM together",
         ));
     }
-    let definition_indices = if present == 2 {
+    let definition_names = if present == 2 {
         parse_version_definition_indices(
             headers,
             file,
@@ -303,12 +315,12 @@ fn provider_version_metadata(
             strsz,
         )?
     } else {
-        BTreeSet::new()
+        BTreeMap::new()
     };
 
     Ok(Some(ProviderVersionMetadata {
         versym_offset,
-        definition_indices,
+        definition_names,
     }))
 }
 
@@ -342,7 +354,7 @@ fn version_allows_unversioned_export(
 
     if section_index != SHN_UNDEF
         && version_index >= 2
-        && !versions.definition_indices.contains(&version_index)
+        && !versions.definition_names.contains_key(&version_index)
     {
         return Err(malformed(format!(
             "provider DT_VERSYM defined symbol {symbol_index} references version index {version_index} with no matching DT_VERDEF"
@@ -356,6 +368,43 @@ fn version_allows_unversioned_export(
     })
 }
 
+fn defined_symbol_version_name(
+    versions: &Option<ProviderVersionMetadata>,
+    file: &[u8],
+    symbol_index: u64,
+    section_index: u16,
+) -> Result<Option<Vec<u8>>, DynamicProviderError> {
+    if section_index == SHN_UNDEF {
+        return Ok(None);
+    }
+    let Some(versions) = versions else {
+        return Ok(None);
+    };
+    let relative = symbol_index
+        .checked_mul(ELF64_VERSYM_SIZE)
+        .ok_or_else(|| malformed("provider DT_VERSYM symbol offset overflows u64"))?;
+    let relative = usize::try_from(relative)
+        .map_err(|_| malformed("provider DT_VERSYM symbol offset does not fit usize"))?;
+    let offset = versions
+        .versym_offset
+        .checked_add(relative)
+        .ok_or_else(|| malformed("provider DT_VERSYM file offset overflows usize"))?;
+    let version_index = read_u16(file, offset) & VERSYM_INDEX_MASK;
+    if version_index < 2 {
+        return Ok(None);
+    }
+    versions
+        .definition_names
+        .get(&version_index)
+        .cloned()
+        .map(Some)
+        .ok_or_else(|| {
+            malformed(format!(
+                "provider DT_VERSYM defined symbol {symbol_index} references version index {version_index} with no matching DT_VERDEF"
+            ))
+        })
+}
+
 fn parse_version_definition_indices(
     headers: &[ProgramHeader],
     file: &[u8],
@@ -363,14 +412,14 @@ fn parse_version_definition_indices(
     count: u64,
     strtab_offset: u64,
     strsz: u64,
-) -> Result<BTreeSet<u16>, DynamicProviderError> {
+) -> Result<BTreeMap<u16, Vec<u8>>, DynamicProviderError> {
     if count == 0 {
         return Err(malformed(
             "provider DT_VERDEFNUM must be non-zero when DT_VERDEF is present",
         ));
     }
 
-    let mut indices = BTreeSet::new();
+    let mut definitions = BTreeMap::new();
     for definition_index in 0..count {
         let offset = map_virtual_range(
             headers,
@@ -415,7 +464,7 @@ fn parse_version_definition_indices(
                 "provider DT_VERDEF entry {definition_index} has an invalid Verdaux chain"
             )));
         }
-        if !indices.insert(version_index) {
+        if definitions.contains_key(&version_index) {
             return Err(malformed(format!(
                 "provider DT_VERDEF contains duplicate version index {version_index}"
             )));
@@ -486,6 +535,7 @@ fn parse_version_definition_indices(
                 String::from_utf8_lossy(&first_name)
             )));
         }
+        definitions.insert(version_index, first_name);
 
         let last = definition_index + 1 == count;
         if last {
@@ -506,7 +556,7 @@ fn parse_version_definition_indices(
         }
     }
 
-    Ok(indices)
+    Ok(definitions)
 }
 
 fn sysv_elf_hash(name: &[u8]) -> u32 {
