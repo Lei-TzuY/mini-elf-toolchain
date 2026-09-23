@@ -1,5 +1,5 @@
 use core::fmt;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::elf64::{Elf64Header, ElfError, ELF64_PROGRAM_HEADER_SIZE};
 
@@ -24,7 +24,7 @@ const STV_HIDDEN: u8 = 2;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DynamicProviderMetadata {
     pub soname: Vec<u8>,
-    pub exports: BTreeSet<Vec<u8>>,
+    pub exports: BTreeMap<Vec<u8>, BTreeSet<u8>>,
 }
 
 #[derive(Debug)]
@@ -161,7 +161,7 @@ pub fn inspect_dynamic_provider(
     let dynsym_offset = usize::try_from(dynsym_offset)
         .map_err(|_| malformed("provider DT_SYMTAB file offset does not fit usize"))?;
 
-    let mut exports = BTreeSet::new();
+    let mut exports = BTreeMap::<Vec<u8>, BTreeSet<u8>>::new();
     for symbol_index in 0..symbol_count {
         let relative = symbol_index
             .checked_mul(syment)
@@ -196,7 +196,7 @@ pub fn inspect_dynamic_provider(
             && visibility != STV_HIDDEN
             && !name.is_empty()
         {
-            exports.insert(name);
+            exports.entry(name).or_default().insert(info & 0x0f);
         }
     }
 
