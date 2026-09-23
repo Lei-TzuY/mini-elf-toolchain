@@ -1,4 +1,5 @@
 use core::fmt;
+use std::collections::BTreeMap;
 
 use crate::executable_writer::{
     write_elf64_x86_64_shared_segments, ExecutableImage, ExecutableWriteError, LoadSegmentInput,
@@ -11,6 +12,7 @@ use crate::load_segments::{
 };
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
 use crate::permission_layout::SHF_TLS;
+use crate::pie_runtime::{build_relative_relocation_table, PieRuntimeError};
 use crate::program_headers::{
     map_runtime_program_headers_with_dynamic, RuntimeDynamicProgramHeader,
 };
@@ -19,12 +21,14 @@ use crate::relocated_sections::{
 };
 use crate::resolve::{SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
+use crate::x86_64_relocations::R_X86_64_64;
 
 const SHT_PROGBITS: u32 = 1;
 const SHARED_METADATA_OBJECT_INDEX: usize = usize::MAX - 3;
 const SHARED_METADATA_SECTION_INDEX: u16 = 1;
 const ELF64_SYMBOL_SIZE: usize = 24;
 const ELF64_DYNAMIC_SIZE: usize = 16;
+const ELF64_RELA_SIZE: usize = 24;
 
 const DT_NULL: i64 = 0;
 const DT_HASH: i64 = 4;
@@ -32,6 +36,10 @@ const DT_STRTAB: i64 = 5;
 const DT_SYMTAB: i64 = 6;
 const DT_STRSZ: i64 = 10;
 const DT_SYMENT: i64 = 11;
+const DT_RELA: i64 = 7;
+const DT_RELASZ: i64 = 8;
+const DT_RELAENT: i64 = 9;
+const DT_RELACOUNT: i64 = 0x6fff_fff9;
 
 #[derive(Debug)]
 pub enum SharedObjectError {
@@ -39,6 +47,14 @@ pub enum SharedObjectError {
         object_index: usize,
         rela_section_index: u16,
         relocation_count: usize,
+    },
+    PreemptibleRelativeTarget {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        symbol_index: u32,
+        name: Vec<u8>,
+        binding: u8,
     },
     TlsUnsupported {
         object_index: usize,
@@ -67,6 +83,7 @@ pub enum SharedObjectError {
     },
     NoExports,
     Relocation(RelocatedSectionError),
+    RuntimeRelative(PieRuntimeError),
     SymbolAddress(FinalSymbolAddressError),
     AddressOverflow,
     MetadataTooLarge,
@@ -84,6 +101,18 @@ impl fmt::Display for SharedObjectError {
             } => write!(
                 f,
                 "shared object first slice rejects RELA section {rela_section_index} in object {object_index} with {relocation_count} relocations; runtime/shared-object relocation is not implemented"
+            ),
+            Self::PreemptibleRelativeTarget {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                symbol_index,
+                name,
+                binding,
+            } => write!(
+                f,
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded R_X86_64_RELATIVE conversion requires a local non-preemptible target because interposition is not implemented",
+                String::from_utf8_lossy(name)
             ),
             Self::TlsUnsupported {
                 object_index,
@@ -134,6 +163,9 @@ impl fmt::Display for SharedObjectError {
             Self::Relocation(source) => {
                 write!(f, "cannot lay out shared object sections: {source}")
             }
+            Self::RuntimeRelative(source) => {
+                write!(f, "cannot build shared-object relative runtime relocations: {source}")
+            }
             Self::SymbolAddress(source) => {
                 write!(f, "cannot resolve shared object export address: {source}")
             }
@@ -153,10 +185,12 @@ impl std::error::Error for SharedObjectError {
             Self::Symbols(source) => Some(source),
             Self::ObjectSymbols { source, .. } => Some(source),
             Self::Relocation(source) => Some(source),
+            Self::RuntimeRelative(source) => Some(source),
             Self::SymbolAddress(source) => Some(source),
             Self::LoadSegments(source) => Some(source),
             Self::Write(source) => Some(source),
             Self::RelocationUnsupported { .. }
+            | Self::PreemptibleRelativeTarget { .. }
             | Self::TlsUnsupported { .. }
             | Self::UnsupportedBinding { .. }
             | Self::UndefinedNonlocal { .. }
@@ -199,6 +233,13 @@ pub fn link_shared_object(
 
     let relocated = relocate_allocatable_sections(inputs, page_alignment, page_alignment)
         .map_err(SharedObjectError::Relocation)?;
+    let (rela_bytes, relative_relocation_count) = build_relative_relocation_table(
+        inputs,
+        &relocated,
+        &resolved.definitions,
+        &BTreeMap::new(),
+    )
+    .map_err(SharedObjectError::RuntimeRelative)?;
     let layout = relocated
         .iter()
         .map(|section| LaidOutSection {
@@ -248,7 +289,12 @@ pub fn link_shared_object(
         page_alignment,
     )
     .ok_or(SharedObjectError::AddressOverflow)?;
-    let metadata = build_dynamic_metadata(metadata_address, &exports)?;
+    let metadata = build_dynamic_metadata(
+        metadata_address,
+        &exports,
+        &rela_bytes,
+        relative_relocation_count,
+    )?;
     let dynamic_address = metadata_address
         .checked_add(metadata.dynamic_offset)
         .ok_or(SharedObjectError::AddressOverflow)?;
@@ -310,12 +356,46 @@ fn validate_inputs(inputs: &[LinkerInputObject<'_>]) -> Result<(), SharedObjectE
             }
         }
         for table in &input.object.rela_tables {
-            if !table.relocations.is_empty() {
+            if table
+                .relocations
+                .iter()
+                .any(|relocation| relocation.relocation_type != R_X86_64_64)
+            {
                 return Err(SharedObjectError::RelocationUnsupported {
                     object_index: input.object_index,
                     rela_section_index: table.section_index,
                     relocation_count: table.relocations.len(),
                 });
+            }
+            let symbol_table = input
+                .object
+                .symbol_tables
+                .iter()
+                .find(|candidate| candidate.section_index == table.symbol_table_index)
+                .expect("validated RELA table references validated symbol table");
+            let symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                symbol_table,
+                input.object_index,
+            )
+            .map_err(|source| SharedObjectError::ObjectSymbols {
+                object_index: input.object_index,
+                source,
+            })?;
+            for (relocation_index, relocation) in table.relocations.iter().enumerate() {
+                let symbol = &symbols[relocation.symbol_index as usize];
+                let binding = symbol.symbol.info >> 4;
+                if binding != STB_LOCAL {
+                    return Err(SharedObjectError::PreemptibleRelativeTarget {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        symbol_index: relocation.symbol_index,
+                        name: symbol.name.to_vec(),
+                        binding,
+                    });
+                }
             }
         }
 
@@ -366,6 +446,8 @@ fn validate_inputs(inputs: &[LinkerInputObject<'_>]) -> Result<(), SharedObjectE
 fn build_dynamic_metadata(
     base_address: u64,
     exports: &[ExportSymbol],
+    rela_bytes: &[u8],
+    relative_relocation_count: usize,
 ) -> Result<DynamicMetadata, SharedObjectError> {
     let symbol_count = exports
         .len()
@@ -400,15 +482,26 @@ fn build_dynamic_metadata(
     let dynstr_offset = dynsym_offset
         .checked_add(dynsym_size)
         .ok_or(SharedObjectError::MetadataTooLarge)?;
-    let dynamic_offset = align_up_usize(
+    let rela_offset = align_up_usize(
         dynstr_offset
             .checked_add(dynstr.len())
             .ok_or(SharedObjectError::MetadataTooLarge)?,
         8,
     )
     .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let dynamic_offset = align_up_usize(
+        rela_offset
+            .checked_add(rela_bytes.len())
+            .ok_or(SharedObjectError::MetadataTooLarge)?,
+        8,
+    )
+    .ok_or(SharedObjectError::MetadataTooLarge)?;
 
-    let dynamic_entry_count = 6usize;
+    let dynamic_entry_count = if relative_relocation_count == 0 {
+        6usize
+    } else {
+        10usize
+    };
     let dynamic_size = dynamic_entry_count
         .checked_mul(ELF64_DYNAMIC_SIZE)
         .ok_or(SharedObjectError::MetadataTooLarge)?;
@@ -439,18 +532,33 @@ fn build_dynamic_metadata(
         put_u64(&mut bytes, offset + 16, export.size);
     }
     bytes[dynstr_offset..dynstr_offset + dynstr.len()].copy_from_slice(&dynstr);
+    bytes[rela_offset..rela_offset + rela_bytes.len()].copy_from_slice(rela_bytes);
 
     let hash_address = checked_metadata_address(base_address, hash_offset)?;
     let dynsym_address = checked_metadata_address(base_address, dynsym_offset)?;
     let dynstr_address = checked_metadata_address(base_address, dynstr_offset)?;
-    let entries = [
+    let mut entries = vec![
         (DT_HASH, hash_address),
         (DT_STRTAB, dynstr_address),
         (DT_SYMTAB, dynsym_address),
         (DT_STRSZ, dynstr.len() as u64),
         (DT_SYMENT, ELF64_SYMBOL_SIZE as u64),
-        (DT_NULL, 0),
     ];
+    if relative_relocation_count != 0 {
+        let rela_address = checked_metadata_address(base_address, rela_offset)?;
+        let rela_size =
+            u64::try_from(rela_bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        let rela_count = u64::try_from(relative_relocation_count)
+            .map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        debug_assert_eq!(rela_bytes.len(), relative_relocation_count * ELF64_RELA_SIZE);
+        entries.extend_from_slice(&[
+            (DT_RELA, rela_address),
+            (DT_RELASZ, rela_size),
+            (DT_RELAENT, ELF64_RELA_SIZE as u64),
+            (DT_RELACOUNT, rela_count),
+        ]);
+    }
+    entries.push((DT_NULL, 0));
     for (index, (tag, value)) in entries.into_iter().enumerate() {
         let offset = dynamic_offset + index * ELF64_DYNAMIC_SIZE;
         put_i64(&mut bytes, offset, tag);
