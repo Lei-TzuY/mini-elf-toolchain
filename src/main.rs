@@ -604,9 +604,9 @@ fn extract_version_script_argument(
     while index < arguments.len() {
         let argument = &arguments[index];
         if argument == "--version-script" {
-            let value = arguments.get(index + 1).ok_or_else(|| {
-                CliError::Usage("missing file after --version-script".to_owned())
-            })?;
+            let value = arguments
+                .get(index + 1)
+                .ok_or_else(|| CliError::Usage("missing file after --version-script".to_owned()))?;
             if path.is_some() {
                 return Err(CliError::Usage(
                     "duplicate --version-script option".to_owned(),
