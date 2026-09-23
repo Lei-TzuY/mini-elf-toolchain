@@ -19,7 +19,7 @@ use mini_elf_toolchain::partial_link::{
 use mini_elf_toolchain::provider_closure::resolve_provider_path;
 use mini_elf_toolchain::shared_object::{
     link_shared_object_with_version_script_and_checked_providers, shared_import_requirements,
-    SharedImportRequirement, SharedVersionRequirement,
+    SharedImportRequirement, SharedObjectLinkOptions, SharedVersionRequirement,
 };
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
@@ -1157,12 +1157,14 @@ fn link_files(
         let image = link_shared_object_with_version_script_and_checked_providers(
             &prepared.objects,
             DEFAULT_PAGE_ALIGNMENT,
-            &needed.names,
-            options.soname,
-            options.runpath,
-            &needed.version_requirements,
-            &needed.checked_version_providers,
-            options.version_script,
+            SharedObjectLinkOptions {
+                needed: &needed.names,
+                soname: options.soname,
+                runpath: options.runpath,
+                version_requirements: &needed.version_requirements,
+                checked_version_providers: &needed.checked_version_providers,
+                version_script: options.version_script,
+            },
         )
         .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         fs::write(output, &image.bytes)
