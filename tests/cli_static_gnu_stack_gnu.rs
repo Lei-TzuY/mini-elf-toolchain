@@ -31,12 +31,7 @@ fn temp_dir(label: &str) -> PathBuf {
     path
 }
 
-fn assemble(
-    dir: &Path,
-    stem: &str,
-    symbol: &str,
-    stack_flags: Option<&str>,
-) -> PathBuf {
+fn assemble(dir: &Path, stem: &str, symbol: &str, stack_flags: Option<&str>) -> PathBuf {
     let source = dir.join(format!("{stem}.s"));
     let object = dir.join(format!("{stem}.o"));
     let note = stack_flags
@@ -79,7 +74,9 @@ fn stack_flags(path: &Path) -> Option<String> {
         .find(|line| line.contains("GNU_STACK"))
         .and_then(|line| {
             let fields = line.split_whitespace().collect::<Vec<_>>();
-            fields.get(fields.len().checked_sub(2)?).map(|value| (*value).to_owned())
+            fields
+                .get(fields.len().checked_sub(2)?)
+                .map(|value| (*value).to_owned())
         })
 }
 
