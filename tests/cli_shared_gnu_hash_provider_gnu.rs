@@ -111,7 +111,10 @@ provider_function:
     assert!(dynamic.status.success());
     let dynamic = String::from_utf8_lossy(&dynamic.stdout);
     assert!(dynamic.contains("(GNU_HASH)"), "{dynamic}");
-    assert!(!dynamic.contains("(HASH)"), "fixture must be GNU-hash-only: {dynamic}");
+    assert!(
+        !dynamic.contains("(HASH)"),
+        "fixture must be GNU-hash-only: {dynamic}"
+    );
 
     provider
 }
@@ -285,7 +288,10 @@ int main(int argc, char **argv) {
             .env("LD_LIBRARY_PATH", &dir)
             .status()
             .unwrap();
-        assert!(status.success(), "GNU-hash provider consumer returned {status}");
+        assert!(
+            status.success(),
+            "GNU-hash provider consumer returned {status}"
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
@@ -325,8 +331,7 @@ fn shared_library_search_accepts_gnu_hash_only_provider() {
         .unwrap();
     assert!(dynamic.status.success());
     assert!(
-        String::from_utf8_lossy(&dynamic.stdout)
-            .contains("Shared library: [libgnuprovider.so]")
+        String::from_utf8_lossy(&dynamic.stdout).contains("Shared library: [libgnuprovider.so]")
     );
 
     let _ = fs::remove_dir_all(dir);
@@ -396,7 +401,10 @@ fn malformed_gnu_hash_zero_bloom_size_is_rejected_before_output() {
     assert!(!mini.status.success());
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
-    assert!(stderr.contains("bloom") || stderr.contains("GNU_HASH"), "{stderr}");
+    assert!(
+        stderr.contains("bloom") || stderr.contains("GNU_HASH"),
+        "{stderr}"
+    );
     assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
