@@ -121,16 +121,16 @@ fn assert_weak_tlsgd_metadata(shared: &Path) {
     assert!(relocations.status.success());
     let relocations = String::from_utf8_lossy(&relocations.stdout);
     assert!(
-        relocations.lines().any(|line| {
-            line.contains("R_X86_64_DTPMOD64") && line.contains(WEAK_TLS)
-        }),
+        relocations
+            .lines()
+            .any(|line| { line.contains("R_X86_64_DTPMOD64") && line.contains(WEAK_TLS) }),
         "{} dynamic relocations:\n{relocations}",
         shared.display()
     );
     assert!(
-        relocations.lines().any(|line| {
-            line.contains("R_X86_64_DTPOFF64") && line.contains(WEAK_TLS)
-        }),
+        relocations
+            .lines()
+            .any(|line| { line.contains("R_X86_64_DTPOFF64") && line.contains(WEAK_TLS) }),
         "{} dynamic relocations:\n{relocations}",
         shared.display()
     );
