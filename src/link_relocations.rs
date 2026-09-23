@@ -371,6 +371,21 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
                         0
                     }
                     None if symbol.symbol.section_index == SHN_UNDEF
+                        && globals.tls_desc_entries.contains_key(symbol.name)
+                        && table
+                            .relocations
+                            .iter()
+                            .filter(|candidate| {
+                                candidate.symbol_index == relocation.symbol_index
+                                    && candidate.relocation_type != R_X86_64_NONE
+                            })
+                            .all(|candidate| {
+                                is_tls_desc_address_relocation_type(candidate.relocation_type)
+                            }) =>
+                    {
+                        0
+                    }
+                    None if symbol.symbol.section_index == SHN_UNDEF
                         && globals.unresolved_tls_got_symbols.contains(symbol.name)
                         && globals.tls_got_entries.contains_key(symbol.name)
                         && table

@@ -987,6 +987,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         &imports.tls_desc_symbols,
         &tls_desc_entries,
         &export_dynamic_indices,
+        &import_dynamic_indices,
     )?;
     rela_bytes.extend_from_slice(&tls_desc_rela_bytes);
     let jmprel_bytes = build_plt_import_relocation_table(
@@ -1192,6 +1193,8 @@ fn validate_inputs(
                     || relocation.relocation_type == R_X86_64_TLSDESC_CALL
                 {
                     let binding = symbol.symbol.info >> 4;
+                    let unresolved = symbol.symbol.section_index == SHN_UNDEF
+                        && !definitions.contains_key(symbol.name);
                     let supported_definition =
                         definitions.get(symbol.name).is_some_and(|definition| {
                             let definition_binding = definition.symbol.info >> 4;
@@ -1204,8 +1207,7 @@ fn validate_inputs(
                         || binding != STB_GLOBAL
                         || symbol.symbol.other != 0
                         || symbol.name.is_empty()
-                        || symbol.symbol.section_index == SHN_UNDEF
-                        || !supported_definition
+                        || (!unresolved && !supported_definition)
                     {
                         return Err(SharedObjectError::TlsDescUnsupported {
                             object_index: input.object_index,
@@ -1223,6 +1225,14 @@ fn validate_inputs(
                             target_section_index: table.target_section_index,
                             flags: target.flags,
                         });
+                    }
+                    if unresolved {
+                        record_import_symbol(
+                            &mut import_symbols,
+                            symbol.name,
+                            symbol.symbol.info,
+                            symbol.symbol.size,
+                        )?;
                     }
                     if relocation.relocation_type == R_X86_64_GOTPC32_TLSDESC {
                         tls_desc_symbols.insert(symbol.name.to_vec());
@@ -1577,7 +1587,8 @@ fn validate_inputs(
                         let supported_tls_import = binding == STB_GLOBAL
                             && import_symbols.contains_key(symbol.name)
                             && (tls_gd_symbols.contains(symbol.name)
-                                || tls_ie_symbols.contains(symbol.name));
+                                || tls_ie_symbols.contains(symbol.name)
+                                || tls_desc_symbols.contains(symbol.name));
                         if !supported_tls_import {
                             return Err(SharedObjectError::TlsImportUnsupported {
                                 object_index: input.object_index,
@@ -1823,6 +1834,7 @@ fn build_tls_desc_relocation_table(
     symbols: &BTreeSet<Vec<u8>>,
     entries: &BTreeMap<Vec<u8>, u64>,
     export_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+    import_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
 ) -> Result<Vec<u8>, SharedObjectError> {
     let capacity = symbols
         .len()
@@ -1837,6 +1849,7 @@ fn build_tls_desc_relocation_table(
             .ok_or_else(|| SharedObjectError::MissingTlsDescEntry { name: name.clone() })?;
         let dynamic_index = export_dynamic_indices
             .get(name)
+            .or_else(|| import_dynamic_indices.get(name))
             .copied()
             .ok_or_else(|| SharedObjectError::MissingTlsDynamicSymbol { name: name.clone() })?;
         let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_TLSDESC);
