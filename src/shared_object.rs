@@ -812,11 +812,7 @@ fn parse_export_identity(
             name: name.to_vec(),
         });
     }
-    Ok((
-        base.to_vec(),
-        Some(version.to_vec()),
-        is_default_version,
-    ))
+    Ok((base.to_vec(), Some(version.to_vec()), is_default_version))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1161,17 +1157,13 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
     let mut dynamic_export_identities = BTreeSet::new();
     let mut default_dynamic_names = BTreeSet::new();
     for export in &exports {
-        if !dynamic_export_identities.insert((
-            export.dynamic_name.clone(),
-            export.version.clone(),
-        )) {
+        if !dynamic_export_identities.insert((export.dynamic_name.clone(), export.version.clone()))
+        {
             return Err(SharedObjectError::ConflictingDynamicExportName {
                 name: export.dynamic_name.clone(),
             });
         }
-        if export.is_default_version
-            && !default_dynamic_names.insert(export.dynamic_name.clone())
-        {
+        if export.is_default_version && !default_dynamic_names.insert(export.dynamic_name.clone()) {
             return Err(SharedObjectError::MultipleDefaultVersionAliases {
                 name: export.dynamic_name.clone(),
             });
