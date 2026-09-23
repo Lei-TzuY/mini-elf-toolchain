@@ -874,6 +874,7 @@ struct DynamicNames<'a> {
     needed: &'a [Vec<u8>],
     soname: Option<&'a [u8]>,
     runpath: Option<&'a [u8]>,
+    version_requirements: &'a [SharedVersionRequirement],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -945,6 +946,24 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     soname: Option<&[u8]>,
     runpath: Option<&[u8]>,
 ) -> Result<ExecutableImage, SharedObjectError> {
+    link_shared_object_with_needed_soname_runpath_and_versions(
+        inputs,
+        page_alignment,
+        needed,
+        soname,
+        runpath,
+        &[],
+    )
+}
+
+pub fn link_shared_object_with_needed_soname_runpath_and_versions(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    needed: &[Vec<u8>],
+    soname: Option<&[u8]>,
+    runpath: Option<&[u8]>,
+    version_requirements: &[SharedVersionRequirement],
+) -> Result<ExecutableImage, SharedObjectError> {
     validate_needed_names(needed)?;
     validate_soname(soname)?;
     validate_runpath(runpath)?;
@@ -956,6 +975,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
     let imports = validate_inputs(inputs, &resolved.definitions)?;
+    validate_version_requirements(needed, &imports.symbols, version_requirements)?;
     let tls_ie_import_symbols = imports
         .tls_ie_symbols
         .iter()
@@ -1117,6 +1137,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
             needed,
             soname,
             runpath,
+            version_requirements,
         },
         DynamicRelocations {
             rela: &rela_bytes,
@@ -1218,6 +1239,34 @@ fn validate_needed_names(needed: &[Vec<u8>]) -> Result<(), SharedObjectError> {
         }
         if name.contains(&0) {
             return Err(SharedObjectError::NeededNameContainsNul { dependency_index });
+        }
+    }
+    Ok(())
+}
+
+fn validate_version_requirements(
+    needed: &[Vec<u8>],
+    imports: &BTreeMap<Vec<u8>, ImportSymbol>,
+    requirements: &[SharedVersionRequirement],
+) -> Result<(), SharedObjectError> {
+    for requirement in requirements {
+        if !needed.iter().any(|name| name == &requirement.provider) {
+            return Err(SharedObjectError::VersionRequirementProviderMissing {
+                provider: requirement.provider.clone(),
+            });
+        }
+        let valid = imports
+            .get(&requirement.linker_name)
+            .is_some_and(|import| import.version.as_deref() == Some(requirement.version.as_slice()));
+        if !valid {
+            let name = imports
+                .get(&requirement.linker_name)
+                .map(|import| import.dynamic_name.clone())
+                .unwrap_or_else(|| requirement.linker_name.clone());
+            return Err(SharedObjectError::InvalidVersionRequirement {
+                name,
+                version: requirement.version.clone(),
+            });
         }
     }
     Ok(())
