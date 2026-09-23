@@ -855,11 +855,7 @@ fn inspect_transitive_provider_exports(
         .to_path_buf();
     let mut queue = VecDeque::new();
     for needed in &root.needed {
-        queue.push_back((
-            needed.clone(),
-            root_parent.clone(),
-            root.runpath.clone(),
-        ));
+        queue.push_back((needed.clone(), root_parent.clone(), root.runpath.clone()));
     }
 
     while let Some((needed, provider_directory, runpath)) = queue.pop_front() {
