@@ -956,8 +956,7 @@ fn inspect_transitive_provider_exports(
     }
 
     let mut matched_any = false;
-    let mut version_requirements =
-        BTreeMap::<Vec<u8>, SharedVersionRequirement>::new();
+    let mut version_requirements = BTreeMap::<Vec<u8>, SharedVersionRequirement>::new();
 
     while let Some((needed, provider_directory, runpath)) = queue.pop_front() {
         let dependency_path = resolve_transitive_provider_path(
@@ -1183,16 +1182,15 @@ fn link_files(
             .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         let needed =
             resolve_needed_dependencies(options.needed, &imports, options.provider_search_paths)?;
-        let image =
-            link_shared_object_with_needed_soname_runpath_versions_and_checked_providers(
-                &prepared.objects,
-                DEFAULT_PAGE_ALIGNMENT,
-                &needed.names,
-                options.soname,
-                options.runpath,
-                &needed.version_requirements,
-                &needed.checked_version_providers,
-            )
+        let image = link_shared_object_with_needed_soname_runpath_versions_and_checked_providers(
+            &prepared.objects,
+            DEFAULT_PAGE_ALIGNMENT,
+            &needed.names,
+            options.soname,
+            options.runpath,
+            &needed.version_requirements,
+            &needed.checked_version_providers,
+        )
         .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         fs::write(output, &image.bytes)
             .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
