@@ -5,6 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const DATA: &str = "mini_elf_absolute_interposable_data_327";
 const FUNCTION: &str = "mini_elf_absolute_interposable_function_327";
+const DATA_SLOT: &str = "mini_elf_absolute_data_pointer_slot_327";
+const FUNCTION_SLOT: &str = "mini_elf_absolute_function_pointer_slot_327";
 
 fn command_reports(program: &str, marker: &str) -> bool {
     let Ok(output) = Command::new(program).arg("--version").output() else {
@@ -128,17 +130,17 @@ fn defined_writable_absolute_relocations_match_gnu_and_are_runtime_preemptible()
     .quad 0x1111222233334444
 .size {DATA}, .-{DATA}
 
-.local data_pointer_slot
-.type data_pointer_slot,@object
-data_pointer_slot:
+.globl {DATA_SLOT}
+.type {DATA_SLOT},@object
+{DATA_SLOT}:
     .quad {DATA}
-.size data_pointer_slot, .-data_pointer_slot
+.size {DATA_SLOT}, .-{DATA_SLOT}
 
-.local function_pointer_slot
-.type function_pointer_slot,@object
-function_pointer_slot:
+.globl {FUNCTION_SLOT}
+.type {FUNCTION_SLOT},@object
+{FUNCTION_SLOT}:
     .quad {FUNCTION}
-.size function_pointer_slot, .-function_pointer_slot
+.size {FUNCTION_SLOT}, .-{FUNCTION_SLOT}
 
 .text
 .globl {FUNCTION}
@@ -147,20 +149,6 @@ function_pointer_slot:
     mov $7, %eax
     ret
 .size {FUNCTION}, .-{FUNCTION}
-
-.globl read_absolute_interposable_data
-.type read_absolute_interposable_data,@function
-read_absolute_interposable_data:
-    movq data_pointer_slot(%rip), %rax
-    movq (%rax), %rax
-    ret
-.size read_absolute_interposable_data, .-read_absolute_interposable_data
-
-.globl call_absolute_interposable_function
-.type call_absolute_interposable_function,@function
-call_absolute_interposable_function:
-    jmp *function_pointer_slot(%rip)
-.size call_absolute_interposable_function, .-call_absolute_interposable_function
 "#
         ),
     );
@@ -180,6 +168,10 @@ call_absolute_interposable_function:
             "{input_relocations}"
         );
     }
+    assert!(
+        !input_relocations.contains("R_X86_64_PC32"),
+        "fixture must isolate the writable absolute relocation plane: {input_relocations}"
+    );
 
     let mini = dir.join("libmini.so");
     let mini_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
@@ -221,18 +213,17 @@ call_absolute_interposable_function:
             r#"#include <dlfcn.h>
 #include <stdint.h>
 
-typedef uint64_t (*read_fn)(void);
-typedef int (*call_fn)(void);
+typedef int (*target_fn)(void);
 
 int main(int argc, char **argv) {
     if (argc != 2) return 241;
     void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!handle) return 242;
-    read_fn read_data = (read_fn)dlsym(handle, "read_absolute_interposable_data");
-    call_fn call_function = (call_fn)dlsym(handle, "call_absolute_interposable_function");
-    if (!read_data || !call_function) return 243;
-    if (read_data() != UINT64_C(0x1111222233334444)) return 244;
-    if (call_function() != 7) return 245;
+    uint64_t **data_slot = (uint64_t **)dlsym(handle, "mini_elf_absolute_data_pointer_slot_327");
+    target_fn *function_slot = (target_fn *)dlsym(handle, "mini_elf_absolute_function_pointer_slot_327");
+    if (!data_slot || !function_slot || !*data_slot || !*function_slot) return 243;
+    if (**data_slot != UINT64_C(0x1111222233334444)) return 244;
+    if ((*function_slot)() != 7) return 245;
     return dlclose(handle) == 0 ? 0 : 246;
 }
 "#,
@@ -266,20 +257,19 @@ int {FUNCTION}(void) {{
     return 42;
 }}
 
-typedef uint64_t (*read_fn)(void);
-typedef int (*call_fn)(void);
+typedef int (*target_fn)(void);
 
 int main(int argc, char **argv) {{
     if (argc != 2) return 247;
     void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!handle) return 248;
-    read_fn read_data = (read_fn)dlsym(handle, "read_absolute_interposable_data");
-    call_fn call_function = (call_fn)dlsym(handle, "call_absolute_interposable_function");
-    if (!read_data || !call_function) return 249;
-    if (read_data() != UINT64_C(0x5555666677778888)) return 250;
-    if (call_function() != 42) return 251;
+    uint64_t **data_slot = (uint64_t **)dlsym(handle, "mini_elf_absolute_data_pointer_slot_327");
+    target_fn *function_slot = (target_fn *)dlsym(handle, "mini_elf_absolute_function_pointer_slot_327");
+    if (!data_slot || !function_slot || !*data_slot || !*function_slot) return 249;
+    if (**data_slot != UINT64_C(0x5555666677778888)) return 250;
+    if ((*function_slot)() != 42) return 251;
     {DATA} = UINT64_C(0x9999aaaabbbbcccc);
-    if (read_data() != UINT64_C(0x9999aaaabbbbcccc)) return 252;
+    if (**data_slot != UINT64_C(0x9999aaaabbbbcccc)) return 252;
     return dlclose(handle) == 0 ? 0 : 253;
 }}
 "#
