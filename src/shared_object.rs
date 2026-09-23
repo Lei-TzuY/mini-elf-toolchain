@@ -1626,8 +1626,7 @@ fn validate_inputs(
                     let supported_definition = definitions
                         .get(symbol.name)
                         .is_some_and(is_supported_dynamic_tls_definition);
-                    let supported_reference_binding =
-                        binding == STB_GLOBAL || binding == STB_WEAK;
+                    let supported_reference_binding = binding == STB_GLOBAL || binding == STB_WEAK;
                     if symbol_type != STT_TLS
                         || !supported_reference_binding
                         || symbol.symbol.other != 0
@@ -1678,8 +1677,7 @@ fn validate_inputs(
                     let supported_definition = definitions
                         .get(symbol.name)
                         .is_some_and(is_supported_dynamic_tls_definition);
-                    let supported_reference_binding =
-                        binding == STB_GLOBAL || binding == STB_WEAK;
+                    let supported_reference_binding = binding == STB_GLOBAL || binding == STB_WEAK;
                     if symbol_type != STT_TLS
                         || !supported_reference_binding
                         || symbol.symbol.other != 0
@@ -1721,8 +1719,7 @@ fn validate_inputs(
                     let supported_definition = definitions
                         .get(symbol.name)
                         .is_some_and(is_supported_dynamic_tls_definition);
-                    let supported_reference_binding =
-                        binding == STB_GLOBAL || binding == STB_WEAK;
+                    let supported_reference_binding = binding == STB_GLOBAL || binding == STB_WEAK;
                     if symbol_type != STT_TLS
                         || !supported_reference_binding
                         || symbol.symbol.other != 0
