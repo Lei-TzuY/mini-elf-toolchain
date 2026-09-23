@@ -291,20 +291,14 @@ fn needed_from_rejects_provider_that_satisfies_no_consumer_import() {
 
 #[test]
 fn needed_from_rejects_malformed_provider_before_output() {
-    if !command_available(env!("CARGO_BIN_EXE_mini-elf-toolchain")) {
+    if !command_reports("as", "GNU assembler") {
         return;
     }
 
     let dir = temp_dir("malformed");
     let provider = dir.join("bad-provider.so");
     fs::write(&provider, b"not an ELF shared object").unwrap();
-    let object = if command_reports("as", "GNU assembler") {
-        build_consumer_object(&dir)
-    } else {
-        let object = dir.join("consumer.o");
-        fs::write(&object, b"also not an object").unwrap();
-        object
-    };
+    let object = build_consumer_object(&dir);
     let output = dir.join("must-not-exist.so");
 
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
