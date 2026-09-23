@@ -737,7 +737,7 @@ fn resolve_needed_dependencies(
                 };
                 if !matched {
                     return Err(CliError::Failure(format!(
-                        "{}: provider SONAME {:?} and its checked transitive dependency closure export none of the consumer's bounded external imports",
+                        "{}: provider SONAME {:?} and its checked transitive dependency closure exports none of the consumer's bounded external imports",
                         root_path.display(),
                         String::from_utf8_lossy(&provider.soname)
                     )));
