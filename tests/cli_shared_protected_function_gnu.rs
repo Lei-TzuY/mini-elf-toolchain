@@ -242,7 +242,6 @@ int main(int argc, char **argv) {{
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 fn protected_function_cross_object_plt_and_provider_lookup_work() {
     if !have_tools() {
