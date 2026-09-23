@@ -1430,6 +1430,113 @@ fn export_dynamic_symbol_indices(
         .collect()
 }
 
+fn apply_tls_ld_dtpoff32_relocations(
+    inputs: &[LinkerInputObject<'_>],
+    sections: &mut [RelocatedSectionImage],
+    sites: &BTreeSet<ImportRelocationSite>,
+    tls: Option<StaticTlsLayout>,
+    layout: &[LaidOutSection],
+) -> Result<(), SharedObjectError> {
+    if sites.is_empty() {
+        return Ok(());
+    }
+    let tls = tls.ok_or(SharedObjectError::IncompleteTlsLdSequence)?;
+    let tls_end = tls
+        .base_address
+        .checked_add(tls.memory_size)
+        .ok_or(SharedObjectError::AddressOverflow)?;
+
+    for site in sites {
+        let input = inputs
+            .get(site.object_index)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let table = input
+            .object
+            .rela_tables
+            .iter()
+            .find(|table| table.section_index == site.rela_section_index)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let relocation = table
+            .relocations
+            .get(site.relocation_index)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let symbol_table = input
+            .object
+            .symbol_tables
+            .iter()
+            .find(|candidate| candidate.section_index == table.symbol_table_index)
+            .expect("validated RELA table references validated symbol table");
+        let symbols = named_symbols_from_table(
+            input.file,
+            &input.object.sections,
+            symbol_table,
+            input.object_index,
+        )
+        .map_err(|source| SharedObjectError::ObjectSymbols {
+            object_index: input.object_index,
+            source,
+        })?;
+        let symbol = symbols
+            .iter()
+            .find(|symbol| symbol.symbol_index == relocation.symbol_index as usize)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let definition = SymbolDefinition {
+            name: symbol.name.to_vec(),
+            object_index: symbol.object_index,
+            table_section_index: symbol.table_section_index,
+            symbol_index: symbol.symbol_index,
+            symbol: symbol.symbol,
+        };
+        let absolute_value =
+            final_symbol_address(&definition, layout).map_err(SharedObjectError::SymbolAddress)?;
+        let symbol_end = absolute_value
+            .checked_add(symbol.symbol.size)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        if absolute_value < tls.base_address || symbol_end > tls_end {
+            return Err(SharedObjectError::TlsLdSymbolOutsideImage {
+                name: symbol.name.to_vec(),
+                address: absolute_value,
+            });
+        }
+        let module_offset = absolute_value - tls.base_address;
+        let target = sections
+            .iter_mut()
+            .find(|section| {
+                section.object_index == input.object_index
+                    && section.section_index == table.target_section_index
+            })
+            .ok_or(SharedObjectError::MissingTlsLdRelocationTarget {
+                object_index: input.object_index,
+                target_section_index: table.target_section_index,
+            })?;
+        apply_relocation(&mut target.bytes, relocation, module_offset, 0).map_err(|source| {
+            SharedObjectError::TlsLdOffset {
+                object_index: input.object_index,
+                rela_section_index: table.section_index,
+                relocation_index: site.relocation_index,
+                source,
+            }
+        })?;
+    }
+
+    Ok(())
+}
+
+fn build_tls_ld_relocation_table(
+    entry: Option<u64>,
+    enabled: bool,
+) -> Result<Vec<u8>, SharedObjectError> {
+    if !enabled {
+        return Ok(Vec::new());
+    }
+    let descriptor = entry.ok_or(SharedObjectError::MissingTlsLdEntry)?;
+    let mut bytes = Vec::with_capacity(ELF64_RELA_SIZE);
+    bytes.extend_from_slice(&descriptor.to_le_bytes());
+    bytes.extend_from_slice(&u64::from(R_X86_64_DTPMOD64).to_le_bytes());
+    bytes.extend_from_slice(&0_i64.to_le_bytes());
+    Ok(bytes)
+}
+
 fn build_tls_gd_relocation_table(
     symbols: &BTreeSet<Vec<u8>>,
     entries: &BTreeMap<Vec<u8>, u64>,
