@@ -460,8 +460,9 @@ fn validate_gnu_hash_metadata(
                     "provider DT_GNU_HASH bucket {bucket_index} chain is not terminated within its file-backed PT_LOAD range"
                 )));
             }
-            let chains_offset = chains_offset
-                .ok_or_else(|| malformed("provider DT_GNU_HASH has no file-backed chain entries"))?;
+            let chains_offset = chains_offset.ok_or_else(|| {
+                malformed("provider DT_GNU_HASH has no file-backed chain entries")
+            })?;
             let relative = chain_index
                 .checked_mul(4)
                 .ok_or_else(|| malformed("provider DT_GNU_HASH chain offset overflows u64"))?;
