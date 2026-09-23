@@ -29,8 +29,8 @@ use crate::tls::{
 };
 use crate::x86_64_relocations::{
     apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_DTPMOD64, R_X86_64_DTPOFF32,
-    R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPCREL, R_X86_64_JUMP_SLOT, R_X86_64_PLT32,
-    R_X86_64_TLSGD, R_X86_64_TLSLD,
+    R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPCREL, R_X86_64_GOTTPOFF,
+    R_X86_64_JUMP_SLOT, R_X86_64_PLT32, R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
 };
 
 const SHT_PROGBITS: u32 = 1;
@@ -60,9 +60,11 @@ const DT_RELA: i64 = 7;
 const DT_PLTREL: i64 = 20;
 const DT_JMPREL: i64 = 23;
 const DT_RUNPATH: i64 = 29;
+const DT_FLAGS: i64 = 30;
 const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
 const DT_RELACOUNT: i64 = 0x6fff_fff9;
+const DF_STATIC_TLS: u64 = 0x10;
 
 #[derive(Debug)]
 pub enum SharedObjectError {
@@ -140,6 +142,23 @@ pub enum SharedObjectError {
         relocation_index: usize,
         target_section_index: u16,
         flags: u64,
+    },
+    TlsIeUnsupported {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        symbol_index: u32,
+        name: Vec<u8>,
+    },
+    TlsIeTargetNotExecutable {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        target_section_index: u16,
+        flags: u64,
+    },
+    MissingTlsIeEntry {
+        name: Vec<u8>,
     },
     TlsLdUnsupported {
         object_index: usize,
@@ -366,6 +385,32 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object TLSGD relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} targets section {target_section_index} with flags {flags:#x}; bounded TLSGD access requires an allocated executable instruction site"
             ),
+            Self::TlsIeUnsupported {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                symbol_index,
+                name,
+            } => write!(
+                f,
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a defined default-visible strong STT_TLS symbol in the output DSO",
+                String::from_utf8_lossy(name)
+            ),
+            Self::TlsIeTargetNotExecutable {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                target_section_index,
+                flags,
+            } => write!(
+                f,
+                "shared object initial-exec TLS relocation {relocation_index} in RELA section {rela_section_index} of object {object_index} targets section {target_section_index} with flags {flags:#x}; GOTTPOFF access requires an allocated executable code target"
+            ),
+            Self::MissingTlsIeEntry { name } => write!(
+                f,
+                "shared object initial-exec TLS symbol {:?} has no synthetic TLS GOT entry",
+                String::from_utf8_lossy(name)
+            ),
             Self::TlsLdUnsupported {
                 object_index,
                 rela_section_index,
@@ -571,6 +616,9 @@ impl std::error::Error for SharedObjectError {
             | Self::MissingTlsGdEntry { .. }
             | Self::MissingTlsDynamicSymbol { .. }
             | Self::TlsGdTargetNotExecutable { .. }
+            | Self::TlsIeUnsupported { .. }
+            | Self::TlsIeTargetNotExecutable { .. }
+            | Self::MissingTlsIeEntry { .. }
             | Self::TlsLdUnsupported { .. }
             | Self::TlsLdTargetNotExecutable { .. }
             | Self::IncompleteTlsLdSequence
@@ -669,6 +717,7 @@ struct ImportPlan {
     got_symbols: BTreeSet<Vec<u8>>,
     plt_symbols: BTreeSet<Vec<u8>>,
     tls_gd_symbols: BTreeSet<Vec<u8>>,
+    tls_ie_symbols: BTreeSet<Vec<u8>>,
     tls_ld_dtpoff_sites: BTreeSet<ImportRelocationSite>,
     uses_tls_ld: bool,
 }
@@ -686,6 +735,7 @@ struct DynamicRelocations<'a> {
     relative_count: usize,
     jmprel: &'a [u8],
     plt_got_address: Option<u64>,
+    flags: u64,
 }
 
 #[derive(Debug)]
@@ -770,6 +820,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     .map_err(SharedObjectError::Relocation)?;
     let mut relocated = relocated_output.sections;
     let got_entries = relocated_output.got_entries;
+    let tls_got_entries = relocated_output.tls_got_entries;
     let tls_gd_entries = relocated_output.tls_gd_entries;
     let tls_ld_entry = relocated_output.tls_ld_entry;
     let plt_got_entries = relocated_output.plt_got_entries;
@@ -858,6 +909,12 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
     rela_bytes.extend_from_slice(&tls_gd_rela_bytes);
     let tls_ld_rela_bytes = build_tls_ld_relocation_table(tls_ld_entry, imports.uses_tls_ld)?;
     rela_bytes.extend_from_slice(&tls_ld_rela_bytes);
+    let tls_ie_rela_bytes = build_tls_ie_relocation_table(
+        &imports.tls_ie_symbols,
+        &tls_got_entries,
+        &export_dynamic_indices,
+    )?;
+    rela_bytes.extend_from_slice(&tls_ie_rela_bytes);
     let jmprel_bytes = build_plt_import_relocation_table(
         &imports.plt_symbols,
         &plt_got_entries,
@@ -894,6 +951,11 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
             relative_count: relative_relocation_count,
             jmprel: &jmprel_bytes,
             plt_got_address: plt_got_base,
+            flags: if imports.tls_ie_symbols.is_empty() {
+                0
+            } else {
+                DF_STATIC_TLS
+            },
         },
     )?;
     let dynamic_address = metadata_address
@@ -1022,6 +1084,7 @@ fn validate_inputs(
     let mut got_symbols = BTreeSet::<Vec<u8>>::new();
     let mut plt_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_gd_symbols = BTreeSet::<Vec<u8>>::new();
+    let mut tls_ie_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_ld_dtpoff_sites = BTreeSet::<ImportRelocationSite>::new();
     let mut uses_tls_ld = false;
 
@@ -1103,6 +1166,42 @@ fn validate_inputs(
                     tls_gd_symbols.insert(symbol.name.to_vec());
                     continue;
                 }
+                if relocation.relocation_type == R_X86_64_GOTTPOFF {
+                    let binding = symbol.symbol.info >> 4;
+                    let definition = definitions.get(symbol.name);
+                    let supported_definition = definition.is_some_and(|definition| {
+                        let definition_binding = definition.symbol.info >> 4;
+                        let definition_type = definition.symbol.info & 0x0f;
+                        definition_binding == STB_GLOBAL
+                            && definition_type == STT_TLS
+                            && definition.symbol.other == 0
+                    });
+                    if symbol_type != STT_TLS
+                        || binding != STB_GLOBAL
+                        || symbol.symbol.other != 0
+                        || symbol.name.is_empty()
+                        || !supported_definition
+                    {
+                        return Err(SharedObjectError::TlsIeUnsupported {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                            symbol_index: relocation.symbol_index,
+                            name: symbol.name.to_vec(),
+                        });
+                    }
+                    if target.flags & SHF_ALLOC == 0 || target.flags & SHF_EXECINSTR == 0 {
+                        return Err(SharedObjectError::TlsIeTargetNotExecutable {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                            target_section_index: table.target_section_index,
+                            flags: target.flags,
+                        });
+                    }
+                    tls_ie_symbols.insert(symbol.name.to_vec());
+                    continue;
+                }
                 if relocation.relocation_type == R_X86_64_TLSLD
                     || relocation.relocation_type == R_X86_64_DTPOFF32
                 {
@@ -1158,6 +1257,7 @@ fn validate_inputs(
                         | R_X86_64_GOTPCREL
                         | R_X86_64_PLT32
                         | R_X86_64_TLSGD
+                        | R_X86_64_GOTTPOFF
                         | R_X86_64_TLSLD
                         | R_X86_64_DTPOFF32
                 )
@@ -1177,7 +1277,10 @@ fn validate_inputs(
                 let is_plt_import = relocation.relocation_type == R_X86_64_PLT32;
                 if matches!(
                     relocation.relocation_type,
-                    R_X86_64_TLSGD | R_X86_64_TLSLD | R_X86_64_DTPOFF32
+                    R_X86_64_TLSGD
+                        | R_X86_64_GOTTPOFF
+                        | R_X86_64_TLSLD
+                        | R_X86_64_DTPOFF32
                 ) {
                     continue;
                 }
@@ -1345,7 +1448,10 @@ fn validate_inputs(
                         continue;
                     }
                     let linker_owned_got_symbol =
-                        (!got_symbols.is_empty() || !tls_gd_symbols.is_empty() || uses_tls_ld)
+                        (!got_symbols.is_empty()
+                            || !tls_gd_symbols.is_empty()
+                            || !tls_ie_symbols.is_empty()
+                            || uses_tls_ld)
                             && symbol.name == GLOBAL_OFFSET_TABLE_SYMBOL
                             && binding == STB_GLOBAL
                             && symbol_type == STT_NOTYPE;
@@ -1380,6 +1486,7 @@ fn validate_inputs(
         got_symbols,
         plt_symbols,
         tls_gd_symbols,
+        tls_ie_symbols,
         tls_ld_dtpoff_sites,
         uses_tls_ld,
     })
@@ -1533,6 +1640,35 @@ fn build_tls_ld_relocation_table(
     bytes.extend_from_slice(&descriptor.to_le_bytes());
     bytes.extend_from_slice(&u64::from(R_X86_64_DTPMOD64).to_le_bytes());
     bytes.extend_from_slice(&0_i64.to_le_bytes());
+    Ok(bytes)
+}
+
+fn build_tls_ie_relocation_table(
+    symbols: &BTreeSet<Vec<u8>>,
+    entries: &BTreeMap<Vec<u8>, u64>,
+    export_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+) -> Result<Vec<u8>, SharedObjectError> {
+    let capacity = symbols
+        .len()
+        .checked_mul(ELF64_RELA_SIZE)
+        .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let mut bytes = Vec::with_capacity(capacity);
+
+    for name in symbols {
+        let offset = entries
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingTlsIeEntry { name: name.clone() })?;
+        let dynamic_index = export_dynamic_indices
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingTlsDynamicSymbol { name: name.clone() })?;
+        let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_TPOFF64);
+        bytes.extend_from_slice(&offset.to_le_bytes());
+        bytes.extend_from_slice(&info.to_le_bytes());
+        bytes.extend_from_slice(&0_i64.to_le_bytes());
+    }
+
     Ok(bytes)
 }
 
@@ -1770,6 +1906,7 @@ fn build_dynamic_metadata(
     let relative_relocation_count = relocations.relative_count;
     let jmprel_bytes = relocations.jmprel;
     let plt_got_address = relocations.plt_got_address;
+    let dynamic_flags = relocations.flags;
     let symbol_count = exports
         .len()
         .checked_add(imports.len())
@@ -1871,6 +2008,7 @@ fn build_dynamic_metadata(
         .and_then(|count| count.checked_add(if has_relocations { 3 } else { 0 }))
         .and_then(|count| count.checked_add(usize::from(relative_relocation_count != 0)))
         .and_then(|count| count.checked_add(if has_plt_relocations { 4 } else { 0 }))
+        .and_then(|count| count.checked_add(usize::from(dynamic_flags != 0)))
         .and_then(|count| count.checked_add(1))
         .ok_or(SharedObjectError::MetadataTooLarge)?;
     let dynamic_size = dynamic_entry_count
@@ -1952,6 +2090,9 @@ fn build_dynamic_metadata(
                 .map_err(|_| SharedObjectError::MetadataTooLarge)?;
             entries.push((DT_RELACOUNT, rela_count));
         }
+    }
+    if dynamic_flags != 0 {
+        entries.push((DT_FLAGS, dynamic_flags));
     }
     if has_plt_relocations {
         let jmprel_address = checked_metadata_address(base_address, jmprel_offset)?;
