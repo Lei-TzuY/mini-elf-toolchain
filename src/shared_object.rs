@@ -522,7 +522,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         &imports.plt_symbols,
     )
     .map_err(SharedObjectError::Relocation)?;
-    let mut relocated = relocated_output.sections;
+    let relocated = relocated_output.sections;
     let got_entries = relocated_output.got_entries;
     let plt_got_entries = relocated_output.plt_got_entries;
     let plt_got_base = relocated_output.plt_got_base;
