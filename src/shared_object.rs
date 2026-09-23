@@ -756,11 +756,46 @@ struct ExportSymbol {
     size: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedImportRequirement {
+    pub linker_name: Vec<u8>,
+    pub name: Vec<u8>,
+    pub symbol_type: u8,
+    pub version: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedVersionRequirement {
+    pub linker_name: Vec<u8>,
+    pub provider: Vec<u8>,
+    pub version: Vec<u8>,
+}
+
 #[derive(Debug, Clone)]
 struct ImportSymbol {
     name: Vec<u8>,
+    dynamic_name: Vec<u8>,
+    version: Option<Vec<u8>>,
     info: u8,
     size: u64,
+}
+
+fn parse_import_identity(name: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>), SharedObjectError> {
+    let Some(separator) = name.iter().position(|byte| *byte == b'@') else {
+        return Ok((name.to_vec(), None));
+    };
+    let base = &name[..separator];
+    let version = &name[separator + 1..];
+    if base.is_empty()
+        || version.is_empty()
+        || version.contains(&b'@')
+        || name[separator..].starts_with(b"@@")
+    {
+        return Err(SharedObjectError::MalformedVersionedImportName {
+            name: name.to_vec(),
+        });
+    }
+    Ok((base.to_vec(), Some(version.to_vec())))
 }
 
 fn record_import_symbol(
@@ -771,6 +806,13 @@ fn record_import_symbol(
 ) -> Result<(), SharedObjectError> {
     let symbol_type = info & 0x0f;
     let binding = info >> 4;
+    let (dynamic_name, version) = parse_import_identity(name)?;
+    if version.is_some() && symbol_type != STT_OBJECT {
+        return Err(SharedObjectError::UnsupportedVersionedImportType {
+            name: name.to_vec(),
+            symbol_type,
+        });
+    }
 
     match imports.get_mut(name) {
         Some(existing) => {
@@ -794,6 +836,8 @@ fn record_import_symbol(
                 name.to_vec(),
                 ImportSymbol {
                     name: name.to_vec(),
+                    dynamic_name,
+                    version,
                     info,
                     size,
                 },
@@ -850,7 +894,7 @@ struct DynamicMetadata {
 
 pub fn shared_import_requirements(
     inputs: &[LinkerInputObject<'_>],
-) -> Result<BTreeMap<Vec<u8>, u8>, SharedObjectError> {
+) -> Result<Vec<SharedImportRequirement>, SharedObjectError> {
     let validated = inputs
         .iter()
         .map(LinkerInputObject::validated_object)
@@ -860,8 +904,13 @@ pub fn shared_import_requirements(
     let plan = validate_inputs(inputs, &resolved.definitions)?;
     Ok(plan
         .symbols
-        .into_iter()
-        .map(|(name, symbol)| (name, symbol.info & 0x0f))
+        .into_values()
+        .map(|symbol| SharedImportRequirement {
+            linker_name: symbol.name,
+            name: symbol.dynamic_name,
+            symbol_type: symbol.info & 0x0f,
+            version: symbol.version,
+        })
         .collect())
 }
 
