@@ -855,12 +855,16 @@ fn inspect_transitive_provider_exports(
         .to_path_buf();
     let mut queue = VecDeque::new();
     for needed in &root.needed {
-        queue.push_back((needed.clone(), root_parent.clone()));
+        queue.push_back((needed.clone(), root_parent.clone(), root.runpath.clone()));
     }
 
-    while let Some((needed, provider_directory)) = queue.pop_front() {
-        let dependency_path =
-            resolve_transitive_provider_path(&needed, &provider_directory, search_paths)?;
+    while let Some((needed, provider_directory, runpath)) = queue.pop_front() {
+        let dependency_path = resolve_transitive_provider_path(
+            &needed,
+            &provider_directory,
+            runpath.as_deref(),
+            search_paths,
+        )?;
         let canonical = fs::canonicalize(&dependency_path).map_err(|error| {
             CliError::Failure(format!(
                 "{}: cannot canonicalize transitive shared provider dependency {:?}: {error}",
@@ -889,7 +893,7 @@ fn inspect_transitive_provider_exports(
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         for child in &provider.needed {
-            queue.push_back((child.clone(), parent.clone()));
+            queue.push_back((child.clone(), parent.clone(), provider.runpath.clone()));
         }
     }
 
@@ -899,6 +903,7 @@ fn inspect_transitive_provider_exports(
 fn resolve_transitive_provider_path(
     name: &[u8],
     provider_directory: &Path,
+    runpath: Option<&[u8]>,
     search_paths: &[PathBuf],
 ) -> Result<PathBuf, CliError> {
     let name = std::str::from_utf8(name).map_err(|_| {
@@ -918,12 +923,16 @@ fn resolve_transitive_provider_path(
         )));
     }
 
-    let mut directories = Vec::with_capacity(search_paths.len() + 1);
-    directories.push(provider_directory.to_path_buf());
-    for path in search_paths {
-        if !directories.iter().any(|candidate| candidate == path) {
-            directories.push(path.clone());
+    let mut directories = Vec::new();
+    push_unique_directory(&mut directories, provider_directory.to_path_buf());
+
+    if let Some(runpath) = runpath {
+        for directory in expand_provider_runpath(runpath, provider_directory)? {
+            push_unique_directory(&mut directories, directory);
         }
+    }
+    for path in search_paths {
+        push_unique_directory(&mut directories, path.clone());
     }
 
     for directory in &directories {
@@ -943,6 +952,60 @@ fn resolve_transitive_provider_path(
         }
     }
     Err(CliError::Failure(message))
+}
+
+fn push_unique_directory(directories: &mut Vec<PathBuf>, directory: PathBuf) {
+    if !directories.iter().any(|candidate| candidate == &directory) {
+        directories.push(directory);
+    }
+}
+
+fn expand_provider_runpath(
+    runpath: &[u8],
+    provider_directory: &Path,
+) -> Result<Vec<PathBuf>, CliError> {
+    let runpath = std::str::from_utf8(runpath).map_err(|_| {
+        CliError::Failure(format!(
+            "provider DT_RUNPATH {:?} is not valid UTF-8",
+            String::from_utf8_lossy(runpath)
+        ))
+    })?;
+    if runpath.is_empty() {
+        return Err(CliError::Failure(
+            "provider DT_RUNPATH is empty; bounded closure resolution rejects empty search entries"
+                .to_owned(),
+        ));
+    }
+
+    let mut result = Vec::new();
+    for entry in runpath.split(':') {
+        if entry.is_empty() {
+            return Err(CliError::Failure(format!(
+                "provider DT_RUNPATH '{runpath}' contains an empty search entry"
+            )));
+        }
+        let path = if entry == "$ORIGIN" || entry == "${ORIGIN}" {
+            provider_directory.to_path_buf()
+        } else if let Some(suffix) = entry.strip_prefix("$ORIGIN/") {
+            provider_directory.join(suffix)
+        } else if let Some(suffix) = entry.strip_prefix("${ORIGIN}/") {
+            provider_directory.join(suffix)
+        } else if entry.contains('$') {
+            return Err(CliError::Failure(format!(
+                "provider DT_RUNPATH entry '{entry}' uses an unsupported loader token; bounded closure resolution supports only $ORIGIN"
+            )));
+        } else {
+            let path = PathBuf::from(entry);
+            if !path.is_absolute() {
+                return Err(CliError::Failure(format!(
+                    "provider DT_RUNPATH entry '{entry}' is relative; bounded closure resolution accepts only absolute paths or $ORIGIN-based entries"
+                )));
+            }
+            path
+        };
+        push_unique_directory(&mut result, path);
+    }
+    Ok(result)
 }
 
 fn read_provider_file(path: &Path, role: &str) -> Result<Vec<u8>, CliError> {
