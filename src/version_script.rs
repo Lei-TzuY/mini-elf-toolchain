@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionScript {
     assignments: BTreeMap<Vec<u8>, Vec<u8>>,
+    parents: BTreeMap<Vec<u8>, Vec<u8>>,
     localize_unlisted: bool,
 }
 
@@ -16,6 +17,7 @@ impl VersionScript {
         let mut cursor = Cursor::new(tokens);
         let mut assignments = BTreeMap::new();
         let mut versions = BTreeSet::new();
+        let mut parents = BTreeMap::new();
         let mut localize_unlisted = false;
 
         while !cursor.is_done() {
@@ -83,8 +85,9 @@ impl VersionScript {
             }
 
             cursor.expect(TokenKind::RBrace, "'}' after version block")?;
-            if cursor.peek().is_some() && !cursor.peek_is(TokenKind::Semi) {
-                return Err(VersionScriptError::UnsupportedInheritance);
+            if !cursor.peek_is(TokenKind::Semi) {
+                let parent = cursor.expect_word("parent version name")?;
+                parents.insert(version.clone(), parent);
             }
             cursor.expect(TokenKind::Semi, "';' after version block")?;
         }
@@ -93,8 +96,30 @@ impl VersionScript {
             return Err(VersionScriptError::NoGlobalSymbols);
         }
 
+        for (version, parent) in &parents {
+            if !versions.contains(parent) {
+                return Err(VersionScriptError::UnknownParent {
+                    version: version.clone(),
+                    parent: parent.clone(),
+                });
+            }
+        }
+        for version in &versions {
+            let mut seen = BTreeSet::new();
+            let mut current = version.as_slice();
+            while let Some(parent) = parents.get(current) {
+                if !seen.insert(current.to_vec()) {
+                    return Err(VersionScriptError::InheritanceCycle {
+                        version: version.clone(),
+                    });
+                }
+                current = parent;
+            }
+        }
+
         Ok(Self {
             assignments,
+            parents,
             localize_unlisted,
         })
     }
@@ -107,6 +132,10 @@ impl VersionScript {
         self.assignments
             .iter()
             .map(|(symbol, version)| (symbol.as_slice(), version.as_slice()))
+    }
+
+    pub fn parent_for(&self, version: &[u8]) -> Option<&[u8]> {
+        self.parents.get(version).map(Vec::as_slice)
     }
 
     pub fn localize_unlisted(&self) -> bool {
@@ -133,7 +162,13 @@ pub enum VersionScriptError {
     },
     UnsupportedGlobalWildcard,
     UnsupportedLocalPattern,
-    UnsupportedInheritance,
+    UnknownParent {
+        version: Vec<u8>,
+        parent: Vec<u8>,
+    },
+    InheritanceCycle {
+        version: Vec<u8>,
+    },
     DuplicateVersion {
         version: Vec<u8>,
     },
@@ -174,9 +209,16 @@ impl fmt::Display for VersionScriptError {
                 f,
                 "bounded version scripts support only local: *;"
             ),
-            Self::UnsupportedInheritance => write!(
+            Self::UnknownParent { version, parent } => write!(
                 f,
-                "version-definition inheritance is unsupported in bounded version scripts"
+                "version {:?} inherits from undefined parent version {:?}",
+                String::from_utf8_lossy(version),
+                String::from_utf8_lossy(parent)
+            ),
+            Self::InheritanceCycle { version } => write!(
+                f,
+                "version-definition inheritance contains a cycle reachable from {:?}",
+                String::from_utf8_lossy(version)
             ),
             Self::DuplicateVersion { version } => write!(
                 f,
@@ -414,15 +456,31 @@ mod tests {
     }
 
     #[test]
-    fn rejects_inheritance_and_global_wildcards() {
-        assert_eq!(
-            VersionScript::parse(b"VERS_2 { global: api; } VERS_1;"),
-            Err(VersionScriptError::UnsupportedInheritance)
-        );
+    fn parses_single_parent_inheritance_and_rejects_global_wildcards() {
+        let script =
+            VersionScript::parse(b"VERS_1 { global: old_api; }; VERS_2 { global: api; } VERS_1;")
+                .unwrap();
+        assert_eq!(script.parent_for(b"VERS_1"), None);
+        assert_eq!(script.parent_for(b"VERS_2"), Some(b"VERS_1".as_slice()));
+
         assert_eq!(
             VersionScript::parse(b"VERS_1 { global: *; };"),
             Err(VersionScriptError::UnsupportedGlobalWildcard)
         );
+    }
+
+    #[test]
+    fn rejects_unknown_and_cyclic_inheritance() {
+        assert!(matches!(
+            VersionScript::parse(b"VERS_2 { global: api; } MISSING;"),
+            Err(VersionScriptError::UnknownParent { .. })
+        ));
+        assert!(matches!(
+            VersionScript::parse(
+                b"VERS_1 { global: old_api; } VERS_2; VERS_2 { global: new_api; } VERS_1;"
+            ),
+            Err(VersionScriptError::InheritanceCycle { .. })
+        ));
     }
 
     #[test]

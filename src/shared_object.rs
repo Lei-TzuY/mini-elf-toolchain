@@ -968,6 +968,7 @@ struct DynamicNames<'a> {
     soname: Option<&'a [u8]>,
     runpath: Option<&'a [u8]>,
     version_requirements: &'a [SharedVersionRequirement],
+    version_script: Option<&'a VersionScript>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1342,6 +1343,7 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
             soname,
             runpath,
             version_requirements,
+            version_script,
         },
         DynamicRelocations {
             rela: &rela_bytes,
@@ -2457,6 +2459,7 @@ fn build_version_metadata(
     exports: &[ExportSymbol],
     imports: &BTreeMap<Vec<u8>, ImportSymbol>,
     requirements: &[SharedVersionRequirement],
+    version_script: Option<&VersionScript>,
     dynstr: &mut Vec<u8>,
 ) -> Result<VersionMetadata, SharedObjectError> {
     let local_versions = exports
@@ -2584,8 +2587,14 @@ fn build_version_metadata(
             .get(version)
             .copied()
             .ok_or(SharedObjectError::MetadataTooLarge)?;
+        let parent = version_script.and_then(|script| script.parent_for(version));
+        let aux_count = 1usize + usize::from(parent.is_some());
         let record_size = ELF64_VERDEF_SIZE
-            .checked_add(ELF64_VERDAUX_SIZE)
+            .checked_add(
+                aux_count
+                    .checked_mul(ELF64_VERDAUX_SIZE)
+                    .ok_or(SharedObjectError::MetadataTooLarge)?,
+            )
             .ok_or(SharedObjectError::MetadataTooLarge)?;
         let next = if definition_index + 1 == definition_count {
             0
@@ -2596,7 +2605,11 @@ fn build_version_metadata(
         verdef.extend_from_slice(&VER_DEF_CURRENT.to_le_bytes());
         verdef.extend_from_slice(&0_u16.to_le_bytes());
         verdef.extend_from_slice(&index.to_le_bytes());
-        verdef.extend_from_slice(&1_u16.to_le_bytes());
+        verdef.extend_from_slice(
+            &u16::try_from(aux_count)
+                .map_err(|_| SharedObjectError::MetadataTooLarge)?
+                .to_le_bytes(),
+        );
         verdef.extend_from_slice(&sysv_elf_hash(version).to_le_bytes());
         verdef.extend_from_slice(&(ELF64_VERDEF_SIZE as u32).to_le_bytes());
         verdef.extend_from_slice(&next.to_le_bytes());
@@ -2607,7 +2620,24 @@ fn build_version_metadata(
                 .ok_or(SharedObjectError::MetadataTooLarge)?
                 .to_le_bytes(),
         );
-        verdef.extend_from_slice(&0_u32.to_le_bytes());
+        verdef.extend_from_slice(
+            &(if parent.is_some() {
+                ELF64_VERDAUX_SIZE as u32
+            } else {
+                0
+            })
+            .to_le_bytes(),
+        );
+        if let Some(parent) = parent {
+            verdef.extend_from_slice(
+                &local_name_offsets
+                    .get(parent)
+                    .copied()
+                    .ok_or(SharedObjectError::MetadataTooLarge)?
+                    .to_le_bytes(),
+            );
+            verdef.extend_from_slice(&0_u32.to_le_bytes());
+        }
     }
 
     let mut providers = BTreeMap::<Vec<u8>, Vec<(Vec<u8>, u16)>>::new();
@@ -2768,8 +2798,13 @@ fn build_dynamic_metadata(
         None
     };
 
-    let version_metadata =
-        build_version_metadata(exports, imports, names.version_requirements, &mut dynstr)?;
+    let version_metadata = build_version_metadata(
+        exports,
+        imports,
+        names.version_requirements,
+        names.version_script,
+        &mut dynstr,
+    )?;
     let dynstr_offset = dynsym_offset
         .checked_add(dynsym_size)
         .ok_or(SharedObjectError::MetadataTooLarge)?;
