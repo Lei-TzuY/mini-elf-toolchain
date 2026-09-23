@@ -222,10 +222,7 @@ function_pointer:
     assert!(!mini.status.success());
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
-    assert!(
-        stderr.contains("conflicting ELF symbol types"),
-        "{stderr}"
-    );
+    assert!(stderr.contains("conflicting ELF symbol types"), "{stderr}");
     assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
