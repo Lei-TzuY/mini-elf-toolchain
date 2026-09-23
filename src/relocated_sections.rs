@@ -5,7 +5,6 @@ use crate::elf64::SHT_NOBITS;
 use crate::executable_pipeline::ExecutableSectionInput;
 use crate::layout::LaidOutSection;
 use crate::link_context::{
-    build_link_context_with_got_entry_maps_and_unresolved_got,
     build_link_context_with_got_plt_maps_and_unresolved, LinkContextBuildError,
     LinkContextRelocationError,
 };
