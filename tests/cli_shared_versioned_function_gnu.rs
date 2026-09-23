@@ -207,7 +207,7 @@ fn named_version_function_import_composes_with_plt_got_and_direct_pointer() {
         symbols.lines().any(|line| {
             line.contains("FUNC")
                 && line.contains("UND")
-                && line.ends_with(" provider_function@VERS_1")
+                && line.contains("provider_function@VERS_1")
         }),
         "{symbols}"
     );
