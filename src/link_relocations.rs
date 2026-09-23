@@ -356,7 +356,6 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
             STB_GLOBAL | STB_WEAK => {
                 let address = match globals.addresses.get(symbol.name) {
                     Some(address) => *address,
-                    None if binding == STB_WEAK && symbol.symbol.section_index == SHN_UNDEF => 0,
                     None if symbol.symbol.section_index == SHN_UNDEF
                         && globals.unresolved_plt_symbols.contains(symbol.name)
                         && globals.plt_entries.contains_key(symbol.name)
@@ -367,6 +366,7 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
                     {
                         globals.plt_entries[symbol.name]
                     }
+                    None if binding == STB_WEAK && symbol.symbol.section_index == SHN_UNDEF => 0,
                     None if symbol.symbol.section_index == SHN_UNDEF
                         && globals.unresolved_got_symbols.contains(symbol.name)
                         && globals.got_entries.contains_key(symbol.name)
