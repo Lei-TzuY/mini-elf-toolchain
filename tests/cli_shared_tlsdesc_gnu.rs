@@ -237,26 +237,32 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_tlsdesc_rejects_weak_undefined_tls_symbol() {
+fn shared_tlsdesc_keeps_defined_weak_tls_fail_closed() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("weak-undefined");
+    let dir = temp_dir("defined-weak");
     let object = assemble(
         &dir,
-        "weak-undefined",
-        r#".section .text
-.globl read_external_tlsdesc
-.type read_external_tlsdesc,@function
-.weak external_tlsdesc
-.type external_tlsdesc,@tls_object
-read_external_tlsdesc:
-    leaq external_tlsdesc@TLSDESC(%rip), %rax
-    call *external_tlsdesc@TLSCALL(%rax)
+        "weak-defined",
+        r#".section .tdata,"awT",@progbits
+.align 8
+.weak local_weak_tlsdesc
+.type local_weak_tlsdesc,@tls_object
+local_weak_tlsdesc:
+    .quad 7
+.size local_weak_tlsdesc, .-local_weak_tlsdesc
+
+.section .text
+.globl read_local_weak_tlsdesc
+.type read_local_weak_tlsdesc,@function
+read_local_weak_tlsdesc:
+    leaq local_weak_tlsdesc@TLSDESC(%rip), %rax
+    call *local_weak_tlsdesc@TLSCALL(%rax)
     mov %fs:(%rax), %rax
     ret
-.size read_external_tlsdesc, .-read_external_tlsdesc
+.size read_local_weak_tlsdesc, .-read_local_weak_tlsdesc
 "#,
     );
     let output = dir.join("must-not-exist.so");
@@ -273,7 +279,9 @@ read_external_tlsdesc:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("TLSDESC") || stderr.contains("weak") || stderr.contains("binding"),
+        stderr.contains("TLSDESC")
+            && stderr.contains("strong supported definition/import")
+            && stderr.contains("unresolved weak import"),
         "{stderr}"
     );
     assert!(!output.exists());
