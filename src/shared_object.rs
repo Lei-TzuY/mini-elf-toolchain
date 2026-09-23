@@ -550,7 +550,10 @@ fn build_dynamic_metadata(
             u64::try_from(rela_bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
         let rela_count = u64::try_from(relative_relocation_count)
             .map_err(|_| SharedObjectError::MetadataTooLarge)?;
-        debug_assert_eq!(rela_bytes.len(), relative_relocation_count * ELF64_RELA_SIZE);
+        debug_assert_eq!(
+            rela_bytes.len(),
+            relative_relocation_count * ELF64_RELA_SIZE
+        );
         entries.extend_from_slice(&[
             (DT_RELA, rela_address),
             (DT_RELASZ, rela_size),
