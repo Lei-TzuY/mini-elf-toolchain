@@ -198,6 +198,7 @@ pub struct ResolvedGlobalSymbols<'a> {
     pub tls_got_entries: &'a BTreeMap<Vec<u8>, u64>,
     pub tls_gd_entries: &'a BTreeMap<Vec<u8>, u64>,
     pub tls_ld_entry: Option<u64>,
+    pub unresolved_tls_got_symbols: &'a BTreeSet<Vec<u8>>,
     pub unresolved_got_symbols: &'a BTreeSet<Vec<u8>>,
     pub plt_entries: &'a BTreeMap<Vec<u8>, u64>,
     pub unresolved_plt_symbols: &'a BTreeSet<Vec<u8>>,
@@ -216,6 +217,7 @@ pub fn apply_rela_table_with_resolved_symbols(
     let got_entries = BTreeMap::new();
     let tls_got_entries = BTreeMap::new();
     let tls_gd_entries = BTreeMap::new();
+    let unresolved_tls_got_symbols = BTreeSet::new();
     let unresolved_got_symbols = BTreeSet::new();
     let plt_entries = BTreeMap::new();
     let unresolved_plt_symbols = BTreeSet::new();
@@ -232,6 +234,7 @@ pub fn apply_rela_table_with_resolved_symbols(
             tls_got_entries: &tls_got_entries,
             tls_gd_entries: &tls_gd_entries,
             tls_ld_entry: None,
+            unresolved_tls_got_symbols: &unresolved_tls_got_symbols,
             unresolved_got_symbols: &unresolved_got_symbols,
             plt_entries: &plt_entries,
             unresolved_plt_symbols: &unresolved_plt_symbols,
@@ -345,6 +348,22 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
                             })
                             .all(|candidate| {
                                 is_tls_gd_relocation_type(candidate.relocation_type)
+                            }) =>
+                    {
+                        0
+                    }
+                    None if symbol.symbol.section_index == SHN_UNDEF
+                        && globals.unresolved_tls_got_symbols.contains(symbol.name)
+                        && globals.tls_got_entries.contains_key(symbol.name)
+                        && table
+                            .relocations
+                            .iter()
+                            .filter(|candidate| {
+                                candidate.symbol_index == relocation.symbol_index
+                                    && candidate.relocation_type != R_X86_64_NONE
+                            })
+                            .all(|candidate| {
+                                is_static_tls_gotpcrel_type(candidate.relocation_type)
                             }) =>
                     {
                         0

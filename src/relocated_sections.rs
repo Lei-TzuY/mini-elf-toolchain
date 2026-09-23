@@ -41,6 +41,13 @@ const PLT_GOT_ENTRY_SIZE: u64 = 8;
 const PLT_GOT_ALIGNMENT: u64 = 8;
 const STT_TLS: u8 = 6;
 
+#[derive(Debug, Clone, Copy)]
+pub struct TlsSyntheticRequests<'a> {
+    pub tls_gd_symbols: &'a BTreeSet<Vec<u8>>,
+    pub tls_ld_enabled: bool,
+    pub external_tls_got_symbols: &'a BTreeSet<Vec<u8>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelocatedSectionImage {
     pub object_index: usize,
@@ -120,6 +127,9 @@ pub enum RelocatedSectionError {
         name: Vec<u8>,
     },
     MissingExternalGotSymbol {
+        name: Vec<u8>,
+    },
+    MissingExternalTlsGotSymbol {
         name: Vec<u8>,
     },
     MissingExternalPltSymbol {
@@ -215,6 +225,11 @@ impl fmt::Display for RelocatedSectionError {
                 "requested external GOT symbol {:?} has no synthetic GOT relocation",
                 String::from_utf8_lossy(name)
             ),
+            Self::MissingExternalTlsGotSymbol { name } => write!(
+                f,
+                "requested external TLS GOT symbol {:?} has no GOTTPOFF relocation",
+                String::from_utf8_lossy(name)
+            ),
             Self::MissingExternalPltSymbol { name } => write!(
                 f,
                 "requested external PLT symbol {:?} has no PLT32 relocation",
@@ -280,6 +295,7 @@ impl std::error::Error for RelocatedSectionError {
             | Self::GotAddressOverflow { .. }
             | Self::MissingGotSymbolAddress { .. }
             | Self::MissingExternalGotSymbol { .. }
+            | Self::MissingExternalTlsGotSymbol { .. }
             | Self::MissingExternalPltSymbol { .. }
             | Self::MissingTlsGdSymbol { .. }
             | Self::MissingTlsLdRelocation
@@ -372,6 +388,31 @@ pub fn relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld(
     tls_gd_symbols: &BTreeSet<Vec<u8>>,
     tls_ld_enabled: bool,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
+        inputs,
+        start_address,
+        page_alignment,
+        external_got_symbols,
+        external_plt_symbols,
+        TlsSyntheticRequests {
+            tls_gd_symbols,
+            tls_ld_enabled,
+            external_tls_got_symbols: &BTreeSet::new(),
+        },
+    )
+}
+
+pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    external_got_symbols: &BTreeSet<Vec<u8>>,
+    external_plt_symbols: &BTreeSet<Vec<u8>>,
+    tls: TlsSyntheticRequests<'_>,
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    let tls_gd_symbols = tls.tls_gd_symbols;
+    let tls_ld_enabled = tls.tls_ld_enabled;
+    let external_tls_got_symbols = tls.external_tls_got_symbols;
     for (position, input) in inputs.iter().enumerate() {
         if input.object_index != position {
             return Err(RelocatedSectionError::NonCanonicalObjectIndex {
@@ -404,6 +445,11 @@ pub fn relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld(
         }
     }
     let tls_got_symbols = collect_static_tls_got_symbols(inputs)?;
+    for name in external_tls_got_symbols {
+        if !tls_got_symbols.iter().any(|candidate| candidate == name) {
+            return Err(RelocatedSectionError::MissingExternalTlsGotSymbol { name: name.clone() });
+        }
+    }
     if !tls_gd_symbols.is_empty() {
         let observed_tls_gd = collect_tls_gd_symbols(inputs)?;
         for name in tls_gd_symbols {
@@ -550,6 +596,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld(
             tls_got_entries,
             tls_gd_entries,
             tls_ld_entry,
+            unresolved_tls_got_symbols: external_tls_got_symbols.clone(),
             unresolved_got_symbols: external_got_symbols.clone(),
             plt_entries,
             unresolved_plt_symbols: external_plt_symbols.clone(),
