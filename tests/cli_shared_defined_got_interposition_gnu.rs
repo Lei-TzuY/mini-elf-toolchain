@@ -305,8 +305,7 @@ call_interposable_function:
     assert!(input_relocations.status.success());
     let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
     assert!(
-        input_relocations.contains("R_X86_64_GOTPCREL")
-            && input_relocations.contains(FUNCTION),
+        input_relocations.contains("R_X86_64_GOTPCREL") && input_relocations.contains(FUNCTION),
         "{input_relocations}"
     );
 
@@ -369,9 +368,9 @@ call_interposable_function:
         assert!(relocations.status.success());
         let relocations = String::from_utf8_lossy(&relocations.stdout);
         assert!(
-            relocations.lines().any(|line| {
-                line.contains("R_X86_64_GLOB_DAT") && line.contains(FUNCTION)
-            }),
+            relocations
+                .lines()
+                .any(|line| { line.contains("R_X86_64_GLOB_DAT") && line.contains(FUNCTION) }),
             "{} dynamic relocations:\n{relocations}",
             shared.display()
         );
