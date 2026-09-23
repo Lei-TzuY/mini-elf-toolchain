@@ -213,24 +213,24 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_external_weak_function_import_remains_fail_closed() {
+fn shared_external_weak_function_plt_call_remains_fail_closed() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("weak");
+    let dir = temp_dir("weak-plt");
     let object = assemble(
         &dir,
-        "weak-function",
+        "weak-function-call",
         r#".section .text
-.globl address_of_host_function
-.type address_of_host_function,@function
+.globl call_host_function
+.type call_host_function,@function
 .weak host_function
 .type host_function,@function
-address_of_host_function:
-    mov host_function@GOTPCREL(%rip), %rax
+call_host_function:
+    call host_function@PLT
     ret
-.size address_of_host_function, .-address_of_host_function
+.size call_host_function, .-call_host_function
 "#,
     );
     let output = dir.join("must-not-exist.so");

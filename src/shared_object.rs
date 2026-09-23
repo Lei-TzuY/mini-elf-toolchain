@@ -368,7 +368,7 @@ impl fmt::Display for SharedObjectError {
                 binding,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references undefined symbol {symbol_index} ({:?}) with unsupported binding {binding}; bounded imports accept strong globals plus weak STT_OBJECT symbols on non-call paths, while PLT imports require a strong global symbol",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references undefined symbol {symbol_index} ({:?}) with unsupported binding {binding}; bounded imports accept strong globals plus weak STT_OBJECT/STT_FUNC symbols on non-call paths, while PLT imports require a strong global symbol",
                 String::from_utf8_lossy(name)
             ),
             Self::ConflictingImportSymbolType {
@@ -1846,7 +1846,9 @@ fn validate_inputs(
                 }
 
                 let binding_supported = binding == STB_GLOBAL
-                    || (binding == STB_WEAK && !is_plt_import && symbol_type == STT_OBJECT);
+                    || (binding == STB_WEAK
+                        && !is_plt_import
+                        && matches!(symbol_type, STT_OBJECT | STT_FUNC));
                 if !binding_supported {
                     return Err(SharedObjectError::ExternalImportUnsupportedBinding {
                         object_index: input.object_index,
@@ -2001,7 +2003,8 @@ fn validate_inputs(
                         symbol.name == b"__tls_get_addr" && symbol_type == STT_NOTYPE;
                     let supported_import = import_symbols.contains_key(symbol.name)
                         && (binding == STB_GLOBAL
-                            || (binding == STB_WEAK && symbol_type == STT_OBJECT))
+                            || (binding == STB_WEAK
+                                && matches!(symbol_type, STT_OBJECT | STT_FUNC)))
                         && (matches!(symbol_type, STT_OBJECT | STT_FUNC) || tls_get_addr_notype);
                     if !supported_import {
                         return Err(SharedObjectError::UndefinedNonlocal {
