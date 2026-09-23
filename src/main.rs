@@ -436,12 +436,11 @@ fn partial_files(
         .iter()
         .map(|input| loaded.paths[input.file_index].clone())
         .collect::<Vec<_>>();
-    let prepared =
-        prepare_ordered_link_inputs_with_forced_undefined(
-            &ordered_inputs,
-            options.forced_undefined,
-        )
-            .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
+    let prepared = prepare_ordered_link_inputs_with_forced_undefined(
+        &ordered_inputs,
+        options.forced_undefined,
+    )
+    .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     let inputs = prepared
         .objects
         .iter()
