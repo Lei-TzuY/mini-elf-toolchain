@@ -41,7 +41,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [-Bsymbolic] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -151,6 +151,12 @@ where
         let raw_remaining: Vec<_> = args.collect();
         let (position_independent, raw_remaining) = extract_pie_argument(&raw_remaining)?;
         let (shared_object, raw_remaining) = extract_shared_argument(&raw_remaining)?;
+        let (symbolic, raw_remaining) = extract_symbolic_argument(&raw_remaining)?;
+        if symbolic && !shared_object {
+            return Err(CliError::Usage(
+                "-Bsymbolic is only supported with --shared".to_owned(),
+            ));
+        }
         let soname = extract_soname_argument(&raw_remaining)?;
         if !shared_object && soname.soname.is_some() {
             return Err(CliError::Usage(
@@ -299,6 +305,7 @@ where
             image_base: image_base.image_base,
             position_independent,
             shared_object,
+            symbolic,
             soname: soname.soname.as_deref(),
             runpath: runpath.runpath.as_deref(),
             needed: &needed.specs,
@@ -378,6 +385,33 @@ fn extract_shared_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString
     }
 
     Ok((shared, remaining))
+}
+
+fn extract_symbolic_argument(
+    arguments: &[OsString],
+) -> Result<(bool, Vec<OsString>), CliError> {
+    let mut symbolic = false;
+    let mut remaining = Vec::with_capacity(arguments.len());
+
+    for argument in arguments {
+        if argument == "-Bsymbolic" {
+            if symbolic {
+                return Err(CliError::Usage("duplicate -Bsymbolic option".to_owned()));
+            }
+            symbolic = true;
+        } else if argument
+            .to_str()
+            .is_some_and(|argument| argument.starts_with("-Bsymbolic="))
+        {
+            return Err(CliError::Usage(
+                "-Bsymbolic does not accept a value".to_owned(),
+            ));
+        } else {
+            remaining.push(argument.clone());
+        }
+    }
+
+    Ok((symbolic, remaining))
 }
 
 struct SonameArguments {
@@ -844,6 +878,7 @@ struct LinkFilesOptions<'a> {
     image_base: u64,
     position_independent: bool,
     shared_object: bool,
+    symbolic: bool,
     soname: Option<&'a [u8]>,
     runpath: Option<&'a [u8]>,
     needed: &'a [NeededSpec],
@@ -1164,6 +1199,7 @@ fn link_files(
                 version_requirements: &needed.version_requirements,
                 checked_version_providers: &needed.checked_version_providers,
                 version_script: options.version_script,
+                symbolic: options.symbolic,
             },
         )
         .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
