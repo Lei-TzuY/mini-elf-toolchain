@@ -530,7 +530,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a default-visible strong STT_TLS symbol that is either defined in the output DSO or recorded as an external import",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references TLS symbol {symbol_index} ({:?}); bounded initial-exec TLS requires a default-visible STT_TLS symbol that is either a strong supported definition/import or an unresolved weak import",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsIeTargetNotExecutable {
@@ -1733,8 +1733,10 @@ fn validate_inputs(
                                 && definition_type == STT_TLS
                                 && definition.symbol.other == 0
                         });
+                    let supported_reference_binding =
+                        binding == STB_GLOBAL || (unresolved && binding == STB_WEAK);
                     if symbol_type != STT_TLS
-                        || binding != STB_GLOBAL
+                        || !supported_reference_binding
                         || symbol.symbol.other != 0
                         || symbol.name.is_empty()
                         || (!unresolved && !supported_definition)
@@ -2110,7 +2112,9 @@ fn validate_inputs(
                             && (tls_gd_symbols.contains(symbol.name)
                                 || tls_ie_symbols.contains(symbol.name)
                                 || tls_desc_symbols.contains(symbol.name)))
-                            || (binding == STB_WEAK && tls_gd_symbols.contains(symbol.name));
+                            || (binding == STB_WEAK
+                                && (tls_gd_symbols.contains(symbol.name)
+                                    || tls_ie_symbols.contains(symbol.name)));
                         let supported_tls_import =
                             import_symbols.contains_key(symbol.name) && supported_tls_model;
                         if !supported_tls_import {
