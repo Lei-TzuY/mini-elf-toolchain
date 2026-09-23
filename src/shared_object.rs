@@ -491,13 +491,7 @@ pub fn link_shared_object_with_needed_and_soname(
     needed: &[Vec<u8>],
     soname: Option<&[u8]>,
 ) -> Result<ExecutableImage, SharedObjectError> {
-    link_shared_object_with_needed_soname_and_runpath(
-        inputs,
-        page_alignment,
-        needed,
-        soname,
-        None,
-    )
+    link_shared_object_with_needed_soname_and_runpath(inputs, page_alignment, needed, soname, None)
 }
 
 pub fn link_shared_object_with_needed_soname_and_runpath(
