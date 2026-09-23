@@ -280,8 +280,7 @@ read_local_weak_tlsdesc:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("TLSDESC")
-            && stderr.contains("default-visible global/weak STT_TLS symbol"),
+        stderr.contains("TLSDESC") && stderr.contains("default-visible global/weak STT_TLS symbol"),
         "{stderr}"
     );
     assert!(!output.exists());
