@@ -991,10 +991,7 @@ fn is_supported_dynamic_tls_reference(
 ) -> bool {
     let binding = info >> 4;
     let symbol_type = info & 0x0f;
-    if symbol_type != STT_TLS
-        || !matches!(binding, STB_GLOBAL | STB_WEAK)
-        || name.is_empty()
-    {
+    if symbol_type != STT_TLS || !matches!(binding, STB_GLOBAL | STB_WEAK) || name.is_empty() {
         return false;
     }
     if unresolved {
