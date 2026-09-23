@@ -147,11 +147,23 @@ fn named_version_function_import_composes_with_plt_got_and_direct_pointer() {
         .unwrap();
     assert!(input_relocations.status.success());
     let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
-    assert!(input_relocations.contains("R_X86_64_PLT32"), "{input_relocations}");
-    assert!(input_relocations.contains("GOTPCREL"), "{input_relocations}");
-    assert!(input_relocations.contains("R_X86_64_64"), "{input_relocations}");
     assert!(
-        input_relocations.matches("provider_function@VERS_1").count() >= 3,
+        input_relocations.contains("R_X86_64_PLT32"),
+        "{input_relocations}"
+    );
+    assert!(
+        input_relocations.contains("GOTPCREL"),
+        "{input_relocations}"
+    );
+    assert!(
+        input_relocations.contains("R_X86_64_64"),
+        "{input_relocations}"
+    );
+    assert!(
+        input_relocations
+            .matches("provider_function@VERS_1")
+            .count()
+            >= 3,
         "{input_relocations}"
     );
 
@@ -218,8 +230,7 @@ fn named_version_function_import_composes_with_plt_got_and_direct_pointer() {
         "{relocations}"
     );
     assert!(
-        relocations.contains("R_X86_64_64")
-            && relocations.contains("provider_function@VERS_1"),
+        relocations.contains("R_X86_64_64") && relocations.contains("provider_function@VERS_1"),
         "{relocations}"
     );
 
