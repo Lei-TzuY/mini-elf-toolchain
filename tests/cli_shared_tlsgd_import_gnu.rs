@@ -140,9 +140,18 @@ write_provider_tls:
         .unwrap();
     assert!(input_relocations.status.success());
     let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
-    assert!(input_relocations.contains("R_X86_64_TLSGD"), "{input_relocations}");
-    assert!(input_relocations.contains("provider_tls"), "{input_relocations}");
-    assert!(input_relocations.contains("__tls_get_addr"), "{input_relocations}");
+    assert!(
+        input_relocations.contains("R_X86_64_TLSGD"),
+        "{input_relocations}"
+    );
+    assert!(
+        input_relocations.contains("provider_tls"),
+        "{input_relocations}"
+    );
+    assert!(
+        input_relocations.contains("__tls_get_addr"),
+        "{input_relocations}"
+    );
 
     let consumer = dir.join("libconsumer.so");
     let consumer_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
@@ -168,8 +177,14 @@ write_provider_tls:
         .unwrap();
     assert!(dynamic.status.success());
     let dynamic = String::from_utf8_lossy(&dynamic.stdout);
-    assert!(dynamic.contains("NEEDED") && dynamic.contains("libprovider.so"), "{dynamic}");
-    assert!(dynamic.contains("RUNPATH") && dynamic.contains("$ORIGIN"), "{dynamic}");
+    assert!(
+        dynamic.contains("NEEDED") && dynamic.contains("libprovider.so"),
+        "{dynamic}"
+    );
+    assert!(
+        dynamic.contains("RUNPATH") && dynamic.contains("$ORIGIN"),
+        "{dynamic}"
+    );
 
     let symbols = Command::new("readelf")
         .arg("-sDW")
@@ -179,9 +194,9 @@ write_provider_tls:
     assert!(symbols.status.success());
     let symbols = String::from_utf8_lossy(&symbols.stdout);
     assert!(
-        symbols
-            .lines()
-            .any(|line| line.contains(" TLS ") && line.contains(" UND ") && line.ends_with(" provider_tls")),
+        symbols.lines().any(|line| line.contains(" TLS ")
+            && line.contains(" UND ")
+            && line.ends_with(" provider_tls")),
         "{symbols}"
     );
 
