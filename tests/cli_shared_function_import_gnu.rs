@@ -246,7 +246,10 @@ call_host_object:
     assert!(!mini.status.success());
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
-    assert!(stderr.contains("PLT") || stderr.contains("function"), "{stderr}");
+    assert!(
+        stderr.contains("PLT") || stderr.contains("function"),
+        "{stderr}"
+    );
     assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
