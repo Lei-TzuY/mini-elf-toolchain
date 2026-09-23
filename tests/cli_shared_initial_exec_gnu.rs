@@ -236,7 +236,7 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_initial_exec_tls_rejects_undefined_tls_symbol() {
+fn shared_initial_exec_tls_rejects_weak_undefined_tls_symbol() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
@@ -244,11 +244,11 @@ fn shared_initial_exec_tls_rejects_undefined_tls_symbol() {
     let dir = temp_dir("undefined");
     let object = assemble(
         &dir,
-        "undefined",
+        "weak-undefined",
         r#".section .text
 .globl read_external_ie
 .type read_external_ie,@function
-.extern external_tls
+.weak external_tls
 .type external_tls,@tls_object
 read_external_ie:
     mov external_tls@gottpoff(%rip), %rax
@@ -271,7 +271,7 @@ read_external_ie:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("initial-exec") || stderr.contains("defined"),
+        stderr.contains("initial-exec") || stderr.contains("strong"),
         "{stderr}"
     );
     assert!(!output.exists());
