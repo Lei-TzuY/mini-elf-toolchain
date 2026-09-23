@@ -47,6 +47,7 @@ const DT_STRTAB: i64 = 5;
 const DT_SYMTAB: i64 = 6;
 const DT_STRSZ: i64 = 10;
 const DT_SYMENT: i64 = 11;
+const DT_SONAME: i64 = 14;
 const DT_RELA: i64 = 7;
 const DT_PLTREL: i64 = 20;
 const DT_JMPREL: i64 = 23;
@@ -139,6 +140,8 @@ pub enum SharedObjectError {
     NeededNameContainsNul {
         dependency_index: usize,
     },
+    EmptySoname,
+    SonameContainsNul,
     Symbols(LinkSymbolError),
     ObjectSymbols {
         object_index: usize,
@@ -380,6 +383,8 @@ impl std::error::Error for SharedObjectError {
             | Self::TlsUnsupported { .. }
             | Self::EmptyNeededName { .. }
             | Self::NeededNameContainsNul { .. }
+            | Self::EmptySoname
+            | Self::SonameContainsNul
             | Self::UnsupportedBinding { .. }
             | Self::UndefinedNonlocal { .. }
             | Self::NondefaultVisibility { .. }
@@ -449,7 +454,7 @@ pub fn link_shared_object(
     inputs: &[LinkerInputObject<'_>],
     page_alignment: u64,
 ) -> Result<ExecutableImage, SharedObjectError> {
-    link_shared_object_with_needed(inputs, page_alignment, &[])
+    link_shared_object_with_needed_and_soname(inputs, page_alignment, &[], None)
 }
 
 pub fn link_shared_object_with_needed(
@@ -457,7 +462,17 @@ pub fn link_shared_object_with_needed(
     page_alignment: u64,
     needed: &[Vec<u8>],
 ) -> Result<ExecutableImage, SharedObjectError> {
+    link_shared_object_with_needed_and_soname(inputs, page_alignment, needed, None)
+}
+
+pub fn link_shared_object_with_needed_and_soname(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    needed: &[Vec<u8>],
+    soname: Option<&[u8]>,
+) -> Result<ExecutableImage, SharedObjectError> {
     validate_needed_names(needed)?;
+    validate_soname(soname)?;
 
     let validated = inputs
         .iter()
@@ -556,6 +571,7 @@ pub fn link_shared_object_with_needed(
         &exports,
         &imports.symbols,
         needed,
+        soname,
         &rela_bytes,
         relative_relocation_count,
         &jmprel_bytes,
@@ -617,6 +633,18 @@ fn validate_needed_names(needed: &[Vec<u8>]) -> Result<(), SharedObjectError> {
         }
         if name.contains(&0) {
             return Err(SharedObjectError::NeededNameContainsNul { dependency_index });
+        }
+    }
+    Ok(())
+}
+
+fn validate_soname(soname: Option<&[u8]>) -> Result<(), SharedObjectError> {
+    if let Some(name) = soname {
+        if name.is_empty() {
+            return Err(SharedObjectError::EmptySoname);
+        }
+        if name.contains(&0) {
+            return Err(SharedObjectError::SonameContainsNul);
         }
     }
     Ok(())
@@ -1071,6 +1099,7 @@ fn build_dynamic_metadata(
     exports: &[ExportSymbol],
     imports: &BTreeMap<Vec<u8>, ImportSymbol>,
     needed: &[Vec<u8>],
+    soname: Option<&[u8]>,
     rela_bytes: &[u8],
     relative_relocation_count: usize,
     jmprel_bytes: &[u8],
@@ -1122,6 +1151,15 @@ fn build_dynamic_metadata(
         dynstr.extend_from_slice(name);
         dynstr.push(0);
     }
+    let soname_offset = if let Some(name) = soname {
+        let offset =
+            u32::try_from(dynstr.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        dynstr.extend_from_slice(name);
+        dynstr.push(0);
+        Some(offset)
+    } else {
+        None
+    };
 
     let dynstr_offset = dynsym_offset
         .checked_add(dynsym_size)
@@ -1152,6 +1190,7 @@ fn build_dynamic_metadata(
     let has_plt_relocations = !jmprel_bytes.is_empty();
     let dynamic_entry_count = 5usize
         .checked_add(needed.len())
+        .and_then(|count| count.checked_add(usize::from(soname_offset.is_some())))
         .and_then(|count| count.checked_add(if has_relocations { 3 } else { 0 }))
         .and_then(|count| count.checked_add(usize::from(relative_relocation_count != 0)))
         .and_then(|count| count.checked_add(if has_plt_relocations { 4 } else { 0 }))
@@ -1206,6 +1245,9 @@ fn build_dynamic_metadata(
     let mut entries = Vec::with_capacity(dynamic_entry_count);
     for offset in needed_name_offsets {
         entries.push((DT_NEEDED, u64::from(offset)));
+    }
+    if let Some(offset) = soname_offset {
+        entries.push((DT_SONAME, u64::from(offset)));
     }
     entries.extend_from_slice(&[
         (DT_HASH, hash_address),
