@@ -750,6 +750,7 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         &imports.tls_gd_symbols,
         &tls_gd_entries,
         &export_dynamic_indices,
+        &import_dynamic_indices,
     )?;
     rela_bytes.extend_from_slice(&tls_gd_rela_bytes);
     let jmprel_bytes = build_plt_import_relocation_table(
@@ -941,10 +942,7 @@ fn validate_inputs(
                 let symbol = &symbols[relocation.symbol_index as usize];
                 let symbol_type = symbol.symbol.info & 0x0f;
                 if relocation.relocation_type == R_X86_64_TLSGD {
-                    if symbol_type != STT_TLS
-                        || (symbol.symbol.section_index == SHN_UNDEF
-                            && !definitions.contains_key(symbol.name))
-                    {
+                    if symbol_type != STT_TLS {
                         return Err(SharedObjectError::TlsImportUnsupported {
                             object_index: input.object_index,
                             symbol_index: symbol.symbol_index,
@@ -960,6 +958,41 @@ fn validate_inputs(
                             flags: target.flags,
                         });
                     }
+
+                    let unresolved = symbol.symbol.section_index == SHN_UNDEF
+                        && !definitions.contains_key(symbol.name);
+                    if unresolved {
+                        let binding = symbol.symbol.info >> 4;
+                        if binding != STB_GLOBAL {
+                            return Err(SharedObjectError::TlsImportUnsupported {
+                                object_index: input.object_index,
+                                symbol_index: symbol.symbol_index,
+                                name: symbol.name.to_vec(),
+                            });
+                        }
+                        if symbol.symbol.other != 0 {
+                            return Err(SharedObjectError::NondefaultVisibility {
+                                object_index: input.object_index,
+                                symbol_index: symbol.symbol_index,
+                                name: symbol.name.to_vec(),
+                                other: symbol.symbol.other,
+                            });
+                        }
+                        if symbol.name.is_empty() {
+                            return Err(SharedObjectError::UndefinedNonlocal {
+                                object_index: input.object_index,
+                                symbol_index: symbol.symbol_index,
+                                name: Vec::new(),
+                            });
+                        }
+                        record_import_symbol(
+                            &mut import_symbols,
+                            symbol.name,
+                            symbol.symbol.info,
+                            symbol.symbol.size,
+                        )?;
+                    }
+
                     tls_gd_symbols.insert(symbol.name.to_vec());
                     continue;
                 }
@@ -1147,11 +1180,17 @@ fn validate_inputs(
                 if symbol.symbol.section_index == SHN_UNDEF && !symbol.name.is_empty() {
                     let symbol_type = symbol.symbol.info & 0x0f;
                     if symbol_type == STT_TLS {
-                        return Err(SharedObjectError::TlsImportUnsupported {
-                            object_index: input.object_index,
-                            symbol_index: symbol.symbol_index,
-                            name: symbol.name.to_vec(),
-                        });
+                        let supported_tls_import = binding == STB_GLOBAL
+                            && import_symbols.contains_key(symbol.name)
+                            && tls_gd_symbols.contains(symbol.name);
+                        if !supported_tls_import {
+                            return Err(SharedObjectError::TlsImportUnsupported {
+                                object_index: input.object_index,
+                                symbol_index: symbol.symbol_index,
+                                name: symbol.name.to_vec(),
+                            });
+                        }
+                        continue;
                     }
                     let linker_owned_got_symbol = (!got_symbols.is_empty()
                         || !tls_gd_symbols.is_empty())
@@ -1235,7 +1274,8 @@ fn export_dynamic_symbol_indices(
 fn build_tls_gd_relocation_table(
     symbols: &BTreeSet<Vec<u8>>,
     entries: &BTreeMap<Vec<u8>, u64>,
-    dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+    export_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+    import_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
 ) -> Result<Vec<u8>, SharedObjectError> {
     let capacity = symbols
         .len()
@@ -1249,8 +1289,9 @@ fn build_tls_gd_relocation_table(
             .get(name)
             .copied()
             .ok_or_else(|| SharedObjectError::MissingTlsGdEntry { name: name.clone() })?;
-        let dynamic_index = dynamic_indices
+        let dynamic_index = export_dynamic_indices
             .get(name)
+            .or_else(|| import_dynamic_indices.get(name))
             .copied()
             .ok_or_else(|| SharedObjectError::MissingTlsDynamicSymbol { name: name.clone() })?;
 
