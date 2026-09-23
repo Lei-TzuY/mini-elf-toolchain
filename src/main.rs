@@ -6,7 +6,9 @@ use mini_elf_toolchain::forced_undefined::{
 };
 use mini_elf_toolchain::image_base::{extract_image_base_argument, ImageBaseArgumentError};
 use mini_elf_toolchain::input_object::RelocatableObject;
-use mini_elf_toolchain::library_search::{resolve_static_library_arguments, LibrarySearchError};
+use mini_elf_toolchain::library_search::{
+    resolve_shared_library_arguments, resolve_static_library_arguments, LibrarySearchError,
+};
 use mini_elf_toolchain::ordered_inputs::{
     prepare_ordered_link_inputs_with_forced_undefined, LinkObjectOrigin, OrderedLinkInput,
     OrderedLinkInputError,
@@ -145,7 +147,7 @@ where
         let raw_remaining: Vec<_> = args.collect();
         let (position_independent, raw_remaining) = extract_pie_argument(&raw_remaining)?;
         let (shared_object, raw_remaining) = extract_shared_argument(&raw_remaining)?;
-        let needed = extract_needed_arguments(&raw_remaining)?;
+        let mut needed = extract_needed_arguments(&raw_remaining)?;
         if !shared_object && !needed.specs.is_empty() {
             let provider_requested = needed
                 .specs
@@ -243,8 +245,19 @@ where
             ));
         }
 
-        let remaining =
-            resolve_static_library_arguments(&remaining).map_err(library_search_error)?;
+        let remaining = if shared_object {
+            let resolution =
+                resolve_shared_library_arguments(&remaining).map_err(library_search_error)?;
+            needed.specs.extend(
+                resolution
+                    .providers
+                    .into_iter()
+                    .map(|path| NeededSpec::Provider(path.into_os_string())),
+            );
+            resolution.arguments
+        } else {
+            resolve_static_library_arguments(&remaining).map_err(library_search_error)?
+        };
         if remaining.is_empty() {
             return Err(CliError::Usage("missing relocatable input path".to_owned()));
         }
