@@ -5,6 +5,8 @@ const ELF64_PHDR_SIZE: usize = 56;
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const PT_PHDR: u32 = 6;
+const PT_GNU_STACK: u32 = 0x6474_e551;
+const PF_X: u32 = 1;
 const PF_W: u32 = 2;
 const PF_R: u32 = 4;
 
@@ -14,22 +16,43 @@ pub(crate) struct RuntimeDynamicProgramHeader {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeStackProgramHeader {
+    pub executable: bool,
+}
+
 pub(crate) fn map_runtime_program_headers(
     image: ExecutableImage,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, None)
+    map_runtime_program_headers_impl(image, None, None)
+}
+
+pub(crate) fn map_runtime_program_headers_with_stack(
+    image: ExecutableImage,
+    stack: RuntimeStackProgramHeader,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(image, None, Some(stack))
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic(
     image: ExecutableImage,
     dynamic: RuntimeDynamicProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic))
+    map_runtime_program_headers_impl(image, Some(dynamic), None)
+}
+
+pub(crate) fn map_runtime_program_headers_with_dynamic_and_stack(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+    stack: RuntimeStackProgramHeader,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(image, Some(dynamic), Some(stack))
 }
 
 fn map_runtime_program_headers_impl(
     mut image: ExecutableImage,
     dynamic: Option<RuntimeDynamicProgramHeader>,
+    stack: Option<RuntimeStackProgramHeader>,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
     if image.load_segments.is_empty() {
         return Err(ExecutableWriteError::NoLoadSegments);
@@ -64,7 +87,7 @@ fn map_runtime_program_headers_impl(
         });
     }
 
-    let extra_headers = 1usize + usize::from(dynamic.is_some());
+    let extra_headers = 1usize + usize::from(dynamic.is_some()) + usize::from(stack.is_some());
     if old_phnum > u16::MAX as usize - extra_headers {
         return Err(ExecutableWriteError::TooManyLoadSegments {
             count: old_phnum + extra_headers,
@@ -199,13 +222,19 @@ fn map_runtime_program_headers_impl(
             put_u64(&mut table, new_start + 40, new_last_size);
         }
     }
+    let mut next_extra_index = 1 + old_phnum;
     if let (Some(dynamic), Some(file_offset)) = (dynamic, dynamic_file_offset) {
-        let start = (1 + old_phnum) * ELF64_PHDR_SIZE;
+        let start = next_extra_index * ELF64_PHDR_SIZE;
         write_dynamic_program_header(
             &mut table[start..start + ELF64_PHDR_SIZE],
             dynamic,
             file_offset,
         );
+        next_extra_index += 1;
+    }
+    if let Some(stack) = stack {
+        let start = next_extra_index * ELF64_PHDR_SIZE;
+        write_gnu_stack_program_header(&mut table[start..start + ELF64_PHDR_SIZE], stack);
     }
 
     image.bytes.resize(new_file_len, 0);
@@ -245,6 +274,21 @@ fn write_dynamic_program_header(
     put_u64(out, 32, dynamic.size);
     put_u64(out, 40, dynamic.size);
     put_u64(out, 48, 8);
+}
+
+fn write_gnu_stack_program_header(out: &mut [u8], stack: RuntimeStackProgramHeader) {
+    put_u32(out, 0, PT_GNU_STACK);
+    put_u32(
+        out,
+        4,
+        PF_R | PF_W | if stack.executable { PF_X } else { 0 },
+    );
+    put_u64(out, 8, 0);
+    put_u64(out, 16, 0);
+    put_u64(out, 24, 0);
+    put_u64(out, 32, 0);
+    put_u64(out, 40, 0);
+    put_u64(out, 48, 16);
 }
 
 fn align_up(value: u64, alignment: u64) -> Option<u64> {

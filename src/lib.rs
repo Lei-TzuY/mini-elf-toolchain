@@ -10,6 +10,7 @@ pub mod elf64;
 pub mod executable_pipeline;
 pub mod executable_writer;
 pub mod forced_undefined;
+mod gnu_stack;
 pub mod image_base;
 pub mod input_object;
 pub mod layout;
