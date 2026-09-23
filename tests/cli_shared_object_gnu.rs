@@ -187,6 +187,12 @@ exported_value:
             !lookup_text.contains("not-found"),
             "checked SysV hash lookup missed {symbol}: {lookup_text}"
         );
+        if symbol == "answer" {
+            assert!(
+                !lookup_text.contains("value=0x0000000000000000"),
+                "loader-visible function export must not use st_value=0: {lookup_text}"
+            );
+        }
     }
 
     let consumer_source = dir.join("consumer.c");
