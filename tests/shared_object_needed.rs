@@ -1,6 +1,4 @@
-use mini_elf_toolchain::shared_object::{
-    link_shared_object_with_needed, SharedObjectError,
-};
+use mini_elf_toolchain::shared_object::{link_shared_object_with_needed, SharedObjectError};
 
 #[test]
 fn producer_rejects_empty_needed_name_before_other_link_work() {
