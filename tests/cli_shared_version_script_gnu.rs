@@ -315,12 +315,7 @@ new_value:
     let link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
         .arg(&shared)
-        .args([
-            "--shared",
-            "--soname",
-            "libinherit.so",
-            "--version-script",
-        ])
+        .args(["--shared", "--soname", "libinherit.so", "--version-script"])
         .arg(&script)
         .arg(&object)
         .output()
@@ -340,10 +335,7 @@ new_value:
     let gnu_versions = String::from_utf8_lossy(&gnu_versions.stdout);
     assert!(gnu_versions.contains("VERS_1"), "{gnu_versions}");
     assert!(gnu_versions.contains("VERS_2"), "{gnu_versions}");
-    assert!(
-        gnu_versions.contains("Parent 1: VERS_1"),
-        "{gnu_versions}"
-    );
+    assert!(gnu_versions.contains("Parent 1: VERS_1"), "{gnu_versions}");
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-verdef"))
         .arg(&shared)
