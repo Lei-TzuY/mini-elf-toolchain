@@ -200,14 +200,8 @@ pub fn inspect_dynamic_provider(
     )?;
     let dynsym_offset = usize::try_from(dynsym_offset)
         .map_err(|_| malformed("provider DT_SYMTAB file offset does not fit usize"))?;
-    let versions = provider_version_metadata(
-        &entries,
-        &headers,
-        file,
-        symbol_count,
-        strtab_offset,
-        strsz,
-    )?;
+    let versions =
+        provider_version_metadata(&entries, &headers, file, symbol_count, strtab_offset, strsz)?;
 
     let mut exports = BTreeMap::<Vec<u8>, BTreeSet<u8>>::new();
     for symbol_index in 0..symbol_count {
