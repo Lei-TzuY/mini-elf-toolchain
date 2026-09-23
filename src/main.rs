@@ -18,12 +18,13 @@ use mini_elf_toolchain::partial_link::{
 };
 use mini_elf_toolchain::provider_closure::resolve_provider_path;
 use mini_elf_toolchain::shared_object::{
-    link_shared_object_with_needed_soname_runpath_versions_and_checked_providers,
-    shared_import_requirements, SharedImportRequirement, SharedVersionRequirement,
+    link_shared_object_with_version_script_and_checked_providers, shared_import_requirements,
+    SharedImportRequirement, SharedVersionRequirement,
 };
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
 };
+use mini_elf_toolchain::version_script::VersionScript;
 use std::env;
 use std::ffi::OsString;
 use std::fs;
@@ -40,7 +41,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -177,7 +178,21 @@ where
                 .to_owned(),
             ));
         }
-        let raw_remaining = needed.arguments;
+        let version_script = extract_version_script_argument(&needed.arguments)?;
+        if !shared_object && version_script.path.is_some() {
+            return Err(CliError::Usage(
+                "--version-script is only supported with --shared".to_owned(),
+            ));
+        }
+        let parsed_version_script = if let Some(path) = version_script.path.as_ref() {
+            let bytes = read_file(path)?;
+            Some(VersionScript::parse(&bytes).map_err(|error| {
+                CliError::Failure(format!("{}: {error}", path.to_string_lossy()))
+            })?)
+        } else {
+            None
+        };
+        let raw_remaining = version_script.arguments;
         if position_independent && shared_object {
             return Err(CliError::Usage(
                 "--pie cannot be combined with --shared".to_owned(),
@@ -289,6 +304,7 @@ where
             needed: &needed.specs,
             provider_search_paths: &provider_search_paths,
             forced_undefined: &forced.symbols,
+            version_script: parsed_version_script.as_ref(),
         };
         return link_files(&output, &options, &remaining);
     }
@@ -573,6 +589,67 @@ fn extract_needed_arguments(arguments: &[OsString]) -> Result<NeededArguments, C
     })
 }
 
+struct VersionScriptArguments {
+    path: Option<OsString>,
+    arguments: Vec<OsString>,
+}
+
+fn extract_version_script_argument(
+    arguments: &[OsString],
+) -> Result<VersionScriptArguments, CliError> {
+    let mut path = None;
+    let mut remaining = Vec::with_capacity(arguments.len());
+    let mut index = 0usize;
+
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if argument == "--version-script" {
+            let value = arguments.get(index + 1).ok_or_else(|| {
+                CliError::Usage("missing file after --version-script".to_owned())
+            })?;
+            if path.is_some() {
+                return Err(CliError::Usage(
+                    "duplicate --version-script option".to_owned(),
+                ));
+            }
+            if value.is_empty() {
+                return Err(CliError::Usage(
+                    "version-script path cannot be empty".to_owned(),
+                ));
+            }
+            path = Some(value.clone());
+            index += 2;
+            continue;
+        }
+        if let Some(value) = argument
+            .to_str()
+            .and_then(|argument| argument.strip_prefix("--version-script="))
+        {
+            if path.is_some() {
+                return Err(CliError::Usage(
+                    "duplicate --version-script option".to_owned(),
+                ));
+            }
+            if value.is_empty() {
+                return Err(CliError::Usage(
+                    "version-script path cannot be empty".to_owned(),
+                ));
+            }
+            path = Some(OsString::from(value));
+            index += 1;
+            continue;
+        }
+
+        remaining.push(argument.clone());
+        index += 1;
+    }
+
+    Ok(VersionScriptArguments {
+        path,
+        arguments: remaining,
+    })
+}
+
 fn contains_image_base_argument(arguments: &[OsString]) -> bool {
     arguments.iter().any(|argument| {
         argument == "--image-base"
@@ -772,6 +849,7 @@ struct LinkFilesOptions<'a> {
     needed: &'a [NeededSpec],
     provider_search_paths: &'a [PathBuf],
     forced_undefined: &'a [Vec<u8>],
+    version_script: Option<&'a VersionScript>,
 }
 
 struct ResolvedNeededDependencies {
@@ -1076,7 +1154,7 @@ fn link_files(
             .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         let needed =
             resolve_needed_dependencies(options.needed, &imports, options.provider_search_paths)?;
-        let image = link_shared_object_with_needed_soname_runpath_versions_and_checked_providers(
+        let image = link_shared_object_with_version_script_and_checked_providers(
             &prepared.objects,
             DEFAULT_PAGE_ALIGNMENT,
             &needed.names,
@@ -1084,6 +1162,7 @@ fn link_files(
             options.runpath,
             &needed.version_requirements,
             &needed.checked_version_providers,
+            options.version_script,
         )
         .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         fs::write(output, &image.bytes)
