@@ -271,9 +271,15 @@ api_special:
 
     let mini_symbols = dynamic_symbols(&mini);
     let gnu_symbols = dynamic_symbols(&gnu);
-    assert!(mini_symbols.contains("api_special@@VERS_1"), "{mini_symbols}");
+    assert!(
+        mini_symbols.contains("api_special@@VERS_1"),
+        "{mini_symbols}"
+    );
     assert!(gnu_symbols.contains("api_special@@VERS_1"), "{gnu_symbols}");
-    assert!(!mini_symbols.contains("api_special@@VERS_2"), "{mini_symbols}");
+    assert!(
+        !mini_symbols.contains("api_special@@VERS_2"),
+        "{mini_symbols}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
