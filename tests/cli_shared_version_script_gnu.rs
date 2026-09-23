@@ -326,16 +326,16 @@ new_value:
         String::from_utf8_lossy(&link.stderr)
     );
 
-    let gnu_versions = Command::new("readelf")
-        .arg("-VW")
+    let dynamic = Command::new("readelf")
+        .arg("-dW")
         .arg(&shared)
         .output()
         .unwrap();
-    assert!(gnu_versions.status.success());
-    let gnu_versions = String::from_utf8_lossy(&gnu_versions.stdout);
-    assert!(gnu_versions.contains("VERS_1"), "{gnu_versions}");
-    assert!(gnu_versions.contains("VERS_2"), "{gnu_versions}");
-    assert!(gnu_versions.contains("Parent 1: VERS_1"), "{gnu_versions}");
+    assert!(dynamic.status.success());
+    let dynamic = String::from_utf8_lossy(&dynamic.stdout);
+    assert!(dynamic.contains("VERDEF"), "{dynamic}");
+    assert!(dynamic.contains("VERDEFNUM") && dynamic.contains("2"), "{dynamic}");
+    assert!(dynamic.contains("VERSYM"), "{dynamic}");
 
     let ours = Command::new(env!("CARGO_BIN_EXE_mini-elf-verdef"))
         .arg(&shared)
