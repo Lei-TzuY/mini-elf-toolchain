@@ -340,10 +340,8 @@ fn needed_from_is_shared_only() {
 
     assert_eq!(result.status.code(), Some(2));
     assert!(result.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&result.stderr)
-            .contains("--needed-from is only supported with --shared")
-    );
+    assert!(String::from_utf8_lossy(&result.stderr)
+        .contains("--needed-from is only supported with --shared"));
     assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
