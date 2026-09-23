@@ -225,10 +225,7 @@ mod tests {
     #[test]
     fn reads_nul_terminated_section_names() {
         let names = b"\0.text\0.note.GNU-stack\0";
-        assert_eq!(
-            section_name(names, 0, 3, 7).unwrap(),
-            b".note.GNU-stack"
-        );
+        assert_eq!(section_name(names, 0, 3, 7).unwrap(), b".note.GNU-stack");
     }
 
     #[test]
