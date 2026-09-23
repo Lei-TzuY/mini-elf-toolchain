@@ -380,9 +380,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
         let observed_tls_gd = collect_tls_gd_symbols(inputs)?;
         for name in tls_gd_symbols {
             if !observed_tls_gd.contains(name) {
-                return Err(RelocatedSectionError::MissingTlsGdSymbol {
-                    name: name.clone(),
-                });
+                return Err(RelocatedSectionError::MissingTlsGdSymbol { name: name.clone() });
             }
         }
     }
@@ -398,13 +396,14 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
         .ok_or(RelocatedSectionError::GotSizeOverflow {
             symbol_count: tls_gd_symbols.len(),
         })?;
-    let got_size = fixed_got_size
-        .checked_add(tls_gd_size)
-        .ok_or(RelocatedSectionError::GotSizeOverflow {
-            symbol_count: got_symbol_count
-                .checked_add(tls_gd_symbols.len().saturating_mul(2))
-                .unwrap_or(usize::MAX),
-        })?;
+    let got_size =
+        fixed_got_size
+            .checked_add(tls_gd_size)
+            .ok_or(RelocatedSectionError::GotSizeOverflow {
+                symbol_count: got_symbol_count
+                    .checked_add(tls_gd_symbols.len().saturating_mul(2))
+                    .unwrap_or(usize::MAX),
+            })?;
 
     validate_external_plt_symbols(inputs, external_plt_symbols)?;
     let plt_size =
@@ -458,8 +457,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
         .map_err(RelocatedSectionError::Layout)?;
     let got_entries = got_entry_addresses(&layout, &got_symbols, 0)?;
     let tls_got_entries = got_entry_addresses(&layout, &tls_got_symbols, got_symbols.len())?;
-    let tls_gd_entries =
-        tls_gd_entry_addresses(&layout, tls_gd_symbols, got_symbol_count)?;
+    let tls_gd_entries = tls_gd_entry_addresses(&layout, tls_gd_symbols, got_symbol_count)?;
     let plt_entries = synthetic_entry_addresses(
         &layout,
         PLT_OBJECT_INDEX,
