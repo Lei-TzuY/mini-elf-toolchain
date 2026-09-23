@@ -242,9 +242,7 @@ int main(int argc, char **argv) {
 
 #[test]
 fn shared_local_exec_tls_relocation_remains_fail_closed() {
-    if !command_reports("as", "GNU assembler")
-        || !command_reports("readelf", "GNU readelf")
-    {
+    if !command_reports("as", "GNU assembler") || !command_reports("readelf", "GNU readelf") {
         return;
     }
 
