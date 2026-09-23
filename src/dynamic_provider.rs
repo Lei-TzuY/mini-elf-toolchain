@@ -15,6 +15,7 @@ const DT_SYMTAB: i64 = 6;
 const DT_STRSZ: i64 = 10;
 const DT_SYMENT: i64 = 11;
 const DT_SONAME: i64 = 14;
+const DT_RUNPATH: i64 = 29;
 const ELF64_DYNAMIC_SIZE: u64 = 16;
 const ELF64_SYMBOL_SIZE: u64 = 24;
 const SHN_UNDEF: u16 = 0;
@@ -27,6 +28,7 @@ const STV_HIDDEN: u8 = 2;
 pub struct DynamicProviderMetadata {
     pub soname: Vec<u8>,
     pub needed: Vec<Vec<u8>>,
+    pub runpath: Option<Vec<u8>>,
     pub exports: BTreeMap<Vec<u8>, BTreeSet<u8>>,
 }
 
@@ -95,6 +97,7 @@ pub fn inspect_dynamic_provider(
     let sysv_hash_address = optional_unique_tag(&entries, DT_HASH, "DT_HASH")?;
     let gnu_hash_address = optional_unique_tag(&entries, DT_GNU_HASH, "DT_GNU_HASH")?;
     let soname_offset = required_unique_tag(&entries, DT_SONAME, "DT_SONAME")?;
+    let runpath_offset = optional_unique_tag(&entries, DT_RUNPATH, "DT_RUNPATH")?;
 
     if syment != ELF64_SYMBOL_SIZE {
         return Err(malformed(format!(
@@ -134,6 +137,17 @@ pub fn inspect_dynamic_provider(
         }
         needed.push(name);
     }
+
+    let runpath = match runpath_offset {
+        Some(offset) => Some(dynamic_string(
+            file,
+            strtab_offset,
+            strsz,
+            offset,
+            "provider DT_RUNPATH",
+        )?),
+        None => None,
+    };
 
     let sysv_symbol_count = match sysv_hash_address {
         Some(address) => Some(validate_sysv_hash_metadata(&headers, file, address)?),
@@ -212,6 +226,7 @@ pub fn inspect_dynamic_provider(
     Ok(DynamicProviderMetadata {
         soname,
         needed,
+        runpath,
         exports,
     })
 }
