@@ -790,9 +790,7 @@ struct ExportSymbol {
     size: u64,
 }
 
-fn parse_export_identity(
-    name: &[u8],
-) -> Result<(Vec<u8>, Option<Vec<u8>>), SharedObjectError> {
+fn parse_export_identity(name: &[u8]) -> Result<(Vec<u8>, Option<Vec<u8>>), SharedObjectError> {
     let Some(first_at) = name.iter().position(|byte| *byte == b'@') else {
         return Ok((name.to_vec(), None));
     };
