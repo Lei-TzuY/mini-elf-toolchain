@@ -19,7 +19,7 @@ use crate::relocations::Elf64RelaTable;
 use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, STB_GLOBAL, STB_WEAK};
 use crate::x86_64_relocations::{
     is_static_got_entry_type, is_static_tls_gotpcrel_type, is_tls_gd_relocation_type,
-    R_X86_64_PLT32,
+    is_tls_ld_relocation_type, R_X86_64_PLT32,
 };
 
 const SHT_PROGBITS: u32 = 1;
@@ -27,6 +27,7 @@ const GOT_OBJECT_INDEX: usize = usize::MAX - 1;
 const GOT_SECTION_INDEX: u16 = 1;
 const GOT_ENTRY_SIZE: u64 = 8;
 const TLS_GD_ENTRY_SIZE: u64 = 16;
+const TLS_LD_ENTRY_SIZE: u64 = 16;
 const GOT_ALIGNMENT: u64 = 8;
 const PLT_OBJECT_INDEX: usize = usize::MAX - 4;
 const PLT_SECTION_INDEX: u16 = 1;
@@ -72,6 +73,7 @@ pub struct RelocatedSectionsOutput {
     pub got_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_got_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_gd_entries: BTreeMap<Vec<u8>, u64>,
+    pub tls_ld_entry: Option<u64>,
     pub plt_entries: BTreeMap<Vec<u8>, u64>,
     pub plt_got_entries: BTreeMap<Vec<u8>, u64>,
     pub plt_got_base: Option<u64>,
@@ -126,6 +128,7 @@ pub enum RelocatedSectionError {
     MissingTlsGdSymbol {
         name: Vec<u8>,
     },
+    MissingTlsLdRelocation,
     PltSizeOverflow {
         symbol_count: usize,
     },
@@ -222,6 +225,10 @@ impl fmt::Display for RelocatedSectionError {
                 "requested TLSGD symbol {:?} has no TLSGD relocation",
                 String::from_utf8_lossy(name)
             ),
+            Self::MissingTlsLdRelocation => write!(
+                f,
+                "requested TLSLD module descriptor but no TLSLD relocation was observed"
+            ),
             Self::PltSizeOverflow { symbol_count } => write!(
                 f,
                 "synthetic PLT/PLT-GOT size overflows u64 for {symbol_count} unique symbols"
@@ -275,6 +282,7 @@ impl std::error::Error for RelocatedSectionError {
             | Self::MissingExternalGotSymbol { .. }
             | Self::MissingExternalPltSymbol { .. }
             | Self::MissingTlsGdSymbol { .. }
+            | Self::MissingTlsLdRelocation
             | Self::PltSizeOverflow { .. }
             | Self::PltDisplacementOutOfRange { .. }
             | Self::RelocationAgainstMemoryOnlySection { .. } => None,
@@ -344,6 +352,26 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
     external_plt_symbols: &BTreeSet<Vec<u8>>,
     tls_gd_symbols: &BTreeSet<Vec<u8>>,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld(
+        inputs,
+        start_address,
+        page_alignment,
+        external_got_symbols,
+        external_plt_symbols,
+        tls_gd_symbols,
+        false,
+    )
+}
+
+pub fn relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    external_got_symbols: &BTreeSet<Vec<u8>>,
+    external_plt_symbols: &BTreeSet<Vec<u8>>,
+    tls_gd_symbols: &BTreeSet<Vec<u8>>,
+    tls_ld_enabled: bool,
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     for (position, input) in inputs.iter().enumerate() {
         if input.object_index != position {
             return Err(RelocatedSectionError::NonCanonicalObjectIndex {
@@ -384,6 +412,18 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
             }
         }
     }
+    if tls_ld_enabled
+        && !inputs.iter().any(|input| {
+            input.object.rela_tables.iter().any(|table| {
+                table
+                    .relocations
+                    .iter()
+                    .any(|relocation| is_tls_ld_relocation_type(relocation.relocation_type))
+            })
+        })
+    {
+        return Err(RelocatedSectionError::MissingTlsLdRelocation);
+    }
     let got_symbol_count = got_symbols.len().checked_add(tls_got_symbols.len()).ok_or(
         RelocatedSectionError::GotSizeOverflow {
             symbol_count: usize::MAX,
@@ -396,13 +436,19 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
         .ok_or(RelocatedSectionError::GotSizeOverflow {
             symbol_count: tls_gd_symbols.len(),
         })?;
-    let got_size =
-        fixed_got_size
-            .checked_add(tls_gd_size)
-            .ok_or(RelocatedSectionError::GotSizeOverflow {
-                symbol_count: got_symbol_count
-                    .saturating_add(tls_gd_symbols.len().saturating_mul(2)),
-            })?;
+    let tls_ld_size = if tls_ld_enabled {
+        TLS_LD_ENTRY_SIZE
+    } else {
+        0
+    };
+    let got_size = fixed_got_size
+        .checked_add(tls_gd_size)
+        .and_then(|size| size.checked_add(tls_ld_size))
+        .ok_or(RelocatedSectionError::GotSizeOverflow {
+            symbol_count: got_symbol_count
+                .saturating_add(tls_gd_symbols.len().saturating_mul(2))
+                .saturating_add(usize::from(tls_ld_enabled) * 2),
+        })?;
 
     validate_external_plt_symbols(inputs, external_plt_symbols)?;
     let plt_size =
@@ -457,6 +503,26 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
     let got_entries = got_entry_addresses(&layout, &got_symbols, 0)?;
     let tls_got_entries = got_entry_addresses(&layout, &tls_got_symbols, got_symbols.len())?;
     let tls_gd_entries = tls_gd_entry_addresses(&layout, tls_gd_symbols, got_symbol_count)?;
+    let tls_ld_entry = if tls_ld_enabled {
+        let got_layout = matching_layout(&layout, GOT_OBJECT_INDEX, GOT_SECTION_INDEX).ok_or(
+            RelocatedSectionError::MissingLayout {
+                object_index: GOT_OBJECT_INDEX,
+                section_index: GOT_SECTION_INDEX,
+            },
+        )?;
+        Some(
+            got_layout
+                .address
+                .checked_add(fixed_got_size)
+                .and_then(|address| address.checked_add(tls_gd_size))
+                .ok_or(RelocatedSectionError::GotAddressOverflow {
+                    entry_index: got_symbol_count
+                        .saturating_add(tls_gd_symbols.len().saturating_mul(2)),
+                })?,
+        )
+    } else {
+        None
+    };
     let plt_entries = synthetic_entry_addresses(
         &layout,
         PLT_OBJECT_INDEX,
@@ -476,6 +542,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
     let got_entries_output = got_entries.clone();
     let tls_got_entries_output = tls_got_entries.clone();
     let tls_gd_entries_output = tls_gd_entries.clone();
+    let tls_ld_entry_output = tls_ld_entry;
     let plt_entries_output = plt_entries.clone();
     let plt_got_entries_output = plt_got_entries.clone();
 
@@ -486,6 +553,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
             got_entries,
             tls_got_entries,
             tls_gd_entries,
+            tls_ld_entry,
             unresolved_got_symbols: external_got_symbols.clone(),
             plt_entries,
             unresolved_plt_symbols: external_plt_symbols.clone(),
@@ -579,6 +647,10 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
             bytes.extend_from_slice(&0_u64.to_le_bytes());
         }
         for _ in tls_gd_symbols {
+            bytes.extend_from_slice(&0_u64.to_le_bytes());
+            bytes.extend_from_slice(&0_u64.to_le_bytes());
+        }
+        if tls_ld_enabled {
             bytes.extend_from_slice(&0_u64.to_le_bytes());
             bytes.extend_from_slice(&0_u64.to_le_bytes());
         }
@@ -720,6 +792,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
         got_entries: got_entries_output,
         tls_got_entries: tls_got_entries_output,
         tls_gd_entries: tls_gd_entries_output,
+        tls_ld_entry: tls_ld_entry_output,
         plt_entries: plt_entries_output,
         plt_got_entries: plt_got_entries_output,
         plt_got_base,
