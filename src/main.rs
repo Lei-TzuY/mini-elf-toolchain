@@ -269,7 +269,7 @@ fn extract_pie_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>),
 
     for argument in arguments {
         if argument == "--pie" {
-            if options.position_independent {
+            if position_independent {
                 return Err(CliError::Usage("duplicate --pie option".to_owned()));
             }
             position_independent = true;
@@ -438,7 +438,7 @@ fn partial_files(
         .collect::<Vec<_>>();
     let prepared = prepare_ordered_link_inputs_with_forced_undefined(
         &ordered_inputs,
-        options.forced_undefined,
+        forced_undefined,
     )
     .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     let inputs = prepared
