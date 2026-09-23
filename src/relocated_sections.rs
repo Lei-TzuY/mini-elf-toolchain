@@ -6,7 +6,7 @@ use crate::executable_pipeline::ExecutableSectionInput;
 use crate::layout::LaidOutSection;
 use crate::link_context::{
     build_link_context_with_got_plt_maps_and_unresolved, LinkContextBuildError,
-    LinkContextRelocationError,
+    LinkContextRelocationError, LinkSyntheticEntries,
 };
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
 use crate::linker_input::{LinkerInputError, LinkerInputObject};
@@ -401,8 +401,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
             .checked_add(tls_gd_size)
             .ok_or(RelocatedSectionError::GotSizeOverflow {
                 symbol_count: got_symbol_count
-                    .checked_add(tls_gd_symbols.len().saturating_mul(2))
-                    .unwrap_or(usize::MAX),
+                    .saturating_add(tls_gd_symbols.len().saturating_mul(2)),
             })?;
 
     validate_external_plt_symbols(inputs, external_plt_symbols)?;
@@ -483,12 +482,14 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_gd(
     let context = build_link_context_with_got_plt_maps_and_unresolved(
         &validated_objects,
         &layout,
-        got_entries,
-        tls_got_entries,
-        tls_gd_entries,
-        external_got_symbols.clone(),
-        plt_entries,
-        external_plt_symbols.clone(),
+        LinkSyntheticEntries {
+            got_entries,
+            tls_got_entries,
+            tls_gd_entries,
+            unresolved_got_symbols: external_got_symbols.clone(),
+            plt_entries,
+            unresolved_plt_symbols: external_plt_symbols.clone(),
+        },
     )
     .map_err(RelocatedSectionError::LinkContext)?;
 
