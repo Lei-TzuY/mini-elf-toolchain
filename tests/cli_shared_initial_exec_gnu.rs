@@ -277,7 +277,9 @@ read_local_weak_ie:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("initial-exec") || stderr.contains("strong"),
+        stderr.contains("initial-exec")
+            && stderr.contains("strong supported definition/import")
+            && stderr.contains("unresolved weak import"),
         "{stderr}"
     );
     assert!(!output.exists());
