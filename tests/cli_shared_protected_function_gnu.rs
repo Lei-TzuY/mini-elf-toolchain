@@ -432,18 +432,16 @@ int main(int argc, char **argv) {{
 }
 
 #[test]
-fn protected_function_got_interposition_remains_out_of_scope() {
+fn protected_absolute_function_remains_out_of_scope() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("got-boundary");
+    let dir = temp_dir("absolute-boundary");
     let object = assemble(
         &dir,
         "provider",
-        &protected_source(
-            "    mov mini_elf_protected_function@GOTPCREL(%rip), %rax\n    jmp *%rax",
-        ),
+        ".globl mini_elf_protected_function\n.protected mini_elf_protected_function\n.type mini_elf_protected_function,@function\n.set mini_elf_protected_function, 0x1234\n",
     );
     let output = dir.join("must-not-exist.so");
 
@@ -459,9 +457,7 @@ fn protected_function_got_interposition_remains_out_of_scope() {
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("preemptible")
-            || stderr.contains("default-visible")
-            || stderr.contains("visibility"),
+        stderr.contains("visibility") || stderr.contains("protected"),
         "{stderr}"
     );
     assert!(!output.exists());

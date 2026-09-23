@@ -981,6 +981,7 @@ struct ImportPlan {
     symbols: BTreeMap<Vec<u8>, ImportSymbol>,
     symbol_relocation_sites: BTreeSet<DynamicSymbolRelocationSite>,
     got_symbols: BTreeSet<Vec<u8>>,
+    relative_got_symbols: BTreeSet<Vec<u8>>,
     plt_symbols: BTreeSet<Vec<u8>>,
     tls_gd_symbols: BTreeSet<Vec<u8>>,
     tls_ie_symbols: BTreeSet<Vec<u8>>,
@@ -1187,6 +1188,17 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
     .map_err(SharedObjectError::Relocation)?;
     let mut relocated = relocated_output.sections;
     let got_entries = relocated_output.got_entries;
+    let relative_got_entries = imports
+        .relative_got_symbols
+        .iter()
+        .map(|name| {
+            got_entries
+                .get(name)
+                .copied()
+                .map(|address| (name.clone(), address))
+                .ok_or_else(|| SharedObjectError::MissingGotEntry { name: name.clone() })
+        })
+        .collect::<Result<BTreeMap<_, _>, _>>()?;
     let tls_got_entries = relocated_output.tls_got_entries;
     let tls_gd_entries = relocated_output.tls_gd_entries;
     let tls_ld_entry = relocated_output.tls_ld_entry;
@@ -1322,7 +1334,7 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
         &relocation_inputs,
         &relocated,
         &resolved.definitions,
-        &BTreeMap::new(),
+        &relative_got_entries,
     )
     .map_err(SharedObjectError::RuntimeRelative)?;
     let symbol_rela_bytes = build_dynamic_symbol_relocation_table(
@@ -1564,6 +1576,7 @@ fn validate_inputs(
     let mut import_symbols = BTreeMap::<Vec<u8>, ImportSymbol>::new();
     let mut symbol_relocation_sites = BTreeSet::<DynamicSymbolRelocationSite>::new();
     let mut got_symbols = BTreeSet::<Vec<u8>>::new();
+    let mut relative_got_symbols = BTreeSet::<Vec<u8>>::new();
     let mut plt_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_gd_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_ie_symbols = BTreeSet::<Vec<u8>>::new();
@@ -1869,8 +1882,21 @@ fn validate_inputs(
                                 && matches!(definition_type, STT_OBJECT | STT_FUNC)
                                 && definition.symbol.other == 0
                         });
+                    let protected_definition = !symbol.name.is_empty()
+                        && definitions.get(symbol.name).is_some_and(|definition| {
+                            let definition_binding = definition.symbol.info >> 4;
+                            let definition_type = definition.symbol.info & 0x0f;
+                            definition_binding == STB_GLOBAL
+                                && matches!(definition_type, STT_OBJECT | STT_FUNC)
+                                && definition.symbol.other == STV_PROTECTED
+                                && definition.symbol.section_index != SHN_ABS
+                        });
                     if is_got_import && supported_definition {
                         got_symbols.insert(symbol.name.to_vec());
+                        continue;
+                    }
+                    if is_got_import && protected_definition {
+                        relative_got_symbols.insert(symbol.name.to_vec());
                         continue;
                     }
                     let supported_plt_definition = is_plt_import
@@ -1915,7 +1941,9 @@ fn validate_inputs(
                         }
                         continue;
                     }
-                    if relocation.relocation_type == R_X86_64_64 && supported_definition {
+                    if relocation.relocation_type == R_X86_64_64
+                        && (supported_definition || protected_definition)
+                    {
                         if target.flags & SHF_ALLOC == 0 || target.flags & SHF_WRITE == 0 {
                             return Err(
                                 SharedObjectError::DynamicSymbolRelocationTargetNotWritable {
@@ -1927,11 +1955,13 @@ fn validate_inputs(
                                 },
                             );
                         }
-                        symbol_relocation_sites.insert(DynamicSymbolRelocationSite {
-                            object_index: input.object_index,
-                            rela_section_index: table.section_index,
-                            relocation_index,
-                        });
+                        if supported_definition {
+                            symbol_relocation_sites.insert(DynamicSymbolRelocationSite {
+                                object_index: input.object_index,
+                                rela_section_index: table.section_index,
+                                relocation_index,
+                            });
+                        }
                         continue;
                     }
                     return Err(SharedObjectError::PreemptibleRelativeTarget {
@@ -2065,12 +2095,12 @@ fn validate_inputs(
                     });
                 }
                 let symbol_type = symbol.symbol.info & 0x0f;
-                let protected_function_definition = symbol.symbol.other == STV_PROTECTED
+                let protected_definition = symbol.symbol.other == STV_PROTECTED
                     && binding == STB_GLOBAL
-                    && symbol_type == STT_FUNC
+                    && matches!(symbol_type, STT_OBJECT | STT_FUNC)
                     && symbol.symbol.section_index != SHN_UNDEF
                     && symbol.symbol.section_index != SHN_ABS;
-                if symbol.symbol.other != 0 && !protected_function_definition {
+                if symbol.symbol.other != 0 && !protected_definition {
                     return Err(SharedObjectError::NondefaultVisibility {
                         object_index: input.object_index,
                         symbol_index: symbol.symbol_index,
@@ -2100,6 +2130,7 @@ fn validate_inputs(
                         continue;
                     }
                     let linker_owned_got_symbol = (!got_symbols.is_empty()
+                        || !relative_got_symbols.is_empty()
                         || !tls_gd_symbols.is_empty()
                         || !tls_ie_symbols.is_empty()
                         || !tls_desc_symbols.is_empty()
@@ -2140,6 +2171,7 @@ fn validate_inputs(
         symbols: import_symbols,
         symbol_relocation_sites,
         got_symbols,
+        relative_got_symbols,
         plt_symbols,
         tls_gd_symbols,
         tls_ie_symbols,
