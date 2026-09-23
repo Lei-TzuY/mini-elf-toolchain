@@ -32,6 +32,7 @@ const ELF64_RELA_SIZE: usize = 24;
 const R_X86_64_NONE: u32 = 0;
 const STT_NOTYPE: u8 = 0;
 const STT_OBJECT: u8 = 1;
+const STT_FUNC: u8 = 2;
 const GLOBAL_OFFSET_TABLE_SYMBOL: &[u8] = b"_GLOBAL_OFFSET_TABLE_";
 
 const DT_NULL: i64 = 0;
@@ -180,7 +181,7 @@ impl fmt::Display for SharedObjectError {
                 symbol_type,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references undefined symbol {symbol_index} ({:?}) with ELF symbol type {symbol_type}; bounded external imports require STT_OBJECT",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references undefined symbol {symbol_index} ({:?}) with ELF symbol type {symbol_type}; bounded external imports require STT_OBJECT or STT_FUNC",
                 String::from_utf8_lossy(name)
             ),
             Self::ExternalImportTargetNotWritable {
@@ -594,7 +595,7 @@ fn validate_inputs(
                 }
 
                 let symbol_type = symbol.symbol.info & 0x0f;
-                if symbol_type != STT_OBJECT {
+                if !matches!(symbol_type, STT_OBJECT | STT_FUNC) {
                     return Err(SharedObjectError::ExternalImportUnsupportedType {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
@@ -684,7 +685,7 @@ fn validate_inputs(
                     }
                     let supported_import = import_symbols.contains_key(symbol.name)
                         && binding == STB_GLOBAL
-                        && symbol_type == STT_OBJECT;
+                        && matches!(symbol_type, STT_OBJECT | STT_FUNC);
                     if !supported_import {
                         return Err(SharedObjectError::UndefinedNonlocal {
                             object_index: input.object_index,

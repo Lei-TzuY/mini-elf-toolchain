@@ -32,7 +32,7 @@ fn temp_dir(label: &str) -> PathBuf {
         .expect("clock after Unix epoch")
         .as_nanos();
     let path = std::env::temp_dir().join(format!(
-        "mini-elf-toolchain-shared-got-import-{label}-{}-{nonce}",
+        "mini-elf-toolchain-shared-function-import-{label}-{}-{nonce}",
         std::process::id()
     ));
     fs::create_dir_all(&path).unwrap();
@@ -58,25 +58,36 @@ fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
 }
 
 #[test]
-fn shared_object_imports_external_data_through_glob_dat_got_slot() {
+fn shared_object_binds_external_function_for_got_call_and_direct_pointer() {
     if !have_tools() {
         return;
     }
 
-    let dir = temp_dir("glob-dat");
+    let dir = temp_dir("strong");
     let object = assemble(
         &dir,
-        "got-import",
+        "function-import",
         r#".section .text
-.globl read_host
-.type read_host,@function
-.extern host_value
-.type host_value,@object
-read_host:
-    mov host_value@GOTPCREL(%rip), %rax
-    mov (%rax), %rax
+.globl call_host
+.type call_host,@function
+.extern host_function
+.type host_function,@function
+call_host:
+    mov host_function@GOTPCREL(%rip), %rax
+    mov $41, %edi
+    sub $8, %rsp
+    call *%rax
+    add $8, %rsp
     ret
-.size read_host, .-read_host
+.size call_host, .-call_host
+
+.section .data
+.align 8
+.globl imported_function_pointer
+.type imported_function_pointer,@object
+imported_function_pointer:
+    .quad host_function
+.size imported_function_pointer, .-imported_function_pointer
 "#,
     );
 
@@ -89,23 +100,15 @@ read_host:
     let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
     assert!(
         input_relocations.contains("GOTPCREL"),
-        "fixture must carry a GOTPCREL-family relocation: {input_relocations}"
+        "{input_relocations}"
     );
-    assert!(input_relocations.contains("host_value"));
-
-    let input_symbols = Command::new("readelf")
-        .args(["-sW"])
-        .arg(&object)
-        .output()
-        .unwrap();
-    assert!(input_symbols.status.success());
-    let input_symbols = String::from_utf8_lossy(&input_symbols.stdout);
     assert!(
-        input_symbols.contains("_GLOBAL_OFFSET_TABLE_"),
-        "GNU GOTPCREL fixture should expose the linker-owned GOT base symbol: {input_symbols}"
+        input_relocations.contains("R_X86_64_64"),
+        "{input_relocations}"
     );
+    assert!(input_relocations.matches("host_function").count() >= 2);
 
-    let shared = dir.join("libgotimport.so");
+    let shared = dir.join("libfunctionimport.so");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
         .arg(&shared)
@@ -127,14 +130,10 @@ read_host:
     assert!(symbols.status.success());
     let symbols = String::from_utf8_lossy(&symbols.stdout);
     assert!(
-        symbols
-            .lines()
-            .any(|line| line.contains("UND") && line.ends_with(" host_value")),
+        symbols.lines().any(|line| {
+            line.contains("FUNC") && line.contains("UND") && line.ends_with(" host_function")
+        }),
         "{symbols}"
-    );
-    assert!(
-        !symbols.contains("_GLOBAL_OFFSET_TABLE_"),
-        "linker-owned GOT base must not become a loader import: {symbols}"
     );
 
     let relocations = Command::new("readelf")
@@ -144,8 +143,18 @@ read_host:
         .unwrap();
     assert!(relocations.status.success());
     let relocations = String::from_utf8_lossy(&relocations.stdout);
-    assert!(relocations.contains("R_X86_64_GLOB_DAT"), "{relocations}");
-    assert!(relocations.contains("host_value"), "{relocations}");
+    assert!(
+        relocations
+            .lines()
+            .any(|line| line.contains("R_X86_64_GLOB_DAT") && line.contains("host_function")),
+        "{relocations}"
+    );
+    assert!(
+        relocations
+            .lines()
+            .any(|line| line.contains("R_X86_64_64") && line.contains("host_function")),
+        "{relocations}"
+    );
 
     #[cfg(target_os = "linux")]
     {
@@ -156,23 +165,30 @@ read_host:
             r#"#include <dlfcn.h>
 #include <stdint.h>
 
-uint64_t host_value = UINT64_C(0x123456789abcdef0);
+uint64_t host_function(uint64_t value) {
+    return value + 1;
+}
 
 int main(int argc, char **argv) {
-    if (argc != 2) return 50;
+    if (argc != 2) return 60;
     void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
-    if (!handle) return 51;
-    uint64_t (*read_host)(void) =
-        (uint64_t (*)(void))dlsym(handle, "read_host");
-    if (!read_host) return 52;
-    if (read_host() != UINT64_C(0x123456789abcdef0)) return 53;
-    host_value = UINT64_C(0x0fedcba987654321);
-    if (read_host() != UINT64_C(0x0fedcba987654321)) return 54;
-    return dlclose(handle) == 0 ? 0 : 55;
+    if (!handle) return 61;
+
+    uint64_t (*call_host)(void) =
+        (uint64_t (*)(void))dlsym(handle, "call_host");
+    uint64_t (**imported_pointer)(uint64_t) =
+        (uint64_t (**)(uint64_t))dlsym(handle, "imported_function_pointer");
+    if (!call_host || !imported_pointer) return 62;
+    if (call_host() != UINT64_C(42)) return 63;
+    if (*imported_pointer != host_function) return 64;
+    if ((*imported_pointer)(99) != UINT64_C(100)) return 65;
+
+    return dlclose(handle) == 0 ? 0 : 66;
 }
 "#,
         )
         .unwrap();
+
         let compile = Command::new("cc")
             .args(["-rdynamic", "-o"])
             .arg(&consumer)
@@ -189,7 +205,7 @@ int main(int argc, char **argv) {
         let status = Command::new(&consumer).arg(&shared).status().unwrap();
         assert!(
             status.success(),
-            "GLOB_DAT dlopen consumer returned {status}"
+            "external function import consumer returned {status}"
         );
     }
 
@@ -197,23 +213,24 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn shared_got_import_rejects_undefined_notype_target() {
+fn shared_external_weak_function_import_remains_fail_closed() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
 
-    let dir = temp_dir("notype");
+    let dir = temp_dir("weak");
     let object = assemble(
         &dir,
-        "notype-import",
+        "weak-function",
         r#".section .text
-.globl address_of_host_symbol
-.type address_of_host_symbol,@function
-.extern host_symbol
-address_of_host_symbol:
-    mov host_symbol@GOTPCREL(%rip), %rax
+.globl address_of_host_function
+.type address_of_host_function,@function
+.weak host_function
+.type host_function,@function
+address_of_host_function:
+    mov host_function@GOTPCREL(%rip), %rax
     ret
-.size address_of_host_symbol, .-address_of_host_symbol
+.size address_of_host_function, .-address_of_host_function
 "#,
     );
     let output = dir.join("must-not-exist.so");
@@ -230,51 +247,7 @@ address_of_host_symbol:
     assert!(mini.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&mini.stderr);
     assert!(
-        stderr.contains("STT_OBJECT or STT_FUNC") || stderr.contains("symbol type"),
-        "{stderr}"
-    );
-    assert!(!output.exists());
-
-    let _ = fs::remove_dir_all(dir);
-}
-
-#[test]
-fn static_link_does_not_inherit_shared_unresolved_got_semantics() {
-    if !command_reports("as", "GNU assembler") {
-        return;
-    }
-
-    let dir = temp_dir("static-fail-closed");
-    let object = assemble(
-        &dir,
-        "static-unresolved-got",
-        r#".section .text
-.globl _start
-.type _start,@function
-.extern host_value
-.type host_value,@object
-_start:
-    mov host_value@GOTPCREL(%rip), %rax
-    mov (%rax), %edi
-    mov $60, %eax
-    syscall
-.size _start, .-_start
-"#,
-    );
-    let output = dir.join("must-not-link");
-
-    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
-        .args(["link", "-o"])
-        .arg(&output)
-        .arg(&object)
-        .output()
-        .unwrap();
-
-    assert!(!mini.status.success());
-    assert!(mini.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&mini.stderr);
-    assert!(
-        stderr.contains("host_value") && stderr.contains("resolved global address"),
+        stderr.contains("strong global") || stderr.contains("binding"),
         "{stderr}"
     );
     assert!(!output.exists());
