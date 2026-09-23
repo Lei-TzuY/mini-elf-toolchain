@@ -648,12 +648,29 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         })
         .collect::<Vec<_>>();
 
+    let mut input_sections = Vec::new();
+    for input in inputs {
+        input_sections.extend(
+            input
+                .allocatable_sections()
+                .map_err(SharedObjectError::TlsInput)?,
+        );
+    }
+    let tls_layout =
+        compute_static_tls_layout(&input_sections, &layout).map_err(SharedObjectError::TlsLayout)?;
+
     let exports = resolved
         .definitions
         .values()
         .map(|definition| {
-            let value = final_symbol_address(definition, &layout)
+            let absolute_value = final_symbol_address(definition, &layout)
                 .map_err(SharedObjectError::SymbolAddress)?;
+            let symbol_type = definition.symbol.info & 0x0f;
+            let value = if symbol_type == STT_TLS {
+                tls_export_value(definition, absolute_value, tls_layout)?
+            } else {
+                absolute_value
+            };
             Ok(ExportSymbol {
                 name: definition.name.clone(),
                 info: definition.symbol.info,
@@ -766,6 +783,12 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
 
     let image = write_elf64_x86_64_shared_segments(&writer_segments, page_alignment)
         .map_err(SharedObjectError::Write)?;
+    let image = if let Some(tls) = tls_layout {
+        inject_static_tls_program_header(image, tls, page_alignment)
+            .map_err(SharedObjectError::TlsProgramHeader)?
+    } else {
+        image
+    };
     map_runtime_program_headers_with_dynamic(
         image,
         RuntimeDynamicProgramHeader {
@@ -774,6 +797,31 @@ pub fn link_shared_object_with_needed_soname_and_runpath(
         },
     )
     .map_err(SharedObjectError::Write)
+}
+
+fn tls_export_value(
+    definition: &SymbolDefinition,
+    absolute_value: u64,
+    tls: Option<StaticTlsLayout>,
+) -> Result<u64, SharedObjectError> {
+    let tls = tls.ok_or_else(|| SharedObjectError::TlsSymbolOutsideImage {
+        name: definition.name.clone(),
+        address: absolute_value,
+    })?;
+    let tls_end = tls
+        .base_address
+        .checked_add(tls.memory_size)
+        .ok_or(SharedObjectError::AddressOverflow)?;
+    let symbol_end = absolute_value
+        .checked_add(definition.symbol.size)
+        .ok_or(SharedObjectError::AddressOverflow)?;
+    if absolute_value < tls.base_address || symbol_end > tls_end {
+        return Err(SharedObjectError::TlsSymbolOutsideImage {
+            name: definition.name.clone(),
+            address: absolute_value,
+        });
+    }
+    Ok(absolute_value - tls.base_address)
 }
 
 fn validate_needed_names(needed: &[Vec<u8>]) -> Result<(), SharedObjectError> {
