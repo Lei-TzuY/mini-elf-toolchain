@@ -2079,6 +2079,9 @@ fn validate_inputs(
                     });
                 }
                 if symbol.symbol.section_index == SHN_UNDEF && !symbol.name.is_empty() {
+                    if definitions.contains_key(symbol.name) {
+                        continue;
+                    }
                     if symbol_type == STT_TLS {
                         let supported_tls_model = (binding == STB_GLOBAL
                             && (tls_gd_symbols.contains(symbol.name)
