@@ -17,7 +17,7 @@ use mini_elf_toolchain::partial_link::{
     link_relocatable_objects_with_forced_undefined, PartialLinkInput,
 };
 use mini_elf_toolchain::shared_object::{
-    link_shared_object_with_needed, shared_import_requirements,
+    link_shared_object_with_needed_and_soname, shared_import_requirements,
 };
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
@@ -37,7 +37,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [--soname <name>|--soname=<name>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -147,7 +147,13 @@ where
         let raw_remaining: Vec<_> = args.collect();
         let (position_independent, raw_remaining) = extract_pie_argument(&raw_remaining)?;
         let (shared_object, raw_remaining) = extract_shared_argument(&raw_remaining)?;
-        let mut needed = extract_needed_arguments(&raw_remaining)?;
+        let soname = extract_soname_argument(&raw_remaining)?;
+        if !shared_object && soname.soname.is_some() {
+            return Err(CliError::Usage(
+                "--soname is only supported with --shared".to_owned(),
+            ));
+        }
+        let mut needed = extract_needed_arguments(&soname.arguments)?;
         if !shared_object && !needed.specs.is_empty() {
             let provider_requested = needed
                 .specs
@@ -267,6 +273,7 @@ where
             image_base: image_base.image_base,
             position_independent,
             shared_object,
+            soname: soname.soname.as_deref(),
             needed: &needed.specs,
             forced_undefined: &forced.symbols,
         };
@@ -342,6 +349,66 @@ fn extract_shared_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString
     }
 
     Ok((shared, remaining))
+}
+
+struct SonameArguments {
+    soname: Option<Vec<u8>>,
+    arguments: Vec<OsString>,
+}
+
+fn extract_soname_argument(arguments: &[OsString]) -> Result<SonameArguments, CliError> {
+    let mut soname = None;
+    let mut remaining = Vec::with_capacity(arguments.len());
+    let mut index = 0usize;
+
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        if argument == "--soname" {
+            let value = arguments
+                .get(index + 1)
+                .ok_or_else(|| CliError::Usage("missing name after --soname".to_owned()))?;
+            if soname.is_some() {
+                return Err(CliError::Usage("duplicate --soname option".to_owned()));
+            }
+            let value = value.to_str().ok_or_else(|| {
+                CliError::Usage("SONAME after --soname must be valid UTF-8".to_owned())
+            })?;
+            if value.is_empty() {
+                return Err(CliError::Usage("SONAME cannot be empty".to_owned()));
+            }
+            if value.as_bytes().contains(&0) {
+                return Err(CliError::Usage("SONAME cannot contain NUL".to_owned()));
+            }
+            soname = Some(value.as_bytes().to_vec());
+            index += 2;
+            continue;
+        }
+        if let Some(value) = argument
+            .to_str()
+            .and_then(|argument| argument.strip_prefix("--soname="))
+        {
+            if soname.is_some() {
+                return Err(CliError::Usage("duplicate --soname option".to_owned()));
+            }
+            if value.is_empty() {
+                return Err(CliError::Usage("SONAME cannot be empty".to_owned()));
+            }
+            if value.as_bytes().contains(&0) {
+                return Err(CliError::Usage("SONAME cannot contain NUL".to_owned()));
+            }
+            soname = Some(value.as_bytes().to_vec());
+            index += 1;
+            continue;
+        }
+
+        remaining.push(argument.clone());
+        index += 1;
+    }
+
+    Ok(SonameArguments {
+        soname,
+        arguments: remaining,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -627,6 +694,7 @@ struct LinkFilesOptions<'a> {
     image_base: u64,
     position_independent: bool,
     shared_object: bool,
+    soname: Option<&'a [u8]>,
     needed: &'a [NeededSpec],
     forced_undefined: &'a [Vec<u8>],
 }
@@ -709,11 +777,13 @@ fn link_files(
         let imports = shared_import_requirements(&prepared.objects)
             .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         let needed = resolve_needed_dependencies(options.needed, &imports)?;
-        let image =
-            link_shared_object_with_needed(&prepared.objects, DEFAULT_PAGE_ALIGNMENT, &needed)
-                .map_err(|error| {
-                    CliError::Failure(format!("shared object link failed: {error}"))
-                })?;
+        let image = link_shared_object_with_needed_and_soname(
+            &prepared.objects,
+            DEFAULT_PAGE_ALIGNMENT,
+            &needed,
+            options.soname,
+        )
+        .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
         fs::write(output, &image.bytes)
             .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
         return Ok(format!(
