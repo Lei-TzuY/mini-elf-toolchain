@@ -90,7 +90,12 @@ fn build_provider(
     if let Some(soname) = soname {
         command.args(["-soname", soname]);
     }
-    let output = command.arg("-o").arg(&provider).arg(&object).output().unwrap();
+    let output = command
+        .arg("-o")
+        .arg(&provider)
+        .arg(&object)
+        .output()
+        .unwrap();
     assert!(
         output.status.success(),
         "{}",
