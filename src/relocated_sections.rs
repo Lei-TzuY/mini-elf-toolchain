@@ -437,9 +437,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_tls_gd_tls_ld_and_tls
     let tls_got_symbols = collect_static_tls_got_symbols(inputs)?;
     for name in external_tls_got_symbols {
         if !tls_got_symbols.iter().any(|candidate| candidate == name) {
-            return Err(RelocatedSectionError::MissingExternalTlsGotSymbol {
-                name: name.clone(),
-            });
+            return Err(RelocatedSectionError::MissingExternalTlsGotSymbol { name: name.clone() });
         }
     }
     if !tls_gd_symbols.is_empty() {
