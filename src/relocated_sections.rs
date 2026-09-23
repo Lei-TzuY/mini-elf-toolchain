@@ -41,6 +41,13 @@ const PLT_GOT_ENTRY_SIZE: u64 = 8;
 const PLT_GOT_ALIGNMENT: u64 = 8;
 const STT_TLS: u8 = 6;
 
+#[derive(Debug, Clone, Copy)]
+pub struct TlsSyntheticRequests<'a> {
+    pub tls_gd_symbols: &'a BTreeSet<Vec<u8>>,
+    pub tls_ld_enabled: bool,
+    pub external_tls_got_symbols: &'a BTreeSet<Vec<u8>>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelocatedSectionImage {
     pub object_index: usize,
@@ -381,28 +388,31 @@ pub fn relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld(
     tls_gd_symbols: &BTreeSet<Vec<u8>>,
     tls_ld_enabled: bool,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
-    relocate_allocatable_sections_with_external_got_plt_tls_gd_tls_ld_and_tls_ie(
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
         inputs,
         start_address,
         page_alignment,
         external_got_symbols,
         external_plt_symbols,
-        tls_gd_symbols,
-        tls_ld_enabled,
-        &BTreeSet::new(),
+        TlsSyntheticRequests {
+            tls_gd_symbols,
+            tls_ld_enabled,
+            external_tls_got_symbols: &BTreeSet::new(),
+        },
     )
 }
 
-pub fn relocate_allocatable_sections_with_external_got_plt_tls_gd_tls_ld_and_tls_ie(
+pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
     inputs: &[LinkerInputObject<'_>],
     start_address: u64,
     page_alignment: u64,
     external_got_symbols: &BTreeSet<Vec<u8>>,
     external_plt_symbols: &BTreeSet<Vec<u8>>,
-    tls_gd_symbols: &BTreeSet<Vec<u8>>,
-    tls_ld_enabled: bool,
-    external_tls_got_symbols: &BTreeSet<Vec<u8>>,
+    tls: TlsSyntheticRequests<'_>,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    let tls_gd_symbols = tls.tls_gd_symbols;
+    let tls_ld_enabled = tls.tls_ld_enabled;
+    let external_tls_got_symbols = tls.external_tls_got_symbols;
     for (position, input) in inputs.iter().enumerate() {
         if input.object_index != position {
             return Err(RelocatedSectionError::NonCanonicalObjectIndex {
