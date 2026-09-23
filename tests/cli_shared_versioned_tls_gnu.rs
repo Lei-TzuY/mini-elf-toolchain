@@ -156,7 +156,10 @@ fn named_version_tls_import_composes_across_gd_ie_and_tlsdesc() {
         .unwrap();
     assert!(input_relocations.status.success());
     let input_relocations = String::from_utf8_lossy(&input_relocations.stdout);
-    assert!(input_relocations.contains("R_X86_64_TLSGD"), "{input_relocations}");
+    assert!(
+        input_relocations.contains("R_X86_64_TLSGD"),
+        "{input_relocations}"
+    );
     assert!(
         input_relocations.contains("R_X86_64_GOTTPOFF"),
         "{input_relocations}"
@@ -170,10 +173,7 @@ fn named_version_tls_import_composes_across_gd_ie_and_tlsdesc() {
         "{input_relocations}"
     );
     assert!(
-        input_relocations
-            .matches("provider_tls@VERS_1")
-            .count()
-            >= 4,
+        input_relocations.matches("provider_tls@VERS_1").count() >= 4,
         "{input_relocations}"
     );
 
@@ -185,9 +185,9 @@ fn named_version_tls_import_composes_across_gd_ie_and_tlsdesc() {
     assert!(provider_symbols.status.success());
     let provider_symbols = String::from_utf8_lossy(&provider_symbols.stdout);
     assert!(
-        provider_symbols.lines().any(|line| {
-            line.contains(" TLS ") && line.contains("provider_tls@@VERS_1")
-        }),
+        provider_symbols
+            .lines()
+            .any(|line| { line.contains(" TLS ") && line.contains("provider_tls@@VERS_1") }),
         "{provider_symbols}"
     );
 
@@ -217,9 +217,7 @@ fn named_version_tls_import_composes_across_gd_ie_and_tlsdesc() {
     let symbols = String::from_utf8_lossy(&symbols.stdout);
     assert!(
         symbols.lines().any(|line| {
-            line.contains(" TLS ")
-                && line.contains(" UND ")
-                && line.contains("provider_tls@VERS_1")
+            line.contains(" TLS ") && line.contains(" UND ") && line.contains("provider_tls@VERS_1")
         }),
         "{symbols}"
     );
@@ -373,10 +371,7 @@ int main(int argc, char **argv) {
         );
 
         let status = Command::new(&runner).arg(&consumer).status().unwrap();
-        assert!(
-            status.success(),
-            "versioned TLS consumer returned {status}"
-        );
+        assert!(status.success(), "versioned TLS consumer returned {status}");
     }
 
     let _ = fs::remove_dir_all(dir);
