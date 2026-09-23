@@ -359,7 +359,7 @@ impl fmt::Display for SharedObjectError {
                 binding,
             } => write!(
                 f,
-                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded shared relocation handling currently permits undefined external imports plus defined default-visible strong STT_OBJECT symbols only through ordinary GOTPCREL/GLOB_DAT interposition",
+                "shared object RELA section {rela_section_index} relocation {relocation_index} in object {object_index} references default-visible nonlocal symbol {symbol_index} ({:?}) with binding {binding}; bounded shared relocation handling currently permits undefined external imports plus defined default-visible strong STT_OBJECT/STT_FUNC symbols only through ordinary GOTPCREL/GLOB_DAT interposition",
                 String::from_utf8_lossy(name)
             ),
             Self::ExternalImportUnsupportedBinding {
@@ -1852,16 +1852,16 @@ fn validate_inputs(
 
                 if symbol.symbol.section_index != SHN_UNDEF || definitions.contains_key(symbol.name)
                 {
-                    let defined_got_object = is_got_import
+                    let defined_got_symbol = is_got_import
                         && !symbol.name.is_empty()
                         && definitions.get(symbol.name).is_some_and(|definition| {
                             let definition_binding = definition.symbol.info >> 4;
                             let definition_type = definition.symbol.info & 0x0f;
                             definition_binding == STB_GLOBAL
-                                && definition_type == STT_OBJECT
+                                && matches!(definition_type, STT_OBJECT | STT_FUNC)
                                 && definition.symbol.other == 0
                         });
-                    if defined_got_object {
+                    if defined_got_symbol {
                         got_symbols.insert(symbol.name.to_vec());
                         continue;
                     }
