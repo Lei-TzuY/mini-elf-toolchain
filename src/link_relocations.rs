@@ -8,8 +8,8 @@ use crate::resolve::{NamedSymbol, SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_L
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError};
 use crate::x86_64_relocations::{
     is_static_got_base_type, is_static_got_entry_type, is_static_got_offset_type,
-    is_static_gotoff_type, is_static_gotpcrel_type, is_static_tls_gotpcrel_type, R_X86_64_SIZE32,
-    R_X86_64_SIZE64,
+    is_static_gotoff_type, is_static_gotpcrel_type, is_static_tls_gotpcrel_type, R_X86_64_PLT32,
+    R_X86_64_SIZE32, R_X86_64_SIZE64,
 };
 
 const R_X86_64_NONE: u32 = 0;
@@ -166,6 +166,8 @@ pub struct ResolvedGlobalSymbols<'a> {
     pub got_entries: &'a BTreeMap<Vec<u8>, u64>,
     pub tls_got_entries: &'a BTreeMap<Vec<u8>, u64>,
     pub unresolved_got_symbols: &'a BTreeSet<Vec<u8>>,
+    pub plt_entries: &'a BTreeMap<Vec<u8>, u64>,
+    pub unresolved_plt_symbols: &'a BTreeSet<Vec<u8>>,
 }
 
 pub fn apply_rela_table_with_resolved_symbols(
@@ -181,6 +183,8 @@ pub fn apply_rela_table_with_resolved_symbols(
     let got_entries = BTreeMap::new();
     let tls_got_entries = BTreeMap::new();
     let unresolved_got_symbols = BTreeSet::new();
+    let plt_entries = BTreeMap::new();
+    let unresolved_plt_symbols = BTreeSet::new();
     apply_rela_table_with_resolved_symbols_and_definitions(
         section,
         section_address,
@@ -193,6 +197,8 @@ pub fn apply_rela_table_with_resolved_symbols(
             got_entries: &got_entries,
             tls_got_entries: &tls_got_entries,
             unresolved_got_symbols: &unresolved_got_symbols,
+            plt_entries: &plt_entries,
+            unresolved_plt_symbols: &unresolved_plt_symbols,
         },
         layout,
     )
@@ -266,6 +272,16 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
                 let address = match globals.addresses.get(symbol.name) {
                     Some(address) => *address,
                     None if binding == STB_WEAK && symbol.symbol.section_index == SHN_UNDEF => 0,
+                    None if symbol.symbol.section_index == SHN_UNDEF
+                        && globals.unresolved_plt_symbols.contains(symbol.name)
+                        && globals.plt_entries.contains_key(symbol.name)
+                        && table.relocations.iter().any(|candidate| {
+                            candidate.symbol_index == relocation.symbol_index
+                                && candidate.relocation_type == R_X86_64_PLT32
+                        }) =>
+                    {
+                        globals.plt_entries[symbol.name]
+                    }
                     None if symbol.symbol.section_index == SHN_UNDEF
                         && globals.unresolved_got_symbols.contains(symbol.name)
                         && globals.got_entries.contains_key(symbol.name)
