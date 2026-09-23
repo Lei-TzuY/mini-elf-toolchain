@@ -86,6 +86,26 @@ provider_function:
     shared
 }
 
+fn build_named_provider(dir: &Path, stem: &str, soname: &str, increment: u64) -> PathBuf {
+    let source = format!(
+        ".section .text\n.globl provider_function\n.type provider_function,@function\nprovider_function:\n    lea {increment}(%rdi), %rax\n    ret\n.size provider_function, .-provider_function\n"
+    );
+    let object = assemble(dir, stem, &source);
+    let shared = dir.join(soname);
+    let output = Command::new("ld")
+        .args(["-shared", "-soname", soname, "-o"])
+        .arg(&shared)
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    shared
+}
+
 fn build_consumer_object(dir: &Path) -> PathBuf {
     assemble(
         dir,
@@ -198,6 +218,99 @@ int main(int argc, char **argv) {
 
         let provider_name = provider.file_name().unwrap();
         assert_eq!(provider_name, "libprovider.so");
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn shared_needed_order_controls_dependency_symbol_scope() {
+    if !have_tools() {
+        return;
+    }
+
+    let dir = temp_dir("order");
+    let _first = build_named_provider(&dir, "first-provider", "libfirst.so", 2);
+    let _second = build_named_provider(&dir, "second-provider", "libsecond.so", 9);
+    let object = build_consumer_object(&dir);
+    let shared = dir.join("libordered-consumer.so");
+
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&shared)
+        .arg("--shared")
+        .args(["--needed", "libfirst.so", "--needed", "libsecond.so"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        mini.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
+    );
+
+    let dynamic = Command::new("readelf")
+        .args(["-dW"])
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(dynamic.status.success());
+    let dynamic = String::from_utf8_lossy(&dynamic.stdout);
+    let first = dynamic
+        .find("Shared library: [libfirst.so]")
+        .expect("first DT_NEEDED entry");
+    let second = dynamic
+        .find("Shared library: [libsecond.so]")
+        .expect("second DT_NEEDED entry");
+    assert!(
+        first < second,
+        "DT_NEEDED declaration order changed: {dynamic}"
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let source = dir.join("runner.c");
+        let runner = dir.join("runner");
+        fs::write(
+            &source,
+            r#"#include <dlfcn.h>
+#include <stdint.h>
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 100;
+    void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return 101;
+    uint64_t (*call_provider)(void) =
+        (uint64_t (*)(void))dlsym(handle, "call_provider");
+    if (!call_provider) return 102;
+    if (call_provider() != UINT64_C(42)) return 103;
+    return dlclose(handle) == 0 ? 0 : 104;
+}
+"#,
+        )
+        .unwrap();
+        let compile = Command::new("cc")
+            .args(["-o"])
+            .arg(&runner)
+            .arg(&source)
+            .arg("-ldl")
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+
+        let status = Command::new(&runner)
+            .arg(&shared)
+            .env("LD_LIBRARY_PATH", &dir)
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "DT_NEEDED dependency order did not control symbol scope: {status}"
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
