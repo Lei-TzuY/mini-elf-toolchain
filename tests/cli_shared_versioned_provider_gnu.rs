@@ -81,6 +81,99 @@ fn versioned_provider(dir: &Path, stem: &str, source: &str, script: &str, soname
     shared
 }
 
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn read_i64(bytes: &[u8], offset: usize) -> i64 {
+    i64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn dynamic_symbol_index(path: &Path, symbol_name: &str) -> usize {
+    let output = Command::new("readelf")
+        .arg("-sDW")
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let symbols = String::from_utf8_lossy(&output.stdout);
+    symbols
+        .lines()
+        .find(|line| line.split_whitespace().last() == Some(symbol_name))
+        .and_then(|line| line.split_whitespace().next())
+        .and_then(|index| index.trim_end_matches(':').parse::<usize>().ok())
+        .unwrap_or_else(|| panic!("dynamic symbol {symbol_name:?} not found in:\n{symbols}"))
+}
+
+fn rewrite_dynamic_symbol_version(path: &Path, symbol_index: usize, raw_version: u16) {
+    const PT_LOAD: u32 = 1;
+    const PT_DYNAMIC: u32 = 2;
+    const DT_NULL: i64 = 0;
+    const DT_VERSYM: i64 = 0x6fff_fff0;
+
+    let mut bytes = fs::read(path).unwrap();
+    let phoff = read_u64(&bytes, 32) as usize;
+    let phentsize = read_u16(&bytes, 54) as usize;
+    let phnum = read_u16(&bytes, 56) as usize;
+
+    let mut loads = Vec::new();
+    let mut dynamic = None;
+    for index in 0..phnum {
+        let offset = phoff + index * phentsize;
+        let segment_type = read_u32(&bytes, offset);
+        let file_offset = read_u64(&bytes, offset + 8);
+        let virtual_address = read_u64(&bytes, offset + 16);
+        let file_size = read_u64(&bytes, offset + 32);
+        if segment_type == PT_LOAD {
+            loads.push((virtual_address, file_offset, file_size));
+        } else if segment_type == PT_DYNAMIC {
+            dynamic = Some((file_offset, file_size));
+        }
+    }
+
+    let (dynamic_offset, dynamic_size) = dynamic.expect("fixture has no PT_DYNAMIC");
+    let mut versym_address = None;
+    for relative in (0..dynamic_size as usize).step_by(16) {
+        let offset = dynamic_offset as usize + relative;
+        let tag = read_i64(&bytes, offset);
+        if tag == DT_NULL {
+            break;
+        }
+        if tag == DT_VERSYM {
+            versym_address = Some(read_u64(&bytes, offset + 8));
+            break;
+        }
+    }
+    let versym_address = versym_address.expect("fixture has no DT_VERSYM");
+
+    let versym_file_offset = loads
+        .into_iter()
+        .find_map(|(virtual_address, file_offset, file_size)| {
+            let end = virtual_address.checked_add(file_size)?;
+            if versym_address >= virtual_address && versym_address < end {
+                Some(file_offset + (versym_address - virtual_address))
+            } else {
+                None
+            }
+        })
+        .expect("DT_VERSYM is not file-backed by PT_LOAD");
+    let entry_offset = versym_file_offset as usize + symbol_index * 2;
+    bytes[entry_offset..entry_offset + 2].copy_from_slice(&raw_version.to_le_bytes());
+    fs::write(path, bytes).unwrap();
+}
+
 fn consumer_object(dir: &Path) -> PathBuf {
     assemble(
         dir,
@@ -268,6 +361,54 @@ provider_impl:
         stderr.contains("exports none") || stderr.contains("bounded external imports"),
         "{stderr}"
     );
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn needed_from_rejects_orphan_defined_versym_index_before_output() {
+    if !command_reports("as", "GNU assembler")
+        || !command_reports("ld", "GNU ld")
+        || !command_reports("readelf", "GNU readelf")
+    {
+        return;
+    }
+
+    let dir = temp_dir("orphan-versym");
+    let provider = versioned_provider(
+        &dir,
+        "provider-orphan",
+        r#".section .data
+.globl provider_value
+.type provider_value,@object
+provider_value:
+    .quad 9
+.size provider_value, .-provider_value
+"#,
+        "VERS_1 { global: provider_value; local: *; };\n",
+        "libprovider-orphan.so",
+    );
+    let symbol_index = dynamic_symbol_index(&provider, "provider_value@@VERS_1");
+    rewrite_dynamic_symbol_version(&provider, symbol_index, 0x1234);
+
+    let consumer_object = consumer_object(&dir);
+    let output = dir.join("must-not-exist.so");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--shared")
+        .arg("--needed-from")
+        .arg(&provider)
+        .arg(&consumer_object)
+        .output()
+        .unwrap();
+
+    assert!(!mini.status.success());
+    assert!(mini.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&mini.stderr);
+    assert!(stderr.contains("DT_VERSYM"), "{stderr}");
+    assert!(stderr.contains("no matching DT_VERDEF"), "{stderr}");
     assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
