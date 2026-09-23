@@ -6,9 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const VALUE: &str = "mini_elf_protected_value";
 const FUNCTION: &str = "mini_elf_protected_function_local";
 const READ_GOT: &str = "read_mini_elf_protected_value_got";
-const READ_SLOT: &str = "read_mini_elf_protected_value_slot";
+const VALUE_SLOT: &str = "mini_elf_protected_value_slot";
 const CALL_GOT: &str = "call_mini_elf_protected_function_got";
-const CALL_SLOT: &str = "call_mini_elf_protected_function_slot";
+const FUNCTION_SLOT: &str = "mini_elf_protected_function_slot";
 const CALL_PLT: &str = "call_mini_elf_protected_function_plt";
 
 fn command_reports(program: &str, marker: &str) -> bool {
@@ -147,12 +147,18 @@ fn protected_data_and_function_absolute_got_and_plt_bind_locally_like_gnu() {
 .size {VALUE}, .-{VALUE}
 
 .align 8
-protected_value_slot:
+.globl {VALUE_SLOT}
+.type {VALUE_SLOT},@object
+{VALUE_SLOT}:
     .quad {VALUE}
+.size {VALUE_SLOT}, .-{VALUE_SLOT}
 
 .align 8
-protected_function_slot:
+.globl {FUNCTION_SLOT}
+.type {FUNCTION_SLOT},@object
+{FUNCTION_SLOT}:
     .quad {FUNCTION}
+.size {FUNCTION_SLOT}, .-{FUNCTION_SLOT}
 
 .text
 .globl {FUNCTION}
@@ -171,27 +177,12 @@ protected_function_slot:
     ret
 .size {READ_GOT}, .-{READ_GOT}
 
-.globl {READ_SLOT}
-.type {READ_SLOT},@function
-{READ_SLOT}:
-    movq protected_value_slot(%rip), %rax
-    movq (%rax), %rax
-    ret
-.size {READ_SLOT}, .-{READ_SLOT}
-
 .globl {CALL_GOT}
 .type {CALL_GOT},@function
 {CALL_GOT}:
     movq {FUNCTION}@GOTPCREL(%rip), %rax
     jmp *%rax
 .size {CALL_GOT}, .-{CALL_GOT}
-
-.globl {CALL_SLOT}
-.type {CALL_SLOT},@function
-{CALL_SLOT}:
-    movq protected_function_slot(%rip), %rax
-    jmp *%rax
-.size {CALL_SLOT}, .-{CALL_SLOT}
 
 .globl {CALL_PLT}
 .type {CALL_PLT},@function
@@ -279,23 +270,24 @@ int main(int argc, char **argv) {{
     if (!handle) return 301;
 
     read_fn read_got = (read_fn)dlsym(handle, "{READ_GOT}");
-    read_fn read_slot = (read_fn)dlsym(handle, "{READ_SLOT}");
+    uint64_t **value_slot = (uint64_t **)dlsym(handle, "{VALUE_SLOT}");
     call_fn call_got = (call_fn)dlsym(handle, "{CALL_GOT}");
-    call_fn call_slot = (call_fn)dlsym(handle, "{CALL_SLOT}");
+    call_fn *function_slot = (call_fn *)dlsym(handle, "{FUNCTION_SLOT}");
     call_fn call_plt = (call_fn)dlsym(handle, "{CALL_PLT}");
     uint64_t *protected_value = (uint64_t *)dlsym(handle, "{VALUE}");
     call_fn protected_function = (call_fn)dlsym(handle, "{FUNCTION}");
     uint64_t *global_value = (uint64_t *)dlsym(RTLD_DEFAULT, "{VALUE}");
     call_fn global_function = (call_fn)dlsym(RTLD_DEFAULT, "{FUNCTION}");
 
-    if (!read_got || !read_slot || !call_got || !call_slot || !call_plt
+    if (!read_got || !value_slot || !call_got || !function_slot || !call_plt
         || !protected_value || !protected_function || !global_value || !global_function)
         return 302;
 
     if (read_got() != UINT64_C(0x1111222233334444)) return 303;
-    if (read_slot() != UINT64_C(0x1111222233334444)) return 304;
+    if (!*value_slot || **value_slot != UINT64_C(0x1111222233334444)) return 304;
     if (*protected_value != UINT64_C(0x1111222233334444)) return 305;
-    if (call_got() != 7 || call_slot() != 7 || call_plt() != 7) return 306;
+    if (call_got() != 7 || !*function_slot || (*function_slot)() != 7 || call_plt() != 7)
+        return 306;
     if (protected_function() != 7) return 307;
 
     if (global_value != &{VALUE} || *global_value != UINT64_C(0x5555666677778888))
@@ -304,8 +296,8 @@ int main(int argc, char **argv) {{
 
     {VALUE} = UINT64_C(0x9999aaaabbbbcccc);
     if (read_got() != UINT64_C(0x1111222233334444)) return 310;
-    if (read_slot() != UINT64_C(0x1111222233334444)) return 311;
-    if (call_got() != 7 || call_slot() != 7 || call_plt() != 7) return 312;
+    if (**value_slot != UINT64_C(0x1111222233334444)) return 311;
+    if (call_got() != 7 || (*function_slot)() != 7 || call_plt() != 7) return 312;
 
     return dlclose(handle) == 0 ? 0 : 313;
 }}
