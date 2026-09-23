@@ -314,7 +314,10 @@ imported_pointer:
         .unwrap();
     assert!(dynamic.status.success());
     let dynamic = String::from_utf8_lossy(&dynamic.stdout);
-    assert!(dynamic.contains("RELACOUNT") && dynamic.contains("1"), "{dynamic}");
+    assert!(
+        dynamic.contains("RELACOUNT") && dynamic.contains("1"),
+        "{dynamic}"
+    );
 
     let relocations = Command::new("readelf")
         .args(["-rW", "--use-dynamic"])
