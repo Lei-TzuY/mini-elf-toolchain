@@ -447,7 +447,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_tls_gd_and_tls_ld(
         .ok_or(RelocatedSectionError::GotSizeOverflow {
             symbol_count: got_symbol_count
                 .saturating_add(tls_gd_symbols.len().saturating_mul(2))
-                .saturating_add(usize::from(tls_ld_enabled) * 2),
+                .saturating_add(if tls_ld_enabled { 2 } else { 0 }),
         })?;
 
     validate_external_plt_symbols(inputs, external_plt_symbols)?;
