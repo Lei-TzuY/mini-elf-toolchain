@@ -3,6 +3,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const UNVERSIONED_WEAK_NAME: &str = "mini_elf_optional_weak_function_322";
+
 fn command_reports(program: &str, marker: &str) -> bool {
     let Ok(output) = Command::new(program).arg("--version").output() else {
         return false;
@@ -316,6 +318,203 @@ int main(int argc, char **argv) {
                 );
             }
         }
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+
+#[test]
+fn unversioned_weak_function_addresses_zero_or_bind_without_provider() {
+    if !have_tools() {
+        return;
+    }
+
+    let dir = temp_dir("unversioned");
+    let object = assemble(
+        &dir,
+        "unversioned-consumer",
+        &format!(
+            r#".section .note.GNU-stack,"",@progbits
+.data
+.align 8
+.globl optional_function_pointer
+.type optional_function_pointer,@object
+.weak {UNVERSIONED_WEAK_NAME}
+.type {UNVERSIONED_WEAK_NAME},@function
+optional_function_pointer:
+    .quad {UNVERSIONED_WEAK_NAME}
+.size optional_function_pointer, .-optional_function_pointer
+
+.text
+.globl optional_function_via_got
+.type optional_function_via_got,@function
+optional_function_via_got:
+    mov {UNVERSIONED_WEAK_NAME}@GOTPCREL(%rip), %rax
+    ret
+.size optional_function_via_got, .-optional_function_via_got
+"#
+        ),
+    );
+
+    let shared = dir.join("libweak-unversioned.so");
+    let mini_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&shared)
+        .arg("--shared")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        mini_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini_link.stderr)
+    );
+
+    let symbols = Command::new("readelf")
+        .arg("-sDW")
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(symbols.status.success());
+    let symbols = String::from_utf8_lossy(&symbols.stdout);
+    assert!(
+        symbols.lines().any(|line| {
+            line.contains("WEAK")
+                && line.contains("FUNC")
+                && line.contains("UND")
+                && line.ends_with(UNVERSIONED_WEAK_NAME)
+        }),
+        "{symbols}"
+    );
+
+    let dynamic = Command::new("readelf")
+        .arg("-dW")
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(dynamic.status.success());
+    let dynamic = String::from_utf8_lossy(&dynamic.stdout);
+    assert!(
+        !dynamic.contains("(NEEDED)"),
+        "unversioned weak address imports must not synthesize a provider dependency: {dynamic}"
+    );
+
+    let relocations = Command::new("readelf")
+        .args(["-rW", "--use-dynamic"])
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(relocations.status.success());
+    let relocations = String::from_utf8_lossy(&relocations.stdout);
+    assert!(
+        relocations
+            .lines()
+            .any(|line| line.contains("R_X86_64_64") && line.contains(UNVERSIONED_WEAK_NAME)),
+        "{relocations}"
+    );
+    assert!(
+        relocations.lines().any(|line| {
+            line.contains("R_X86_64_GLOB_DAT") && line.contains(UNVERSIONED_WEAK_NAME)
+        }),
+        "{relocations}"
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let absent_source = dir.join("absent-runner.c");
+        let absent_runner = dir.join("absent-runner");
+        fs::write(
+            &absent_source,
+            r#"#include <dlfcn.h>
+#include <stdint.h>
+
+typedef uint64_t (*optional_fn)(void);
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 150;
+    void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return 151;
+    optional_fn *direct = (optional_fn *)dlsym(handle, "optional_function_pointer");
+    optional_fn (*via_got)(void) =
+        (optional_fn (*)(void))dlsym(handle, "optional_function_via_got");
+    if (!direct || !via_got) return 152;
+    if (*direct != 0) return 153;
+    if (via_got() != 0) return 154;
+    return dlclose(handle) == 0 ? 0 : 155;
+}
+"#,
+        )
+        .unwrap();
+        let compile_absent = Command::new("cc")
+            .args(["-o"])
+            .arg(&absent_runner)
+            .arg(&absent_source)
+            .arg("-ldl")
+            .output()
+            .unwrap();
+        assert!(
+            compile_absent.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile_absent.stderr)
+        );
+        let absent_status = Command::new(&absent_runner).arg(&shared).status().unwrap();
+        assert!(
+            absent_status.success(),
+            "unversioned weak-function absent runtime returned {absent_status}"
+        );
+
+        let bound_source = dir.join("bound-runner.c");
+        let bound_runner = dir.join("bound-runner");
+        fs::write(
+            &bound_source,
+            format!(
+                r#"#include <dlfcn.h>
+#include <stdint.h>
+
+typedef uint64_t (*optional_fn)(void);
+
+uint64_t {UNVERSIONED_WEAK_NAME}(void) {{
+    return UINT64_C(0x6b);
+}}
+
+int main(int argc, char **argv) {{
+    if (argc != 2) return 160;
+    void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return 161;
+    optional_fn *direct = (optional_fn *)dlsym(handle, "optional_function_pointer");
+    optional_fn (*via_got)(void) =
+        (optional_fn (*)(void))dlsym(handle, "optional_function_via_got");
+    if (!direct || !via_got) return 162;
+    optional_fn direct_value = *direct;
+    optional_fn got_value = via_got();
+    if (!direct_value || !got_value) return 163;
+    if (direct_value != got_value) return 164;
+    if (direct_value() != UINT64_C(0x6b)) return 165;
+    if (got_value() != UINT64_C(0x6b)) return 166;
+    return dlclose(handle) == 0 ? 0 : 167;
+}}
+"#
+            ),
+        )
+        .unwrap();
+        let compile_bound = Command::new("cc")
+            .args(["-rdynamic", "-o"])
+            .arg(&bound_runner)
+            .arg(&bound_source)
+            .arg("-ldl")
+            .output()
+            .unwrap();
+        assert!(
+            compile_bound.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile_bound.stderr)
+        );
+        let bound_status = Command::new(&bound_runner).arg(&shared).status().unwrap();
+        assert!(
+            bound_status.success(),
+            "unversioned weak-function bound runtime returned {bound_status}"
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
