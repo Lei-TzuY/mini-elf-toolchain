@@ -300,6 +300,10 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "shared object DT_NEEDED dependency {dependency_index} contains an embedded NUL byte"
             ),
+            Self::EmptySoname => write!(f, "shared object DT_SONAME cannot be empty"),
+            Self::SonameContainsNul => {
+                write!(f, "shared object DT_SONAME cannot contain an embedded NUL byte")
+            }
             Self::Symbols(source) => write!(f, "cannot resolve shared object symbols: {source}"),
             Self::ObjectSymbols {
                 object_index,
