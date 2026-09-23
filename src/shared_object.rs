@@ -1080,25 +1080,40 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
     link_shared_object_with_version_script_and_checked_providers(
         inputs,
         page_alignment,
-        needed,
-        soname,
-        runpath,
-        version_requirements,
-        checked_version_providers,
-        None,
+        SharedObjectLinkOptions {
+            needed,
+            soname,
+            runpath,
+            version_requirements,
+            checked_version_providers,
+            version_script: None,
+        },
     )
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SharedObjectLinkOptions<'a> {
+    pub needed: &'a [Vec<u8>],
+    pub soname: Option<&'a [u8]>,
+    pub runpath: Option<&'a [u8]>,
+    pub version_requirements: &'a [SharedVersionRequirement],
+    pub checked_version_providers: &'a [Vec<u8>],
+    pub version_script: Option<&'a VersionScript>,
 }
 
 pub fn link_shared_object_with_version_script_and_checked_providers(
     inputs: &[LinkerInputObject<'_>],
     page_alignment: u64,
-    needed: &[Vec<u8>],
-    soname: Option<&[u8]>,
-    runpath: Option<&[u8]>,
-    version_requirements: &[SharedVersionRequirement],
-    checked_version_providers: &[Vec<u8>],
-    version_script: Option<&VersionScript>,
+    options: SharedObjectLinkOptions<'_>,
 ) -> Result<ExecutableImage, SharedObjectError> {
+    let SharedObjectLinkOptions {
+        needed,
+        soname,
+        runpath,
+        version_requirements,
+        checked_version_providers,
+        version_script,
+    } = options;
     validate_needed_names(needed)?;
     validate_needed_names(checked_version_providers)?;
     validate_soname(soname)?;
