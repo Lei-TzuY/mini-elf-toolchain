@@ -8,6 +8,7 @@ const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const DT_NULL: i64 = 0;
 const DT_HASH: i64 = 4;
+const DT_GNU_HASH: i64 = 0x6fff_fef5;
 const DT_STRTAB: i64 = 5;
 const DT_SYMTAB: i64 = 6;
 const DT_STRSZ: i64 = 10;
@@ -89,7 +90,8 @@ pub fn inspect_dynamic_provider(
     let strsz = required_unique_tag(&entries, DT_STRSZ, "DT_STRSZ")?;
     let symtab_address = required_unique_tag(&entries, DT_SYMTAB, "DT_SYMTAB")?;
     let syment = required_unique_tag(&entries, DT_SYMENT, "DT_SYMENT")?;
-    let hash_address = required_unique_tag(&entries, DT_HASH, "DT_HASH")?;
+    let sysv_hash_address = optional_unique_tag(&entries, DT_HASH, "DT_HASH")?;
+    let gnu_hash_address = optional_unique_tag(&entries, DT_GNU_HASH, "DT_GNU_HASH")?;
     let soname_offset = required_unique_tag(&entries, DT_SONAME, "DT_SONAME")?;
 
     if syment != ELF64_SYMBOL_SIZE {
@@ -116,38 +118,27 @@ pub fn inspect_dynamic_provider(
         return Err(malformed("provider DT_SONAME is empty"));
     }
 
-    let hash_header = map_virtual_range(
-        &headers,
-        file.len(),
-        hash_address,
-        8,
-        "provider DT_HASH header",
-    )?;
-    let hash_header = usize::try_from(hash_header)
-        .map_err(|_| malformed("provider DT_HASH file offset does not fit usize"))?;
-    let bucket_count = u64::from(read_u32(file, hash_header));
-    let symbol_count = u64::from(read_u32(file, hash_header + 4));
-    if bucket_count == 0 {
-        return Err(malformed("provider DT_HASH reports zero buckets"));
-    }
-    if symbol_count == 0 {
-        return Err(malformed("provider DT_HASH reports zero dynamic symbols"));
-    }
-    let hash_words = 2_u64
-        .checked_add(bucket_count)
-        .and_then(|count| count.checked_add(symbol_count))
-        .ok_or_else(|| malformed("provider DT_HASH word count overflows u64"))?;
-    let hash_size = hash_words
-        .checked_mul(4)
-        .ok_or_else(|| malformed("provider DT_HASH byte size overflows u64"))?;
-    let hash_offset = map_virtual_range(
-        &headers,
-        file.len(),
-        hash_address,
-        hash_size,
-        "provider DT_HASH table",
-    )?;
-    validate_sysv_hash_table(file, hash_offset, bucket_count, symbol_count)?;
+    let sysv_symbol_count = match sysv_hash_address {
+        Some(address) => Some(validate_sysv_hash_metadata(&headers, file, address)?),
+        None => None,
+    };
+    let gnu_symbol_count = match gnu_hash_address {
+        Some(address) => Some(validate_gnu_hash_metadata(
+            &headers,
+            file,
+            address,
+            sysv_symbol_count,
+        )?),
+        None => None,
+    };
+    let symbol_count = match (sysv_symbol_count, gnu_symbol_count) {
+        (Some(count), _) | (None, Some(count)) => count,
+        (None, None) => {
+            return Err(malformed(
+                "provider PT_DYNAMIC is missing both DT_HASH and DT_GNU_HASH",
+            ));
+        }
+    };
 
     let dynsym_size = symbol_count
         .checked_mul(syment)
@@ -312,6 +303,237 @@ fn dynamic_entries(
     Err(malformed("provider PT_DYNAMIC has no DT_NULL terminator"))
 }
 
+fn validate_sysv_hash_metadata(
+    headers: &[ProgramHeader],
+    file: &[u8],
+    hash_address: u64,
+) -> Result<u64, DynamicProviderError> {
+    let hash_header = map_virtual_range(
+        headers,
+        file.len(),
+        hash_address,
+        8,
+        "provider DT_HASH header",
+    )?;
+    let hash_header = usize::try_from(hash_header)
+        .map_err(|_| malformed("provider DT_HASH file offset does not fit usize"))?;
+    let bucket_count = u64::from(read_u32(file, hash_header));
+    let symbol_count = u64::from(read_u32(file, hash_header + 4));
+    if bucket_count == 0 {
+        return Err(malformed("provider DT_HASH reports zero buckets"));
+    }
+    if symbol_count == 0 {
+        return Err(malformed("provider DT_HASH reports zero dynamic symbols"));
+    }
+    let hash_words = 2_u64
+        .checked_add(bucket_count)
+        .and_then(|count| count.checked_add(symbol_count))
+        .ok_or_else(|| malformed("provider DT_HASH word count overflows u64"))?;
+    let hash_size = hash_words
+        .checked_mul(4)
+        .ok_or_else(|| malformed("provider DT_HASH byte size overflows u64"))?;
+    let hash_offset = map_virtual_range(
+        headers,
+        file.len(),
+        hash_address,
+        hash_size,
+        "provider DT_HASH table",
+    )?;
+    validate_sysv_hash_table(file, hash_offset, bucket_count, symbol_count)?;
+    Ok(symbol_count)
+}
+
+fn validate_gnu_hash_metadata(
+    headers: &[ProgramHeader],
+    file: &[u8],
+    hash_address: u64,
+    expected_symbol_count: Option<u64>,
+) -> Result<u64, DynamicProviderError> {
+    let header_offset = map_virtual_range(
+        headers,
+        file.len(),
+        hash_address,
+        16,
+        "provider DT_GNU_HASH header",
+    )?;
+    let header_offset = usize::try_from(header_offset)
+        .map_err(|_| malformed("provider DT_GNU_HASH file offset does not fit usize"))?;
+    let bucket_count = u64::from(read_u32(file, header_offset));
+    let symbol_offset = u64::from(read_u32(file, header_offset + 4));
+    let bloom_size = u64::from(read_u32(file, header_offset + 8));
+    let _bloom_shift = read_u32(file, header_offset + 12);
+
+    if bucket_count == 0 {
+        return Err(malformed("provider DT_GNU_HASH reports zero buckets"));
+    }
+    if bloom_size == 0 {
+        return Err(malformed("provider DT_GNU_HASH reports zero bloom words"));
+    }
+
+    let bloom_bytes = bloom_size
+        .checked_mul(8)
+        .ok_or_else(|| malformed("provider DT_GNU_HASH bloom byte size overflows u64"))?;
+    let bloom_address = hash_address
+        .checked_add(16)
+        .ok_or_else(|| malformed("provider DT_GNU_HASH bloom address overflows u64"))?;
+    map_virtual_range(
+        headers,
+        file.len(),
+        bloom_address,
+        bloom_bytes,
+        "provider DT_GNU_HASH bloom filter",
+    )?;
+
+    let buckets_address = bloom_address
+        .checked_add(bloom_bytes)
+        .ok_or_else(|| malformed("provider DT_GNU_HASH bucket address overflows u64"))?;
+    let bucket_bytes = bucket_count
+        .checked_mul(4)
+        .ok_or_else(|| malformed("provider DT_GNU_HASH bucket byte size overflows u64"))?;
+    let buckets_offset = map_virtual_range(
+        headers,
+        file.len(),
+        buckets_address,
+        bucket_bytes,
+        "provider DT_GNU_HASH buckets",
+    )?;
+    let buckets_offset = usize::try_from(buckets_offset)
+        .map_err(|_| malformed("provider DT_GNU_HASH bucket offset does not fit usize"))?;
+
+    let chains_address = buckets_address
+        .checked_add(bucket_bytes)
+        .ok_or_else(|| malformed("provider DT_GNU_HASH chain address overflows u64"))?;
+    let chain_bytes = file_backed_bytes_from_virtual(
+        headers,
+        file.len(),
+        chains_address,
+        "provider DT_GNU_HASH chains",
+    )?;
+    let chain_entries = chain_bytes / 4;
+    let chains_offset = if chain_entries == 0 {
+        None
+    } else {
+        let offset = map_virtual_range(
+            headers,
+            file.len(),
+            chains_address,
+            chain_entries
+                .checked_mul(4)
+                .ok_or_else(|| malformed("provider DT_GNU_HASH chain byte size overflows u64"))?,
+            "provider DT_GNU_HASH chains",
+        )?;
+        Some(
+            usize::try_from(offset)
+                .map_err(|_| malformed("provider DT_GNU_HASH chain offset does not fit usize"))?,
+        )
+    };
+
+    let mut max_symbol = symbol_offset.checked_sub(1);
+    for bucket_index in 0..bucket_count {
+        let relative = bucket_index
+            .checked_mul(4)
+            .ok_or_else(|| malformed("provider DT_GNU_HASH bucket offset overflows u64"))?;
+        let relative = usize::try_from(relative)
+            .map_err(|_| malformed("provider DT_GNU_HASH bucket offset does not fit usize"))?;
+        let bucket = u64::from(read_u32(file, buckets_offset + relative));
+        if bucket == 0 {
+            continue;
+        }
+        if bucket < symbol_offset {
+            return Err(malformed(format!(
+                "provider DT_GNU_HASH bucket {bucket_index} references symbol {bucket} before symoffset {symbol_offset}"
+            )));
+        }
+
+        let mut symbol_index = bucket;
+        let mut chain_index = bucket - symbol_offset;
+        loop {
+            if let Some(expected) = expected_symbol_count {
+                if symbol_index >= expected {
+                    return Err(malformed(format!(
+                        "provider DT_GNU_HASH bucket {bucket_index} references symbol {symbol_index}, outside dynamic symbol count {expected}"
+                    )));
+                }
+            }
+            if chain_index >= chain_entries {
+                return Err(malformed(format!(
+                    "provider DT_GNU_HASH bucket {bucket_index} chain is not terminated within its file-backed PT_LOAD range"
+                )));
+            }
+            let chains_offset = chains_offset
+                .ok_or_else(|| malformed("provider DT_GNU_HASH has no file-backed chain entries"))?;
+            let relative = chain_index
+                .checked_mul(4)
+                .ok_or_else(|| malformed("provider DT_GNU_HASH chain offset overflows u64"))?;
+            let relative = usize::try_from(relative)
+                .map_err(|_| malformed("provider DT_GNU_HASH chain offset does not fit usize"))?;
+            let value = read_u32(file, chains_offset + relative);
+            max_symbol = Some(max_symbol.map_or(symbol_index, |current| current.max(symbol_index)));
+            if value & 1 != 0 {
+                break;
+            }
+            symbol_index = symbol_index
+                .checked_add(1)
+                .ok_or_else(|| malformed("provider DT_GNU_HASH symbol index overflows u64"))?;
+            chain_index = chain_index
+                .checked_add(1)
+                .ok_or_else(|| malformed("provider DT_GNU_HASH chain index overflows u64"))?;
+        }
+    }
+
+    let derived_count = match max_symbol {
+        Some(index) => index
+            .checked_add(1)
+            .ok_or_else(|| malformed("provider DT_GNU_HASH symbol count overflows u64"))?,
+        None => symbol_offset,
+    };
+    if derived_count == 0 {
+        return Err(malformed(
+            "provider DT_GNU_HASH derives zero dynamic symbols",
+        ));
+    }
+    if let Some(expected) = expected_symbol_count {
+        if derived_count > expected {
+            return Err(malformed(format!(
+                "provider DT_GNU_HASH derives {derived_count} symbols, beyond DT_HASH count {expected}"
+            )));
+        }
+        Ok(expected)
+    } else {
+        Ok(derived_count)
+    }
+}
+
+fn file_backed_bytes_from_virtual(
+    headers: &[ProgramHeader],
+    file_len: usize,
+    address: u64,
+    label: &str,
+) -> Result<u64, DynamicProviderError> {
+    for header in headers
+        .iter()
+        .filter(|header| header.segment_type == PT_LOAD)
+    {
+        let backed_end = header
+            .virtual_address
+            .checked_add(header.file_size)
+            .ok_or_else(|| malformed("provider PT_LOAD virtual file range overflows u64"))?;
+        if address >= header.virtual_address && address <= backed_end {
+            let delta = address - header.virtual_address;
+            let offset = header
+                .offset
+                .checked_add(delta)
+                .ok_or_else(|| malformed(format!("{label} file offset overflows u64")))?;
+            let remaining = header.file_size - delta;
+            checked_file_end(offset, remaining, file_len, label)?;
+            return Ok(remaining);
+        }
+    }
+    Err(malformed(format!(
+        "{label} address {address:#x} is not file-backed by PT_LOAD"
+    )))
+}
+
 fn validate_sysv_hash_table(
     file: &[u8],
     hash_offset: u64,
@@ -380,6 +602,22 @@ fn validate_sysv_hash_table(
     }
 
     Ok(())
+}
+
+fn optional_unique_tag(
+    entries: &[DynamicEntry],
+    tag: i64,
+    name: &str,
+) -> Result<Option<u64>, DynamicProviderError> {
+    let mut value = None;
+    for entry in entries.iter().filter(|entry| entry.tag == tag) {
+        if value.replace(entry.value).is_some() {
+            return Err(malformed(format!(
+                "provider PT_DYNAMIC contains duplicate {name} entries"
+            )));
+        }
+    }
+    Ok(value)
 }
 
 fn required_unique_tag(
