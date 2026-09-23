@@ -1983,13 +1983,11 @@ fn validate_inputs(
                 if symbol.symbol.section_index == SHN_UNDEF && !symbol.name.is_empty() {
                     let symbol_type = symbol.symbol.info & 0x0f;
                     if symbol_type == STT_TLS {
-                        let supported_tls_model =
-                            (binding == STB_GLOBAL
-                                && (tls_gd_symbols.contains(symbol.name)
-                                    || tls_ie_symbols.contains(symbol.name)
-                                    || tls_desc_symbols.contains(symbol.name)))
-                                || (binding == STB_WEAK
-                                    && tls_gd_symbols.contains(symbol.name));
+                        let supported_tls_model = (binding == STB_GLOBAL
+                            && (tls_gd_symbols.contains(symbol.name)
+                                || tls_ie_symbols.contains(symbol.name)
+                                || tls_desc_symbols.contains(symbol.name)))
+                            || (binding == STB_WEAK && tls_gd_symbols.contains(symbol.name));
                         let supported_tls_import =
                             import_symbols.contains_key(symbol.name) && supported_tls_model;
                         if !supported_tls_import {
