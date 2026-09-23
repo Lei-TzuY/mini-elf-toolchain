@@ -205,6 +205,34 @@ struct RelocationSymbolValues {
     size: u64,
 }
 
+fn unresolved_symbol_uses_only_synthetic_tls_values(
+    table: &Elf64RelaTable,
+    symbol_index: u32,
+    name: &[u8],
+    globals: &ResolvedGlobalSymbols<'_>,
+) -> bool {
+    let mut observed = false;
+    for relocation in table.relocations.iter().filter(|candidate| {
+        candidate.symbol_index == symbol_index && candidate.relocation_type != R_X86_64_NONE
+    }) {
+        observed = true;
+        let supported = if is_tls_gd_relocation_type(relocation.relocation_type) {
+            globals.tls_gd_entries.contains_key(name)
+        } else if is_tls_desc_address_relocation_type(relocation.relocation_type) {
+            globals.tls_desc_entries.contains_key(name)
+        } else if is_static_tls_gotpcrel_type(relocation.relocation_type) {
+            globals.unresolved_tls_got_symbols.contains(name)
+                && globals.tls_got_entries.contains_key(name)
+        } else {
+            false
+        };
+        if !supported {
+            return false;
+        }
+    }
+    observed
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ResolvedGlobalSymbols<'a> {
     pub addresses: &'a BTreeMap<Vec<u8>, u64>,
@@ -356,48 +384,12 @@ pub fn apply_rela_table_with_resolved_symbols_and_definitions(
                         0
                     }
                     None if symbol.symbol.section_index == SHN_UNDEF
-                        && globals.tls_gd_entries.contains_key(symbol.name)
-                        && table
-                            .relocations
-                            .iter()
-                            .filter(|candidate| {
-                                candidate.symbol_index == relocation.symbol_index
-                                    && candidate.relocation_type != R_X86_64_NONE
-                            })
-                            .all(|candidate| {
-                                is_tls_gd_relocation_type(candidate.relocation_type)
-                            }) =>
-                    {
-                        0
-                    }
-                    None if symbol.symbol.section_index == SHN_UNDEF
-                        && globals.tls_desc_entries.contains_key(symbol.name)
-                        && table
-                            .relocations
-                            .iter()
-                            .filter(|candidate| {
-                                candidate.symbol_index == relocation.symbol_index
-                                    && candidate.relocation_type != R_X86_64_NONE
-                            })
-                            .all(|candidate| {
-                                is_tls_desc_address_relocation_type(candidate.relocation_type)
-                            }) =>
-                    {
-                        0
-                    }
-                    None if symbol.symbol.section_index == SHN_UNDEF
-                        && globals.unresolved_tls_got_symbols.contains(symbol.name)
-                        && globals.tls_got_entries.contains_key(symbol.name)
-                        && table
-                            .relocations
-                            .iter()
-                            .filter(|candidate| {
-                                candidate.symbol_index == relocation.symbol_index
-                                    && candidate.relocation_type != R_X86_64_NONE
-                            })
-                            .all(|candidate| {
-                                is_static_tls_gotpcrel_type(candidate.relocation_type)
-                            }) =>
+                        && unresolved_symbol_uses_only_synthetic_tls_values(
+                            table,
+                            relocation.symbol_index,
+                            symbol.name,
+                            &globals,
+                        ) =>
                     {
                         0
                     }
