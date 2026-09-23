@@ -1153,11 +1153,11 @@ fn validate_inputs(
                             name: symbol.name.to_vec(),
                         });
                     }
-                    let linker_owned_got_symbol =
-                        (!got_symbols.is_empty() || !tls_gd_symbols.is_empty())
-                            && symbol.name == GLOBAL_OFFSET_TABLE_SYMBOL
-                            && binding == STB_GLOBAL
-                            && symbol_type == STT_NOTYPE;
+                    let linker_owned_got_symbol = (!got_symbols.is_empty()
+                        || !tls_gd_symbols.is_empty())
+                        && symbol.name == GLOBAL_OFFSET_TABLE_SYMBOL
+                        && binding == STB_GLOBAL
+                        && symbol_type == STT_NOTYPE;
                     if linker_owned_got_symbol {
                         continue;
                     }
