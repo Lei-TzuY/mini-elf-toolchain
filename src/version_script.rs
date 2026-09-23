@@ -58,6 +58,14 @@ impl VersionScript {
                                 }
                             }
                             let symbol = cursor.expect_word("global symbol or prefix pattern")?;
+                            if symbol
+                                .iter()
+                                .any(|byte| matches!(*byte, b'?' | b'[' | b']'))
+                            {
+                                return Err(VersionScriptError::UnsupportedGlobalPattern {
+                                    prefix: symbol,
+                                });
+                            }
                             saw_symbol = true;
                             if cursor.peek_is(TokenKind::Star) {
                                 cursor.advance();
@@ -598,10 +606,16 @@ mod tests {
 
     #[test]
     fn rejects_nonprefix_global_patterns() {
-        assert!(matches!(
-            VersionScript::parse(b"VERS_1 { global: api_*_suffix; };"),
-            Err(VersionScriptError::UnsupportedGlobalPattern { .. })
-        ));
+        for input in [
+            b"VERS_1 { global: api_*_suffix; };".as_slice(),
+            b"VERS_1 { global: api_?; };".as_slice(),
+            b"VERS_1 { global: api_[0-9]; };".as_slice(),
+        ] {
+            assert!(matches!(
+                VersionScript::parse(input),
+                Err(VersionScriptError::UnsupportedGlobalPattern { .. })
+            ));
+        }
         assert_eq!(
             VersionScript::parse(b"VERS_1 { global: *; };"),
             Err(VersionScriptError::UnsupportedGlobalWildcard)
