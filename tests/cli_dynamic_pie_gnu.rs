@@ -170,7 +170,7 @@ _start:
     assert!(dynamic.contains("RUNPATH"), "{dynamic}");
     assert!(dynamic.contains("$ORIGIN"), "{dynamic}");
 
-    let relocations = readelf(&ours, &["-rW"]);
+    let relocations = readelf(&ours, &["-rW", "--use-dynamic"]);
     assert!(relocations.contains("R_X86_64_JUMP_SLOT"), "{relocations}");
     assert!(relocations.contains("provider_value"), "{relocations}");
 
