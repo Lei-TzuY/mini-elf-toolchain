@@ -366,3 +366,72 @@ fn unresolved_weak_dynamic_pie_tls_remains_loadable_across_all_models() {
 
     let _ = fs::remove_dir_all(dir);
 }
+
+
+#[test]
+#[cfg(target_os = "linux")]
+fn versioned_weak_dynamic_pie_tls_remains_fail_closed() {
+    if !have_tools() {
+        return;
+    }
+    let Some(interpreter) = dynamic_linker() else {
+        return;
+    };
+
+    let dir = temp_dir("versioned-boundary");
+    let object = assemble(
+        &dir,
+        "versioned-weak",
+        r#".text
+.globl _start
+.type _start,@function
+.weak provider_tls
+.type provider_tls,@tls_object
+.symver provider_tls,provider_tls@VERS_1
+.extern __tls_get_addr
+.type __tls_get_addr,@function
+_start:
+    data16 leaq provider_tls@tlsgd(%rip), %rdi
+    .value 0x6666
+    rex64
+    call __tls_get_addr@PLT
+    mov $60, %eax
+    xor %edi, %edi
+    syscall
+.size _start, .-_start
+
+.section .note.GNU-stack,"",@progbits
+"#,
+    );
+    let input_symbols = readelf(&object, &["-sW"]);
+    assert!(
+        input_symbols.lines().any(|line| {
+            line.contains(" WEAK ")
+                && line.contains(" TLS ")
+                && line.contains(" UND ")
+                && line.ends_with(" provider_tls@VERS_1")
+        }),
+        "{input_symbols}"
+    );
+
+    let output = dir.join("must-not-exist-versioned-weak");
+    let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--dynamic-pie")
+        .arg("--dynamic-linker")
+        .arg(&interpreter)
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(!linked.status.success());
+    assert!(linked.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&linked.stderr);
+    assert!(
+        stderr.contains("dynamic PIE") && stderr.contains("TLS"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
