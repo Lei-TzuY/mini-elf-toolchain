@@ -48,6 +48,26 @@ pub struct TlsSyntheticRequests<'a> {
     pub external_tls_got_symbols: &'a BTreeSet<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct SyntheticGotLayoutPolicy {
+    page_alignment: Option<u64>,
+    after_plt: bool,
+}
+
+impl SyntheticGotLayoutPolicy {
+    const INLINE: Self = Self {
+        page_alignment: None,
+        after_plt: false,
+    };
+
+    fn isolated(page_alignment: u64, after_plt: bool) -> Self {
+        Self {
+            page_alignment: Some(page_alignment),
+            after_plt,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelocatedSectionImage {
     pub object_index: usize,
@@ -353,8 +373,7 @@ pub(crate) fn relocate_allocatable_sections_with_metadata_isolated_got(
             tls_desc_symbols: &BTreeSet::new(),
             external_tls_got_symbols: &BTreeSet::new(),
         },
-        Some(page_alignment),
-        false,
+        SyntheticGotLayoutPolicy::isolated(page_alignment, false),
     )
 }
 
@@ -448,8 +467,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
         external_got_symbols,
         external_plt_symbols,
         tls,
-        None,
-        false,
+        SyntheticGotLayoutPolicy::INLINE,
     )
 }
 
@@ -468,8 +486,7 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         external_got_symbols,
         external_plt_symbols,
         tls,
-        Some(page_alignment),
-        true,
+        SyntheticGotLayoutPolicy::isolated(page_alignment, true),
     )
 }
 
@@ -480,8 +497,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
     external_got_symbols: &BTreeSet<Vec<u8>>,
     external_plt_symbols: &BTreeSet<Vec<u8>>,
     tls: TlsSyntheticRequests<'_>,
-    isolated_got_page_alignment: Option<u64>,
-    isolated_got_after_plt: bool,
+    got_layout_policy: SyntheticGotLayoutPolicy,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     let tls_gd_symbols = tls.tls_gd_symbols;
     let tls_ld_enabled = tls.tls_ld_enabled;
@@ -583,7 +599,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         })?;
 
     let (got_layout_size, got_layout_alignment) =
-        if let (nonzero_got_size, Some(alignment)) = (got_size, isolated_got_page_alignment) {
+        if let (nonzero_got_size, Some(alignment)) = (got_size, got_layout_policy.page_alignment) {
             if nonzero_got_size == 0 {
                 (got_size, GOT_ALIGNMENT)
             } else {
@@ -626,7 +642,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
             flags: SHF_ALLOC | SHF_WRITE,
         });
     }
-    if got_size != 0 && !isolated_got_after_plt {
+    if got_size != 0 && !got_layout_policy.after_plt {
         layout_inputs.push(PermissionLayoutInput {
             object_index: GOT_OBJECT_INDEX,
             section_index: GOT_SECTION_INDEX,
@@ -651,7 +667,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
             flags: SHF_ALLOC | SHF_WRITE,
         });
     }
-    if got_size != 0 && isolated_got_after_plt {
+    if got_size != 0 && got_layout_policy.after_plt {
         layout_inputs.push(PermissionLayoutInput {
             object_index: GOT_OBJECT_INDEX,
             section_index: GOT_SECTION_INDEX,
@@ -663,7 +679,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
 
     let layout = layout_sections_by_permissions(start_address, page_alignment, layout_inputs)
         .map_err(RelocatedSectionError::Layout)?;
-    let got_region = if got_size != 0 && isolated_got_page_alignment.is_some() {
+    let got_region = if got_size != 0 && got_layout_policy.page_alignment.is_some() {
         let got_layout = matching_layout(&layout, GOT_OBJECT_INDEX, GOT_SECTION_INDEX).ok_or(
             RelocatedSectionError::MissingLayout {
                 object_index: GOT_OBJECT_INDEX,
