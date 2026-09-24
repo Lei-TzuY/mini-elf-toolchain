@@ -27,8 +27,19 @@ const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
 const DT_RELACOUNT: i64 = 0x6fff_fff9;
 
+const SYS_MPROTECT: u64 = 10;
+const SYS_EXIT: u64 = 60;
+const PROT_READ: u64 = 1;
+const RELRO_FAILURE_EXIT_CODE: u64 = 127;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PieDynamicSegment {
+    pub address: u64,
+    pub size: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PieRelroSegment {
     pub address: u64,
     pub size: u64,
 }
@@ -38,6 +49,7 @@ pub struct PieRuntimeOutput {
     pub sections: Vec<RelocatedSectionImage>,
     pub entry_address: u64,
     pub dynamic: Option<PieDynamicSegment>,
+    pub relro: Option<PieRelroSegment>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,6 +307,7 @@ pub fn add_runtime_relative_relocations(
             sections,
             entry_address: user_entry_address,
             dynamic: None,
+            relro: None,
         });
     }
     let max_end = sections.iter().try_fold(0_u64, |max_end, section| {
@@ -311,19 +324,36 @@ pub fn add_runtime_relative_relocations(
             .ok_or(PieRuntimeError::RuntimeAddressOverflow)?,
         page_alignment,
     )?;
+    // The RELRO page is the page-aligned runtime .dynamic page. The trampoline
+    // must know its address before final emission, but the address itself depends
+    // on the fixed-size trampoline. Build once with a placeholder to establish
+    // the size, then rebuild with the checked final RELRO address.
+    let trampoline_prototype = build_trampoline(
+        trampoline_address,
+        rela_address,
+        relocation_count,
+        user_entry_address,
+        0,
+        page_alignment,
+    )?;
+    let dynamic_address = align_up(
+        trampoline_address
+            .checked_add(trampoline_prototype.len() as u64)
+            .ok_or(PieRuntimeError::RuntimeAddressOverflow)?,
+        page_alignment,
+    )?;
     let trampoline = build_trampoline(
         trampoline_address,
         rela_address,
         relocation_count,
         user_entry_address,
-    )?;
-    let dynamic_address = align_up(
-        trampoline_address
-            .checked_add(trampoline.len() as u64)
-            .ok_or(PieRuntimeError::RuntimeAddressOverflow)?,
+        dynamic_address,
         page_alignment,
     )?;
+    debug_assert_eq!(trampoline.len(), trampoline_prototype.len());
     let dynamic = build_dynamic_table(rela_address, rela_bytes.len(), relocation_count)?;
+    let relro_size =
+        u64::try_from(dynamic.len()).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
 
     sections.push(runtime_section(
         PIE_RELA_SECTION_INDEX,
@@ -353,6 +383,10 @@ pub fn add_runtime_relative_relocations(
         dynamic: Some(PieDynamicSegment {
             address: dynamic_address,
             size: 5 * ELF64_DYN_SIZE,
+        }),
+        relro: Some(PieRelroSegment {
+            address: dynamic_address,
+            size: relro_size,
         }),
     })
 }
@@ -635,6 +669,8 @@ fn build_trampoline(
     rela_address: u64,
     relocation_count: usize,
     user_entry_address: u64,
+    relro_address: u64,
+    relro_protection_size: u64,
 ) -> Result<Vec<u8>, PieRuntimeError> {
     let relocation_count =
         u64::try_from(relocation_count).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
@@ -672,9 +708,28 @@ fn build_trampoline(
     patch_rel8(&mut bytes, done_disp, done)?;
     patch_rel8(&mut bytes, loop_disp, loop_start)?;
 
+    // Seal the page containing runtime-owned .dynamic metadata before user
+    // code runs. Linux x86-64 syscall ABI: mprotect(addr, len, PROT_READ).
+    push_movabs(&mut bytes, 0xbf, relro_address);
+    bytes.extend_from_slice(&[0x48, 0x01, 0xdf]);
+    push_movabs(&mut bytes, 0xbe, relro_protection_size);
+    push_movabs(&mut bytes, 0xba, PROT_READ);
+    push_movabs(&mut bytes, 0xb8, SYS_MPROTECT);
+    bytes.extend_from_slice(&[0x0f, 0x05]);
+    bytes.extend_from_slice(&[0x48, 0x85, 0xc0]);
+    bytes.push(0x78);
+    let mprotect_fail_disp = bytes.len();
+    bytes.push(0);
+
     push_movabs(&mut bytes, 0xb8, user_entry_address);
     bytes.extend_from_slice(&[0x48, 0x01, 0xd8]);
     bytes.extend_from_slice(&[0xff, 0xe0]);
+
+    let mprotect_fail = bytes.len();
+    patch_rel8(&mut bytes, mprotect_fail_disp, mprotect_fail)?;
+    push_movabs(&mut bytes, 0xb8, SYS_EXIT);
+    push_movabs(&mut bytes, 0xbf, RELRO_FAILURE_EXIT_CODE);
+    bytes.extend_from_slice(&[0x0f, 0x05, 0x0f, 0x0b]);
 
     Ok(bytes)
 }

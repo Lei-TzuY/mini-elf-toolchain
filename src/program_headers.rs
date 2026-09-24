@@ -6,6 +6,7 @@ const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const PT_PHDR: u32 = 6;
 const PT_GNU_STACK: u32 = 0x6474_e551;
+const PT_GNU_RELRO: u32 = 0x6474_e552;
 const PF_X: u32 = 1;
 const PF_W: u32 = 2;
 const PF_R: u32 = 4;
@@ -21,24 +22,30 @@ pub(crate) struct RuntimeStackProgramHeader {
     pub executable: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeRelroProgramHeader {
+    pub address: u64,
+    pub size: u64,
+}
+
 pub(crate) fn map_runtime_program_headers(
     image: ExecutableImage,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, None, None)
+    map_runtime_program_headers_impl(image, None, None, None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_stack(
     image: ExecutableImage,
     stack: RuntimeStackProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, None, Some(stack))
+    map_runtime_program_headers_impl(image, None, Some(stack), None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic(
     image: ExecutableImage,
     dynamic: RuntimeDynamicProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None)
+    map_runtime_program_headers_impl(image, Some(dynamic), None, None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_and_stack(
@@ -46,13 +53,31 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_stack(
     dynamic: RuntimeDynamicProgramHeader,
     stack: RuntimeStackProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), Some(stack))
+    map_runtime_program_headers_impl(image, Some(dynamic), Some(stack), None)
+}
+
+pub(crate) fn map_runtime_program_headers_with_dynamic_and_relro(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+    relro: RuntimeRelroProgramHeader,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(image, Some(dynamic), None, Some(relro))
+}
+
+pub(crate) fn map_runtime_program_headers_with_dynamic_stack_and_relro(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+    stack: RuntimeStackProgramHeader,
+    relro: RuntimeRelroProgramHeader,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(image, Some(dynamic), Some(stack), Some(relro))
 }
 
 fn map_runtime_program_headers_impl(
     mut image: ExecutableImage,
     dynamic: Option<RuntimeDynamicProgramHeader>,
     stack: Option<RuntimeStackProgramHeader>,
+    relro: Option<RuntimeRelroProgramHeader>,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
     if image.load_segments.is_empty() {
         return Err(ExecutableWriteError::NoLoadSegments);
@@ -87,7 +112,10 @@ fn map_runtime_program_headers_impl(
         });
     }
 
-    let extra_headers = 1usize + usize::from(dynamic.is_some()) + usize::from(stack.is_some());
+    let extra_headers = 1usize
+        + usize::from(dynamic.is_some())
+        + usize::from(relro.is_some())
+        + usize::from(stack.is_some());
     if old_phnum > u16::MAX as usize - extra_headers {
         return Err(ExecutableWriteError::TooManyLoadSegments {
             count: old_phnum + extra_headers,
@@ -205,6 +233,40 @@ fn map_runtime_program_headers_impl(
         None
     };
 
+    let relro_file_offset = if let Some(relro) = relro {
+        let relro_end = relro.address.checked_add(relro.size).ok_or(
+            ExecutableWriteError::MetadataRangeOutsideLoadSegments {
+                address: relro.address,
+                size: relro.size,
+            },
+        )?;
+        let segment = new_segments
+            .iter()
+            .find(|segment| {
+                segment
+                    .virtual_address
+                    .checked_add(segment.file_size)
+                    .is_some_and(|file_end| {
+                        relro.address >= segment.virtual_address && relro_end <= file_end
+                    })
+            })
+            .ok_or(ExecutableWriteError::MetadataRangeOutsideLoadSegments {
+                address: relro.address,
+                size: relro.size,
+            })?;
+        Some(
+            segment
+                .file_offset
+                .checked_add(relro.address - segment.virtual_address)
+                .ok_or(ExecutableWriteError::FileOffsetOverflow {
+                    metadata_end: segment.file_offset,
+                    alignment: 1,
+                })?,
+        )
+    } else {
+        None
+    };
+
     let mut table = vec![0_u8; new_table_size];
     write_phdr_program_header(
         &mut table[..ELF64_PHDR_SIZE],
@@ -228,6 +290,15 @@ fn map_runtime_program_headers_impl(
         write_dynamic_program_header(
             &mut table[start..start + ELF64_PHDR_SIZE],
             dynamic,
+            file_offset,
+        );
+        next_extra_index += 1;
+    }
+    if let (Some(relro), Some(file_offset)) = (relro, relro_file_offset) {
+        let start = next_extra_index * ELF64_PHDR_SIZE;
+        write_gnu_relro_program_header(
+            &mut table[start..start + ELF64_PHDR_SIZE],
+            relro,
             file_offset,
         );
         next_extra_index += 1;
@@ -274,6 +345,21 @@ fn write_dynamic_program_header(
     put_u64(out, 32, dynamic.size);
     put_u64(out, 40, dynamic.size);
     put_u64(out, 48, 8);
+}
+
+fn write_gnu_relro_program_header(
+    out: &mut [u8],
+    relro: RuntimeRelroProgramHeader,
+    file_offset: u64,
+) {
+    put_u32(out, 0, PT_GNU_RELRO);
+    put_u32(out, 4, PF_R);
+    put_u64(out, 8, file_offset);
+    put_u64(out, 16, relro.address);
+    put_u64(out, 24, relro.address);
+    put_u64(out, 32, relro.size);
+    put_u64(out, 40, relro.size);
+    put_u64(out, 48, 1);
 }
 
 fn write_gnu_stack_program_header(out: &mut [u8], stack: RuntimeStackProgramHeader) {

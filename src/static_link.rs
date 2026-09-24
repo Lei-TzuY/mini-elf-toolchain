@@ -3,8 +3,11 @@ use crate::gnu_stack::{gnu_stack_policy, GnuStackPolicy};
 use crate::linker_input::LinkerInputObject;
 use crate::program_headers::{
     map_runtime_program_headers, map_runtime_program_headers_with_dynamic,
-    map_runtime_program_headers_with_dynamic_and_stack, map_runtime_program_headers_with_stack,
-    RuntimeDynamicProgramHeader, RuntimeStackProgramHeader,
+    map_runtime_program_headers_with_dynamic_and_relro,
+    map_runtime_program_headers_with_dynamic_and_stack,
+    map_runtime_program_headers_with_dynamic_stack_and_relro,
+    map_runtime_program_headers_with_stack, RuntimeDynamicProgramHeader, RuntimeRelroProgramHeader,
+    RuntimeStackProgramHeader,
 };
 
 pub use crate::gnu_stack::GnuStackPolicyError;
@@ -23,7 +26,7 @@ pub fn link_static_executable(
         entry_symbol,
     )?;
     let stack = gnu_stack_policy(inputs).map_err(StaticLinkError::GnuStack)?;
-    map_static_program_headers(image, None, stack).map_err(StaticLinkError::Write)
+    map_static_program_headers(image, None, stack, None).map_err(StaticLinkError::Write)
 }
 
 pub fn link_static_position_independent_executable_with_map(
@@ -42,8 +45,12 @@ pub fn link_static_position_independent_executable_with_map(
         address: dynamic.address,
         size: dynamic.size,
     });
-    output.image =
-        map_static_program_headers(output.image, dynamic, stack).map_err(StaticLinkError::Write)?;
+    let relro = artifact.relro.map(|relro| RuntimeRelroProgramHeader {
+        address: relro.address,
+        size: relro.size,
+    });
+    output.image = map_static_program_headers(output.image, dynamic, stack, relro)
+        .map_err(StaticLinkError::Write)?;
     synchronize_link_map_segments(&mut output);
     Ok(output)
 }
@@ -61,8 +68,8 @@ pub fn link_static_executable_with_map(
         entry_symbol,
     )?;
     let stack = gnu_stack_policy(inputs).map_err(StaticLinkError::GnuStack)?;
-    output.image =
-        map_static_program_headers(output.image, None, stack).map_err(StaticLinkError::Write)?;
+    output.image = map_static_program_headers(output.image, None, stack, None)
+        .map_err(StaticLinkError::Write)?;
 
     synchronize_link_map_segments(&mut output);
     Ok(output)
@@ -72,23 +79,38 @@ fn map_static_program_headers(
     image: ExecutableImage,
     dynamic: Option<RuntimeDynamicProgramHeader>,
     stack: Option<GnuStackPolicy>,
+    relro: Option<RuntimeRelroProgramHeader>,
 ) -> Result<ExecutableImage, crate::executable_writer::ExecutableWriteError> {
-    match (dynamic, stack) {
-        (Some(dynamic), Some(stack)) => map_runtime_program_headers_with_dynamic_and_stack(
+    match (dynamic, stack, relro) {
+        (Some(dynamic), Some(stack), Some(relro)) => {
+            map_runtime_program_headers_with_dynamic_stack_and_relro(
+                image,
+                dynamic,
+                RuntimeStackProgramHeader {
+                    executable: stack.executable,
+                },
+                relro,
+            )
+        }
+        (Some(dynamic), None, Some(relro)) => {
+            map_runtime_program_headers_with_dynamic_and_relro(image, dynamic, relro)
+        }
+        (Some(dynamic), Some(stack), None) => map_runtime_program_headers_with_dynamic_and_stack(
             image,
             dynamic,
             RuntimeStackProgramHeader {
                 executable: stack.executable,
             },
         ),
-        (Some(dynamic), None) => map_runtime_program_headers_with_dynamic(image, dynamic),
-        (None, Some(stack)) => map_runtime_program_headers_with_stack(
+        (Some(dynamic), None, None) => map_runtime_program_headers_with_dynamic(image, dynamic),
+        (None, Some(stack), None) => map_runtime_program_headers_with_stack(
             image,
             RuntimeStackProgramHeader {
                 executable: stack.executable,
             },
         ),
-        (None, None) => map_runtime_program_headers(image),
+        (None, None, None) => map_runtime_program_headers(image),
+        (None, _, Some(_)) => unreachable!("static PIE RELRO requires PT_DYNAMIC"),
     }
 }
 
