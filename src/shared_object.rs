@@ -1805,17 +1805,32 @@ fn link_loader_image(
         .into_iter()
         .max()
         .unwrap_or(0);
+    let coalesced_relro_start = got_relro.and_then(|region| {
+        region
+            .address
+            .checked_add(region.size)
+            .filter(|end| dynamic_pie && *end == relocated_end)
+            .map(|_| region.address)
+    });
     let interpreter_payload = interpreter.map(|path| {
         let mut bytes = path.to_vec();
         bytes.push(0);
         bytes
     });
-    let interpreter_address = if interpreter_payload.is_some() {
+
+    // With a tail-isolated dynamic-PIE GOT, place loader metadata directly
+    // after the GOT so both regions occupy one contiguous RW PT_LOAD. Keep
+    // PT_INTERP after that protected RW interval. When the GOT is not the
+    // relocated image tail (for example, trailing TLS image state), preserve
+    // the existing interpreter-before-metadata layout and GOT-only RELRO.
+    let interpreter_before_metadata = if coalesced_relro_start.is_none()
+        && interpreter_payload.is_some()
+    {
         Some(align_up(relocated_end, page_alignment).ok_or(SharedObjectError::AddressOverflow)?)
     } else {
         None
     };
-    let metadata_floor = match (interpreter_address, interpreter_payload.as_ref()) {
+    let metadata_floor = match (interpreter_before_metadata, interpreter_payload.as_ref()) {
         (Some(address), Some(bytes)) => address
             .checked_add(
                 u64::try_from(bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?,
@@ -1825,7 +1840,8 @@ fn link_loader_image(
     };
     let metadata_address =
         align_up(metadata_floor, page_alignment).ok_or(SharedObjectError::AddressOverflow)?;
-    let metadata_relro = dynamic_pie && got_relro.is_none();
+    let metadata_relro =
+        dynamic_pie && (got_relro.is_none() || coalesced_relro_start.is_some());
     let mut metadata = build_dynamic_metadata(
         metadata_address,
         &exports,
@@ -1864,30 +1880,68 @@ fn link_loader_image(
     } else {
         unpadded_metadata_size
     };
+    let interpreter_after_metadata = if coalesced_relro_start.is_some()
+        && interpreter_payload.is_some()
+    {
+        let metadata_end = metadata_address
+            .checked_add(metadata_size)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        Some(align_up(metadata_end, page_alignment).ok_or(SharedObjectError::AddressOverflow)?)
+    } else {
+        None
+    };
+    let interpreter_address = interpreter_before_metadata.or(interpreter_after_metadata);
 
     let mut sections = relocated;
-    if let (Some(address), Some(bytes)) = (interpreter_address, interpreter_payload) {
+    if coalesced_relro_start.is_some() {
         sections.push(RelocatedSectionImage {
-            object_index: DYNAMIC_INTERP_OBJECT_INDEX,
-            section_index: DYNAMIC_INTERP_SECTION_INDEX,
+            object_index: SHARED_METADATA_OBJECT_INDEX,
+            section_index: SHARED_METADATA_SECTION_INDEX,
             section_type: SHT_PROGBITS,
-            flags: SHF_ALLOC,
-            address,
-            size: u64::try_from(bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?,
-            alignment: 1,
-            bytes,
+            flags: SHF_ALLOC | SHF_WRITE,
+            address: metadata_address,
+            size: metadata_size,
+            alignment: 8,
+            bytes: metadata.bytes,
+        });
+        if let (Some(address), Some(bytes)) = (interpreter_address, interpreter_payload) {
+            sections.push(RelocatedSectionImage {
+                object_index: DYNAMIC_INTERP_OBJECT_INDEX,
+                section_index: DYNAMIC_INTERP_SECTION_INDEX,
+                section_type: SHT_PROGBITS,
+                flags: SHF_ALLOC,
+                address,
+                size: u64::try_from(bytes.len())
+                    .map_err(|_| SharedObjectError::MetadataTooLarge)?,
+                alignment: 1,
+                bytes,
+            });
+        }
+    } else {
+        if let (Some(address), Some(bytes)) = (interpreter_address, interpreter_payload) {
+            sections.push(RelocatedSectionImage {
+                object_index: DYNAMIC_INTERP_OBJECT_INDEX,
+                section_index: DYNAMIC_INTERP_SECTION_INDEX,
+                section_type: SHT_PROGBITS,
+                flags: SHF_ALLOC,
+                address,
+                size: u64::try_from(bytes.len())
+                    .map_err(|_| SharedObjectError::MetadataTooLarge)?,
+                alignment: 1,
+                bytes,
+            });
+        }
+        sections.push(RelocatedSectionImage {
+            object_index: SHARED_METADATA_OBJECT_INDEX,
+            section_index: SHARED_METADATA_SECTION_INDEX,
+            section_type: SHT_PROGBITS,
+            flags: SHF_ALLOC | SHF_WRITE,
+            address: metadata_address,
+            size: metadata_size,
+            alignment: 8,
+            bytes: metadata.bytes,
         });
     }
-    sections.push(RelocatedSectionImage {
-        object_index: SHARED_METADATA_OBJECT_INDEX,
-        section_index: SHARED_METADATA_SECTION_INDEX,
-        section_type: SHT_PROGBITS,
-        flags: SHF_ALLOC | SHF_WRITE,
-        address: metadata_address,
-        size: metadata_size,
-        alignment: 8,
-        bytes: metadata.bytes,
-    });
 
     let load_segments = build_load_segments(sections.iter().map(|section| LoadableSectionInput {
         layout: LaidOutSection {
@@ -1931,20 +1985,29 @@ fn link_loader_image(
         size: metadata.dynamic_size,
     };
     let mut relro = Vec::new();
-    if let Some(region) = got_relro {
-        // glibc tracks one RELRO interval per loaded object. Preserve the
-        // already-qualified GOT/TLS-GOT protection when that range exists;
-        // emitting a second disjoint metadata PT_GNU_RELRO would replace the
-        // effective loader interval and silently leave the GOT writable.
+    if let Some(address) = coalesced_relro_start {
+        let metadata_end = metadata_address
+            .checked_add(metadata_size)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let size = metadata_end
+            .checked_sub(address)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        // Coalesced dynamic-PIE RELRO: the tail-isolated ordinary/TLS GOT and
+        // the padded loader metadata now share one contiguous RW PT_LOAD.
+        // GOTPLT stays earlier in the image and remains writable for lazy
+        // JUMP_SLOT binding.
+        relro.push(RuntimeRelroProgramHeader { address, size });
+    } else if let Some(region) = got_relro {
+        // If later image state prevents a contiguous interval, retain the
+        // already-qualified GOT/TLS-GOT protection rather than stretching
+        // RELRO across unrelated or non-contiguous runtime state.
         relro.push(RuntimeRelroProgramHeader {
             address: region.address,
             size: region.size,
         });
     } else if metadata_relro {
-        // First non-GOT metadata RELRO slice: when no loader-bound GOT state
-        // needs protection, the page-aligned synthetic loader metadata block
-        // is padded to a whole-page boundary and becomes the object's single
-        // RELRO interval. glibc seals only complete pages from PT_GNU_RELRO.
+        // When no loader-bound GOT state exists, the page-aligned synthetic
+        // loader metadata block remains the object's single RELRO interval.
         relro.push(RuntimeRelroProgramHeader {
             address: metadata_address,
             size: metadata_size,
