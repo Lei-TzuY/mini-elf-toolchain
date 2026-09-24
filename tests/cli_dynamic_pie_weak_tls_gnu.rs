@@ -367,7 +367,6 @@ fn unresolved_weak_dynamic_pie_tls_remains_loadable_across_all_models() {
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 #[cfg(target_os = "linux")]
 fn versioned_weak_dynamic_pie_tls_remains_fail_closed() {
