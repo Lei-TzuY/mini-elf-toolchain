@@ -221,3 +221,144 @@ _start:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dynamic_pie_binds_external_ifunc_provider_through_plt() {
+    if !have_gnu_tools() {
+        return;
+    }
+    let Some(interpreter) = dynamic_linker() else {
+        return;
+    };
+
+    let dir = temp_dir("ifunc");
+    let provider_object = assemble(
+        &dir,
+        "ifunc-provider",
+        r#".text
+.type provider_impl,@function
+provider_impl:
+    mov $42, %eax
+    ret
+.size provider_impl, .-provider_impl
+
+.type provider_resolver,@function
+provider_resolver:
+    lea provider_impl(%rip), %rax
+    ret
+.size provider_resolver, .-provider_resolver
+
+.globl provider_value
+.type provider_value,@gnu_indirect_function
+.set provider_value,provider_resolver
+
+.section .note.GNU-stack,"",@progbits
+"#,
+    );
+    let provider = dir.join("libprovider.so");
+    let provider_link = Command::new("ld")
+        .args(["-shared", "-soname", "libprovider.so", "-o"])
+        .arg(&provider)
+        .arg(&provider_object)
+        .output()
+        .unwrap();
+    assert!(
+        provider_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&provider_link.stderr)
+    );
+
+    let provider_symbols = readelf(&provider, &["-sW"]);
+    assert!(
+        provider_symbols
+            .lines()
+            .any(|line| line.contains("IFUNC") && line.contains("provider_value")),
+        "provider must expose a real STT_GNU_IFUNC symbol:\n{provider_symbols}"
+    );
+
+    let consumer = assemble(
+        &dir,
+        "ifunc-consumer",
+        r#".text
+.globl provider_value
+.type provider_value,@function
+
+.globl _start
+.type _start,@function
+_start:
+    call provider_value@PLT
+    mov %eax, %edi
+    mov $60, %eax
+    syscall
+.size _start, .-_start
+
+.section .note.GNU-stack,"",@progbits
+"#,
+    );
+
+    let ours = dir.join("mini-ifunc-app");
+    let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&ours)
+        .arg("--dynamic-pie")
+        .arg("--dynamic-linker")
+        .arg(&interpreter)
+        .arg("--needed-from")
+        .arg(&provider)
+        .arg("--runpath")
+        .arg("$ORIGIN")
+        .arg(&consumer)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+
+    let relocations = readelf(&ours, &["-rW", "--use-dynamic"]);
+    assert!(
+        relocations.contains("R_X86_64_JUMP_SLOT") && relocations.contains("provider_value"),
+        "{relocations}"
+    );
+    let symbols = readelf(&ours, &["-sW", "--dyn-syms"]);
+    assert!(
+        symbols
+            .lines()
+            .any(|line| line.contains("FUNC") && line.contains("UND") && line.contains("provider_value")),
+        "consumer must retain an ordinary undefined STT_FUNC import:\n{symbols}"
+    );
+
+    let status = Command::new(&ours).status().unwrap();
+    assert_eq!(
+        status.code(),
+        Some(42),
+        "{} should execute the IFUNC-selected implementation through glibc JUMP_SLOT binding; status={status}",
+        ours.display()
+    );
+
+    let gnu = dir.join("gnu-ifunc-app");
+    let gnu_link = Command::new("ld")
+        .arg("-pie")
+        .arg("--dynamic-linker")
+        .arg(&interpreter)
+        .args(["-rpath", "$ORIGIN", "-o"])
+        .arg(&gnu)
+        .arg(&consumer)
+        .arg("-L")
+        .arg(&dir)
+        .arg("-lprovider")
+        .output()
+        .unwrap();
+    assert!(
+        gnu_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_link.stderr)
+    );
+    let gnu_status = Command::new(&gnu).status().unwrap();
+    assert_eq!(gnu_status.code(), Some(42), "GNU reference status={gnu_status}");
+
+    let _ = fs::remove_dir_all(dir);
+}
