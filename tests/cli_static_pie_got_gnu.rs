@@ -329,3 +329,153 @@ _start:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn runtime_relocated_got_is_sealed_without_freezing_user_data() {
+    if !have_gnu_tools() {
+        return;
+    }
+
+    let dir = temp_dir("relro");
+    let object = assemble(
+        &dir,
+        "got-relro",
+        r#".section .data
+.align 8
+.globl mutable_word
+.type mutable_word,@object
+mutable_word:
+    .quad 1
+.size mutable_word, .-mutable_word
+
+.align 8
+.globl target_value
+.type target_value,@object
+target_value:
+    .quad 0x1122334455667788
+.size target_value, .-target_value
+
+.section .rodata
+marker:
+    .ascii "OK"
+
+.section .text
+.globl _start
+.type _start,@function
+_start:
+    # Ordinary writable data must stay writable after the self-relocator runs.
+    lea mutable_word(%rip), %r12
+    movq $2, (%r12)
+    cmpq $2, (%r12)
+    jne .Lfail
+
+    # Prove the runtime-relative GOT relocation completed before probing RELRO.
+    mov target_value@GOTPCREL(%rip), %rax
+    mov (%rax), %rcx
+    movabs $0x1122334455667788, %rdx
+    cmp %rdx, %rcx
+    jne .Lfail
+
+    # Emit a marker only after both mutable data and GOT resolution are proven.
+    mov $1, %rax
+    mov $1, %rdi
+    lea marker(%rip), %rsi
+    mov $2, %rdx
+    syscall
+
+    # LEA of the GOTPCREL operand yields the synthetic GOT slot itself.
+    # Correct post-relocation protection must terminate this write with SIGSEGV.
+    lea target_value@GOTPCREL(%rip), %rbx
+    movq $0, (%rbx)
+
+    mov $60, %rax
+    mov $99, %rdi
+    syscall
+
+.Lfail:
+    mov $60, %rax
+    mov $1, %rdi
+    syscall
+.size _start, .-_start
+
+.section .note.GNU-stack,"",@progbits
+"#,
+    );
+
+    let input_relocations = Command::new("readelf")
+        .args(["-rW"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(input_relocations.status.success());
+    assert!(
+        String::from_utf8_lossy(&input_relocations.stdout).contains("GOTPCREL"),
+        "fixture must carry a GOTPCREL-family relocation"
+    );
+
+    let ours = dir.join("got-relro-pie");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&ours)
+        .arg("--pie")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        mini.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
+    );
+    assert_eq!(
+        dynamic_relative_count(&ours),
+        1,
+        "the synthetic GOT slot must remain the only runtime-relative relocation"
+    );
+
+    let headers = Command::new("readelf")
+        .args(["-lW"])
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(headers.status.success());
+    let headers = String::from_utf8_lossy(&headers.stdout);
+    assert!(
+        headers.matches("GNU_RELRO").count() >= 2,
+        "runtime .dynamic and the isolated GOT must both be reported as RELRO: {headers}"
+    );
+
+    let inspected = Command::new(env!("CARGO_BIN_EXE_mini-elf-relro"))
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        inspected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspected.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&inspected.stdout).contains("Found 2 PT_GNU_RELRO segment(s)"),
+        "{}",
+        String::from_utf8_lossy(&inspected.stdout)
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        let output = Command::new(&ours).output().unwrap();
+        assert_eq!(
+            output.stdout, b"OK",
+            "fixture must prove mutable .data and relocated GOT reads succeeded before the protection probe"
+        );
+        assert_eq!(
+            output.status.signal(),
+            Some(11),
+            "{} should fault only when user code writes the sealed GOT slot; status={}",
+            ours.display(),
+            output.status
+        );
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}

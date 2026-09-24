@@ -3,9 +3,9 @@ use crate::gnu_stack::{gnu_stack_policy, GnuStackPolicy};
 use crate::linker_input::LinkerInputObject;
 use crate::program_headers::{
     map_runtime_program_headers, map_runtime_program_headers_with_dynamic,
-    map_runtime_program_headers_with_dynamic_and_relro,
+    map_runtime_program_headers_with_dynamic_and_relros,
     map_runtime_program_headers_with_dynamic_and_stack,
-    map_runtime_program_headers_with_dynamic_stack_and_relro,
+    map_runtime_program_headers_with_dynamic_stack_and_relros,
     map_runtime_program_headers_with_stack, RuntimeDynamicProgramHeader, RuntimeRelroProgramHeader,
     RuntimeStackProgramHeader,
 };
@@ -26,7 +26,7 @@ pub fn link_static_executable(
         entry_symbol,
     )?;
     let stack = gnu_stack_policy(inputs).map_err(StaticLinkError::GnuStack)?;
-    map_static_program_headers(image, None, stack, None).map_err(StaticLinkError::Write)
+    map_static_program_headers(image, None, stack, &[]).map_err(StaticLinkError::Write)
 }
 
 pub fn link_static_position_independent_executable_with_map(
@@ -45,11 +45,15 @@ pub fn link_static_position_independent_executable_with_map(
         address: dynamic.address,
         size: dynamic.size,
     });
-    let relro = artifact.relro.map(|relro| RuntimeRelroProgramHeader {
-        address: relro.address,
-        size: relro.size,
-    });
-    output.image = map_static_program_headers(output.image, dynamic, stack, relro)
+    let relro = artifact
+        .relro
+        .iter()
+        .map(|relro| RuntimeRelroProgramHeader {
+            address: relro.address,
+            size: relro.size,
+        })
+        .collect::<Vec<_>>();
+    output.image = map_static_program_headers(output.image, dynamic, stack, &relro)
         .map_err(StaticLinkError::Write)?;
     synchronize_link_map_segments(&mut output);
     Ok(output)
@@ -68,7 +72,7 @@ pub fn link_static_executable_with_map(
         entry_symbol,
     )?;
     let stack = gnu_stack_policy(inputs).map_err(StaticLinkError::GnuStack)?;
-    output.image = map_static_program_headers(output.image, None, stack, None)
+    output.image = map_static_program_headers(output.image, None, stack, &[])
         .map_err(StaticLinkError::Write)?;
 
     synchronize_link_map_segments(&mut output);
@@ -79,11 +83,11 @@ fn map_static_program_headers(
     image: ExecutableImage,
     dynamic: Option<RuntimeDynamicProgramHeader>,
     stack: Option<GnuStackPolicy>,
-    relro: Option<RuntimeRelroProgramHeader>,
+    relro: &[RuntimeRelroProgramHeader],
 ) -> Result<ExecutableImage, crate::executable_writer::ExecutableWriteError> {
-    match (dynamic, stack, relro) {
-        (Some(dynamic), Some(stack), Some(relro)) => {
-            map_runtime_program_headers_with_dynamic_stack_and_relro(
+    match (dynamic, stack, relro.is_empty()) {
+        (Some(dynamic), Some(stack), false) => {
+            map_runtime_program_headers_with_dynamic_stack_and_relros(
                 image,
                 dynamic,
                 RuntimeStackProgramHeader {
@@ -92,25 +96,25 @@ fn map_static_program_headers(
                 relro,
             )
         }
-        (Some(dynamic), None, Some(relro)) => {
-            map_runtime_program_headers_with_dynamic_and_relro(image, dynamic, relro)
+        (Some(dynamic), None, false) => {
+            map_runtime_program_headers_with_dynamic_and_relros(image, dynamic, relro)
         }
-        (Some(dynamic), Some(stack), None) => map_runtime_program_headers_with_dynamic_and_stack(
+        (Some(dynamic), Some(stack), true) => map_runtime_program_headers_with_dynamic_and_stack(
             image,
             dynamic,
             RuntimeStackProgramHeader {
                 executable: stack.executable,
             },
         ),
-        (Some(dynamic), None, None) => map_runtime_program_headers_with_dynamic(image, dynamic),
-        (None, Some(stack), None) => map_runtime_program_headers_with_stack(
+        (Some(dynamic), None, true) => map_runtime_program_headers_with_dynamic(image, dynamic),
+        (None, Some(stack), true) => map_runtime_program_headers_with_stack(
             image,
             RuntimeStackProgramHeader {
                 executable: stack.executable,
             },
         ),
-        (None, None, None) => map_runtime_program_headers(image),
-        (None, _, Some(_)) => unreachable!("static PIE RELRO requires PT_DYNAMIC"),
+        (None, None, true) => map_runtime_program_headers(image),
+        (None, _, false) => unreachable!("static PIE RELRO requires PT_DYNAMIC"),
     }
 }
 

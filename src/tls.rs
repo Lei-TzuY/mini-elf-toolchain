@@ -9,7 +9,9 @@ use crate::linker_input::{LinkerInputError, LinkerInputObject, LinkerInputSectio
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
 use crate::permission_layout::SHF_TLS;
 use crate::relocated_sections::{
-    relocate_allocatable_sections_with_metadata, RelocatedSectionError, RelocatedSectionImage,
+    relocate_allocatable_sections_with_metadata,
+    relocate_allocatable_sections_with_metadata_isolated_got, RelocatedSectionError,
+    RelocatedSectionImage, SyntheticGotRegion,
 };
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{SymbolDefinition, STB_GLOBAL, STB_LOCAL, STB_WEAK};
@@ -602,12 +604,30 @@ pub struct StaticTlsRelocationOutput {
     pub sections: Vec<RelocatedSectionImage>,
     pub got_entries: BTreeMap<Vec<u8>, u64>,
     pub tls_layout: Option<StaticTlsLayout>,
+    pub(crate) got_region: Option<SyntheticGotRegion>,
 }
 
 pub fn relocate_allocatable_sections_with_static_tls(
     inputs: &[LinkerInputObject<'_>],
     start_address: u64,
     page_alignment: u64,
+) -> Result<StaticTlsRelocationOutput, StaticTlsRelocationError> {
+    relocate_allocatable_sections_with_static_tls_impl(inputs, start_address, page_alignment, false)
+}
+
+pub(crate) fn relocate_allocatable_sections_with_static_tls_isolated_got(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+) -> Result<StaticTlsRelocationOutput, StaticTlsRelocationError> {
+    relocate_allocatable_sections_with_static_tls_impl(inputs, start_address, page_alignment, true)
+}
+
+fn relocate_allocatable_sections_with_static_tls_impl(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    isolate_got: bool,
 ) -> Result<StaticTlsRelocationOutput, StaticTlsRelocationError> {
     let stripped_inputs = inputs
         .iter()
@@ -626,14 +646,19 @@ pub fn relocate_allocatable_sections_with_static_tls(
         })
         .collect::<Vec<_>>();
 
-    let relocated_output = relocate_allocatable_sections_with_metadata(
-        &stripped_inputs,
-        start_address,
-        page_alignment,
-    )
+    let relocated_output = if isolate_got {
+        relocate_allocatable_sections_with_metadata_isolated_got(
+            &stripped_inputs,
+            start_address,
+            page_alignment,
+        )
+    } else {
+        relocate_allocatable_sections_with_metadata(&stripped_inputs, start_address, page_alignment)
+    }
     .map_err(StaticTlsRelocationError::Regular)?;
     let got_entries = relocated_output.got_entries;
     let tls_got_entries = relocated_output.tls_got_entries;
+    let got_region = relocated_output.got_region;
     let mut relocated = relocated_output.sections;
     let layout = relocated
         .iter()
@@ -669,6 +694,7 @@ pub fn relocate_allocatable_sections_with_static_tls(
             sections: relocated,
             got_entries,
             tls_layout,
+            got_region,
         });
     }
 
@@ -739,6 +765,7 @@ pub fn relocate_allocatable_sections_with_static_tls(
         sections: relocated,
         got_entries,
         tls_layout: Some(tls),
+        got_region,
     })
 }
 

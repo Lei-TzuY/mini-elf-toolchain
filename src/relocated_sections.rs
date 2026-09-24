@@ -76,6 +76,12 @@ impl RelocatedSectionImage {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SyntheticGotRegion {
+    pub address: u64,
+    pub size: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelocatedSectionsOutput {
     pub sections: Vec<RelocatedSectionImage>,
@@ -87,6 +93,7 @@ pub struct RelocatedSectionsOutput {
     pub plt_entries: BTreeMap<Vec<u8>, u64>,
     pub plt_got_entries: BTreeMap<Vec<u8>, u64>,
     pub plt_got_base: Option<u64>,
+    pub(crate) got_region: Option<SyntheticGotRegion>,
 }
 
 #[derive(Debug)]
@@ -331,6 +338,27 @@ pub fn relocate_allocatable_sections_with_metadata(
     )
 }
 
+pub(crate) fn relocate_allocatable_sections_with_metadata_isolated_got(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
+        inputs,
+        start_address,
+        page_alignment,
+        &BTreeSet::new(),
+        &BTreeSet::new(),
+        TlsSyntheticRequests {
+            tls_gd_symbols: &BTreeSet::new(),
+            tls_ld_enabled: false,
+            tls_desc_symbols: &BTreeSet::new(),
+            external_tls_got_symbols: &BTreeSet::new(),
+        },
+        Some(page_alignment),
+    )
+}
+
 pub fn relocate_allocatable_sections_with_external_got(
     inputs: &[LinkerInputObject<'_>],
     start_address: u64,
@@ -413,6 +441,26 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
     external_got_symbols: &BTreeSet<Vec<u8>>,
     external_plt_symbols: &BTreeSet<Vec<u8>>,
     tls: TlsSyntheticRequests<'_>,
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
+        inputs,
+        start_address,
+        page_alignment,
+        external_got_symbols,
+        external_plt_symbols,
+        tls,
+        None,
+    )
+}
+
+fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    external_got_symbols: &BTreeSet<Vec<u8>>,
+    external_plt_symbols: &BTreeSet<Vec<u8>>,
+    tls: TlsSyntheticRequests<'_>,
+    isolated_got_page_alignment: Option<u64>,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     let tls_gd_symbols = tls.tls_gd_symbols;
     let tls_ld_enabled = tls.tls_ld_enabled;
@@ -513,6 +561,28 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
                 .saturating_add(tls_desc_symbols.len().saturating_mul(2)),
         })?;
 
+    let (got_layout_size, got_layout_alignment) =
+        if let (nonzero_got_size, Some(alignment)) = (got_size, isolated_got_page_alignment) {
+            if nonzero_got_size == 0 {
+                (got_size, GOT_ALIGNMENT)
+            } else {
+                if alignment == 0 || !alignment.is_power_of_two() {
+                    return Err(RelocatedSectionError::Layout(
+                        PermissionLayoutError::InvalidPageAlignment { alignment },
+                    ));
+                }
+                let mask = alignment - 1;
+                let size = got_size.checked_add(mask).map(|sum| sum & !mask).ok_or(
+                    RelocatedSectionError::GotSizeOverflow {
+                        symbol_count: got_symbol_count,
+                    },
+                )?;
+                (size, alignment)
+            }
+        } else {
+            (got_size, GOT_ALIGNMENT)
+        };
+
     validate_external_plt_symbols(inputs, external_plt_symbols)?;
     let plt_size =
         synthetic_table_size_with_prefix(external_plt_symbols.len(), PLT_ENTRY_SIZE, PLT0_SIZE)?;
@@ -539,8 +609,8 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
         layout_inputs.push(PermissionLayoutInput {
             object_index: GOT_OBJECT_INDEX,
             section_index: GOT_SECTION_INDEX,
-            size: got_size,
-            alignment: GOT_ALIGNMENT,
+            size: got_layout_size,
+            alignment: got_layout_alignment,
             flags: SHF_ALLOC | SHF_WRITE,
         });
     }
@@ -563,6 +633,20 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
 
     let layout = layout_sections_by_permissions(start_address, page_alignment, layout_inputs)
         .map_err(RelocatedSectionError::Layout)?;
+    let got_region = if got_size != 0 && isolated_got_page_alignment.is_some() {
+        let got_layout = matching_layout(&layout, GOT_OBJECT_INDEX, GOT_SECTION_INDEX).ok_or(
+            RelocatedSectionError::MissingLayout {
+                object_index: GOT_OBJECT_INDEX,
+                section_index: GOT_SECTION_INDEX,
+            },
+        )?;
+        Some(SyntheticGotRegion {
+            address: got_layout.address,
+            size: got_layout.size,
+        })
+    } else {
+        None
+    };
     let got_entries = got_entry_addresses(&layout, &got_symbols, 0)?;
     let tls_got_entries = got_entry_addresses(&layout, &tls_got_symbols, got_symbols.len())?;
     let tls_gd_entries = tls_gd_entry_addresses(&layout, tls_gd_symbols, got_symbol_count)?;
@@ -704,7 +788,12 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
                 section_index: GOT_SECTION_INDEX,
             },
         )?;
-        let mut bytes = Vec::with_capacity(got_size as usize);
+        let got_capacity = usize::try_from(got_layout_size).map_err(|_| {
+            RelocatedSectionError::GotSizeOverflow {
+                symbol_count: got_symbol_count,
+            }
+        })?;
+        let mut bytes = Vec::with_capacity(got_capacity);
         for name in &got_symbols {
             if external_got_symbols.contains(name) {
                 bytes.extend_from_slice(&0_u64.to_le_bytes());
@@ -734,14 +823,15 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
             bytes.extend_from_slice(&0_u64.to_le_bytes());
             bytes.extend_from_slice(&0_u64.to_le_bytes());
         }
+        bytes.resize(got_capacity, 0);
         relocated.push(RelocatedSectionImage {
             object_index: GOT_OBJECT_INDEX,
             section_index: GOT_SECTION_INDEX,
             section_type: SHT_PROGBITS,
             flags: SHF_ALLOC | SHF_WRITE,
             address: got_layout.address,
-            size: got_size,
-            alignment: GOT_ALIGNMENT,
+            size: got_layout_size,
+            alignment: got_layout_alignment,
             bytes,
         });
     }
@@ -877,6 +967,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
         plt_entries: plt_entries_output,
         plt_got_entries: plt_got_entries_output,
         plt_got_base,
+        got_region,
     })
 }
 
