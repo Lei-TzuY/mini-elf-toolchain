@@ -753,7 +753,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "dynamic PIE bounded TLS slice rejects relocation type {relocation_type} in object {object_index} RELA section {rela_section_index} relocation {relocation_index} for symbol {:?}; only external general-dynamic R_X86_64_TLSGD is qualified for loader-backed dynamic executables",
+                "dynamic PIE bounded TLS slice rejects relocation type {relocation_type} in object {object_index} RELA section {rela_section_index} relocation {relocation_index} for symbol {:?}; qualified loader-backed dynamic-executable TLS models require an unresolved default-visible strong STT_TLS import through R_X86_64_TLSGD, R_X86_64_GOTTPOFF, or a matched R_X86_64_GOTPC32_TLSDESC/R_X86_64_TLSDESC_CALL sequence",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsImportUnsupported {
