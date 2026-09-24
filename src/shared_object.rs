@@ -25,22 +25,27 @@ use crate::relocated_sections::{
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
-use crate::synthetic_ids::{DYNAMIC_INTERP_OBJECT_INDEX, SHARED_METADATA_OBJECT_INDEX};
+use crate::synthetic_ids::{
+    DYNAMIC_COPY_OBJECT_INDEX, DYNAMIC_INTERP_OBJECT_INDEX, SHARED_METADATA_OBJECT_INDEX,
+};
 use crate::tls::{
     compute_static_tls_layout, inject_static_tls_program_header, StaticTlsLayout,
     StaticTlsLayoutError, StaticTlsProgramHeaderError,
 };
 use crate::version_script::{VersionScript, VersionScriptMatchError};
 use crate::x86_64_relocations::{
-    apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_DTPMOD64, R_X86_64_DTPOFF32,
-    R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPC32_TLSDESC, R_X86_64_GOTPCREL,
-    R_X86_64_GOTTPOFF, R_X86_64_JUMP_SLOT, R_X86_64_PLT32, R_X86_64_TLSDESC, R_X86_64_TLSDESC_CALL,
-    R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
+    apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_COPY, R_X86_64_DTPMOD64,
+    R_X86_64_DTPOFF32, R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPC32_TLSDESC,
+    R_X86_64_GOTPCREL, R_X86_64_GOTTPOFF, R_X86_64_JUMP_SLOT, R_X86_64_PC32, R_X86_64_PLT32,
+    R_X86_64_TLSDESC, R_X86_64_TLSDESC_CALL, R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
 };
 
 const SHT_PROGBITS: u32 = 1;
+const SHT_NOBITS: u32 = 8;
 const SHARED_METADATA_SECTION_INDEX: u16 = 1;
 const DYNAMIC_INTERP_SECTION_INDEX: u16 = 1;
+const DYNAMIC_COPY_SECTION_INDEX: u16 = 1;
+const DYNAMIC_COPY_ALIGNMENT: u64 = 16;
 const ELF64_SYMBOL_SIZE: usize = 24;
 const ELF64_DYNAMIC_SIZE: usize = 16;
 const ELF64_RELA_SIZE: usize = 24;
@@ -187,6 +192,29 @@ pub enum SharedObjectError {
     },
     MissingGotEntry {
         name: Vec<u8>,
+    },
+    MissingCopyMetadata {
+        name: Vec<u8>,
+    },
+    UnexpectedCopyMetadata {
+        name: Vec<u8>,
+    },
+    InvalidCopySize {
+        name: Vec<u8>,
+        size: u64,
+    },
+    CopyRelocationMixedReference {
+        name: Vec<u8>,
+    },
+    MissingCopyRelocationTarget {
+        object_index: usize,
+        target_section_index: u16,
+    },
+    CopyRelocationApply {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        source: RelocationApplyError,
     },
     MissingPltGotEntry {
         name: Vec<u8>,
@@ -508,6 +536,42 @@ impl fmt::Display for SharedObjectError {
                 "shared object GOT symbol {:?} has no synthetic GOT slot",
                 String::from_utf8_lossy(name)
             ),
+            Self::MissingCopyMetadata { name } => write!(
+                f,
+                "dynamic PIE copy relocation {:?} requires checked direct-provider size metadata",
+                String::from_utf8_lossy(name)
+            ),
+            Self::UnexpectedCopyMetadata { name } => write!(
+                f,
+                "dynamic PIE received copy-relocation metadata for {:?}, but no bounded copy relocation was planned for that symbol",
+                String::from_utf8_lossy(name)
+            ),
+            Self::InvalidCopySize { name, size } => write!(
+                f,
+                "dynamic PIE copy relocation {:?} requires a nonzero provider size, got {size}",
+                String::from_utf8_lossy(name)
+            ),
+            Self::CopyRelocationMixedReference { name } => write!(
+                f,
+                "dynamic PIE copy relocation {:?} is mixed with another loader-binding reference plane; bounded COPY support requires the symbol to be referenced only through copy-eligible PC32 sites",
+                String::from_utf8_lossy(name)
+            ),
+            Self::MissingCopyRelocationTarget {
+                object_index,
+                target_section_index,
+            } => write!(
+                f,
+                "dynamic PIE copy relocation target object {object_index} section {target_section_index} has no relocated output section"
+            ),
+            Self::CopyRelocationApply {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                source,
+            } => write!(
+                f,
+                "cannot redirect dynamic PIE copy relocation {relocation_index} in RELA section {rela_section_index} of object {object_index}: {source}"
+            ),
             Self::MissingPltGotEntry { name } => write!(
                 f,
                 "shared object PLT symbol {:?} has no synthetic PLT-GOT slot",
@@ -792,6 +856,7 @@ impl std::error::Error for SharedObjectError {
             Self::TlsLayout(source) => Some(source),
             Self::TlsProgramHeader(source) => Some(source),
             Self::TlsLdOffset { source, .. } => Some(source),
+            Self::CopyRelocationApply { source, .. } => Some(source),
             Self::RelocationUnsupported { .. }
             | Self::PreemptibleRelativeTarget { .. }
             | Self::VersionScriptPatternConflict { .. }
@@ -813,6 +878,11 @@ impl std::error::Error for SharedObjectError {
             | Self::MissingDynamicSymbol { .. }
             | Self::MissingGotDynamicSymbol { .. }
             | Self::MissingGotEntry { .. }
+            | Self::MissingCopyMetadata { .. }
+            | Self::UnexpectedCopyMetadata { .. }
+            | Self::InvalidCopySize { .. }
+            | Self::CopyRelocationMixedReference { .. }
+            | Self::MissingCopyRelocationTarget { .. }
             | Self::MissingPltGotEntry { .. }
             | Self::MissingTlsGdEntry { .. }
             | Self::MissingTlsDynamicSymbol { .. }
@@ -910,6 +980,7 @@ pub struct SharedImportRequirement {
     pub name: Vec<u8>,
     pub symbol_type: u8,
     pub version: Option<Vec<u8>>,
+    pub requires_copy: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -917,6 +988,12 @@ pub struct SharedVersionRequirement {
     pub linker_name: Vec<u8>,
     pub provider: Vec<u8>,
     pub version: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DynamicPieCopyRelocation {
+    pub linker_name: Vec<u8>,
+    pub size: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -1046,6 +1123,8 @@ struct ImportPlan {
     symbol_relocation_sites: BTreeSet<DynamicSymbolRelocationSite>,
     got_symbols: BTreeSet<Vec<u8>>,
     relative_got_symbols: BTreeSet<Vec<u8>>,
+    copy_symbols: BTreeSet<Vec<u8>>,
+    copy_relocation_sites: BTreeSet<DynamicSymbolRelocationSite>,
     plt_symbols: BTreeSet<Vec<u8>>,
     tls_gd_symbols: BTreeSet<Vec<u8>>,
     tls_ie_symbols: BTreeSet<Vec<u8>>,
@@ -1083,17 +1162,35 @@ struct DynamicMetadata {
 pub fn shared_import_requirements(
     inputs: &[LinkerInputObject<'_>],
 ) -> Result<Vec<SharedImportRequirement>, SharedObjectError> {
+    import_requirements(inputs, false)
+}
+
+pub fn dynamic_pie_import_requirements(
+    inputs: &[LinkerInputObject<'_>],
+) -> Result<Vec<SharedImportRequirement>, SharedObjectError> {
+    import_requirements(inputs, true)
+}
+
+fn import_requirements(
+    inputs: &[LinkerInputObject<'_>],
+    allow_copy_relocations: bool,
+) -> Result<Vec<SharedImportRequirement>, SharedObjectError> {
     let validated = inputs
         .iter()
         .map(LinkerInputObject::validated_object)
         .collect::<Vec<_>>();
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
-    let plan = validate_inputs(inputs, &resolved.definitions)?;
-    Ok(plan
-        .symbols
+    let plan = validate_inputs(inputs, &resolved.definitions, allow_copy_relocations)?;
+    let ImportPlan {
+        symbols,
+        copy_symbols,
+        ..
+    } = plan;
+    Ok(symbols
         .into_values()
         .map(|symbol| SharedImportRequirement {
+            requires_copy: copy_symbols.contains(&symbol.name),
             linker_name: symbol.name,
             name: symbol.dynamic_name,
             symbol_type: symbol.info & 0x0f,
@@ -1209,6 +1306,7 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
             shared: options,
             entry_symbol: None,
             interpreter: None,
+            copy_relocations: None,
         },
     )
 }
@@ -1221,6 +1319,7 @@ pub struct DynamicPieLinkOptions<'a> {
     pub checked_version_providers: &'a [Vec<u8>],
     pub entry_symbol: &'a [u8],
     pub interpreter: &'a [u8],
+    pub copy_relocations: &'a [DynamicPieCopyRelocation],
 }
 
 pub fn link_dynamic_pie_with_checked_providers(
@@ -1243,6 +1342,7 @@ pub fn link_dynamic_pie_with_checked_providers(
             },
             entry_symbol: Some(options.entry_symbol),
             interpreter: Some(options.interpreter),
+            copy_relocations: Some(options.copy_relocations),
         },
     )
 }
@@ -1252,6 +1352,7 @@ struct LoaderImageLinkOptions<'a> {
     shared: SharedObjectLinkOptions<'a>,
     entry_symbol: Option<&'a [u8]>,
     interpreter: Option<&'a [u8]>,
+    copy_relocations: Option<&'a [DynamicPieCopyRelocation]>,
 }
 
 fn link_loader_image(
@@ -1263,6 +1364,7 @@ fn link_loader_image(
         shared,
         entry_symbol,
         interpreter,
+        copy_relocations,
     } = options;
     let SharedObjectLinkOptions {
         needed,
@@ -1295,7 +1397,8 @@ fn link_loader_image(
         .collect::<Vec<_>>();
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
-    let imports = validate_inputs(inputs, &resolved.definitions)?;
+    let imports = validate_inputs(inputs, &resolved.definitions, copy_relocations.is_some())?;
+    let copy_sizes = validate_dynamic_pie_copy_metadata(&imports.copy_symbols, copy_relocations)?;
     validate_version_requirements(
         checked_version_providers,
         &imports.symbols,
@@ -1308,6 +1411,7 @@ fn link_loader_image(
         .cloned()
         .collect::<BTreeSet<_>>();
     let mut masked_sites = imports.symbol_relocation_sites.clone();
+    masked_sites.extend(imports.copy_relocation_sites.iter().copied());
     masked_sites.extend(imports.tls_ld_dtpoff_sites.iter().copied());
     masked_sites.extend(imports.tls_desc_call_sites.iter().copied());
     let relocation_inputs = mask_deferred_relocations(inputs, &masked_sites);
@@ -1345,6 +1449,13 @@ fn link_loader_image(
     let tls_desc_entries = relocated_output.tls_desc_entries;
     let plt_got_entries = relocated_output.plt_got_entries;
     let plt_got_base = relocated_output.plt_got_base;
+    let copy_addresses = allocate_dynamic_pie_copy_storage(&mut relocated, &copy_sizes)?;
+    apply_dynamic_pie_copy_relocations(
+        inputs,
+        &mut relocated,
+        &imports.copy_relocation_sites,
+        &copy_addresses,
+    )?;
     let layout = relocated
         .iter()
         .map(|section| LaidOutSection {
@@ -1450,6 +1561,32 @@ fn link_loader_image(
         });
     }
 
+    for name in &imports.copy_symbols {
+        let import = imports
+            .symbols
+            .get(name)
+            .ok_or_else(|| SharedObjectError::MissingCopyMetadata { name: name.clone() })?;
+        let value = copy_addresses
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingCopyMetadata { name: name.clone() })?;
+        let size = copy_sizes
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingCopyMetadata { name: name.clone() })?;
+        exports.push(ExportSymbol {
+            linker_name: import.name.clone(),
+            dynamic_name: import.dynamic_name.clone(),
+            version: None,
+            is_default_version: true,
+            info: (STB_GLOBAL << 4) | STT_OBJECT,
+            other: 0,
+            section_index: 1,
+            value,
+            size,
+        });
+    }
+
     if let Some(script) = version_script {
         for (name, version) in script.assignments() {
             if !matched_script_symbols.contains(name) {
@@ -1480,7 +1617,11 @@ fn link_loader_image(
     }
 
     let export_dynamic_indices = export_dynamic_symbol_indices(&exports)?;
-    let import_dynamic_indices = import_dynamic_symbol_indices(exports.len(), &imports.symbols)?;
+    let mut dynamic_imports = imports.symbols.clone();
+    for name in &imports.copy_symbols {
+        dynamic_imports.remove(name);
+    }
+    let import_dynamic_indices = import_dynamic_symbol_indices(exports.len(), &dynamic_imports)?;
     let (mut rela_bytes, relative_relocation_count) = build_relative_relocation_table(
         &relocation_inputs,
         &relocated,
@@ -1488,6 +1629,12 @@ fn link_loader_image(
         &relative_got_entries,
     )
     .map_err(SharedObjectError::RuntimeRelative)?;
+    let copy_rela_bytes = build_copy_relocation_table(
+        &imports.copy_symbols,
+        &copy_addresses,
+        &export_dynamic_indices,
+    )?;
+    rela_bytes.extend_from_slice(&copy_rela_bytes);
     let symbol_rela_bytes = build_dynamic_symbol_relocation_table(
         inputs,
         &relocated,
@@ -1568,7 +1715,7 @@ fn link_loader_image(
     let metadata = build_dynamic_metadata(
         metadata_address,
         &exports,
-        &imports.symbols,
+        &dynamic_imports,
         DynamicNames {
             needed,
             soname,
@@ -1769,11 +1916,15 @@ fn validate_runpath(runpath: Option<&[u8]>) -> Result<(), SharedObjectError> {
 fn validate_inputs(
     inputs: &[LinkerInputObject<'_>],
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
+    allow_copy_relocations: bool,
 ) -> Result<ImportPlan, SharedObjectError> {
     let mut import_symbols = BTreeMap::<Vec<u8>, ImportSymbol>::new();
     let mut symbol_relocation_sites = BTreeSet::<DynamicSymbolRelocationSite>::new();
     let mut got_symbols = BTreeSet::<Vec<u8>>::new();
     let mut relative_got_symbols = BTreeSet::<Vec<u8>>::new();
+    let mut copy_symbols = BTreeSet::<Vec<u8>>::new();
+    let mut copy_relocation_sites = BTreeSet::<DynamicSymbolRelocationSite>::new();
+    let mut noncopy_import_symbols = BTreeSet::<Vec<u8>>::new();
     let mut plt_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_gd_symbols = BTreeSet::<Vec<u8>>::new();
     let mut tls_ie_symbols = BTreeSet::<Vec<u8>>::new();
@@ -1837,6 +1988,12 @@ fn validate_inputs(
                         });
                     }
                     if unresolved {
+                        if copy_symbols.contains(symbol.name) {
+                            return Err(SharedObjectError::CopyRelocationMixedReference {
+                                name: symbol.name.to_vec(),
+                            });
+                        }
+                        noncopy_import_symbols.insert(symbol.name.to_vec());
                         record_import_symbol(
                             &mut import_symbols,
                             symbol.name,
@@ -1884,6 +2041,12 @@ fn validate_inputs(
                     }
 
                     if unresolved {
+                        if copy_symbols.contains(symbol.name) {
+                            return Err(SharedObjectError::CopyRelocationMixedReference {
+                                name: symbol.name.to_vec(),
+                            });
+                        }
+                        noncopy_import_symbols.insert(symbol.name.to_vec());
                         record_import_symbol(
                             &mut import_symbols,
                             symbol.name,
@@ -1924,6 +2087,12 @@ fn validate_inputs(
                         });
                     }
                     if unresolved {
+                        if copy_symbols.contains(symbol.name) {
+                            return Err(SharedObjectError::CopyRelocationMixedReference {
+                                name: symbol.name.to_vec(),
+                            });
+                        }
+                        noncopy_import_symbols.insert(symbol.name.to_vec());
                         record_import_symbol(
                             &mut import_symbols,
                             symbol.name,
@@ -1994,7 +2163,7 @@ fn validate_inputs(
                         | R_X86_64_GOTTPOFF
                         | R_X86_64_TLSLD
                         | R_X86_64_DTPOFF32
-                )
+                ) && !(allow_copy_relocations && relocation.relocation_type == R_X86_64_PC32)
             }) {
                 return Err(SharedObjectError::RelocationUnsupported {
                     object_index: input.object_index,
@@ -2009,6 +2178,8 @@ fn validate_inputs(
                 let symbol_type = symbol.symbol.info & 0x0f;
                 let is_got_import = relocation.relocation_type == R_X86_64_GOTPCREL;
                 let is_plt_import = relocation.relocation_type == R_X86_64_PLT32;
+                let is_copy_import =
+                    allow_copy_relocations && relocation.relocation_type == R_X86_64_PC32;
                 if matches!(
                     relocation.relocation_type,
                     R_X86_64_TLSGD
@@ -2157,6 +2328,51 @@ fn validate_inputs(
                     });
                 }
 
+                if is_copy_import {
+                    if binding != STB_GLOBAL || symbol_type != STT_OBJECT {
+                        return Err(SharedObjectError::ExternalImportUnsupportedType {
+                            object_index: input.object_index,
+                            rela_section_index: table.section_index,
+                            relocation_index,
+                            symbol_index: relocation.symbol_index,
+                            name: symbol.name.to_vec(),
+                            symbol_type,
+                        });
+                    }
+                    if symbol.name.is_empty() {
+                        return Err(SharedObjectError::UndefinedNonlocal {
+                            object_index: input.object_index,
+                            symbol_index: symbol.symbol_index,
+                            name: Vec::new(),
+                        });
+                    }
+                    let (_, version) = parse_import_identity(symbol.name)?;
+                    if version.is_some() {
+                        return Err(SharedObjectError::UnsupportedVersionedImportType {
+                            name: symbol.name.to_vec(),
+                            symbol_type,
+                        });
+                    }
+                    if noncopy_import_symbols.contains(symbol.name) {
+                        return Err(SharedObjectError::CopyRelocationMixedReference {
+                            name: symbol.name.to_vec(),
+                        });
+                    }
+                    record_import_symbol(
+                        &mut import_symbols,
+                        symbol.name,
+                        symbol.symbol.info,
+                        symbol.symbol.size,
+                    )?;
+                    copy_symbols.insert(symbol.name.to_vec());
+                    copy_relocation_sites.insert(DynamicSymbolRelocationSite {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                    });
+                    continue;
+                }
+
                 let tls_get_addr_notype =
                     is_plt_import && symbol.name == b"__tls_get_addr" && symbol_type == STT_NOTYPE;
                 if is_plt_import && symbol_type != STT_FUNC && !tls_get_addr_notype {
@@ -2187,6 +2403,12 @@ fn validate_inputs(
                     });
                 }
 
+                if copy_symbols.contains(symbol.name) {
+                    return Err(SharedObjectError::CopyRelocationMixedReference {
+                        name: symbol.name.to_vec(),
+                    });
+                }
+                noncopy_import_symbols.insert(symbol.name.to_vec());
                 record_import_symbol(
                     &mut import_symbols,
                     symbol.name,
@@ -2335,6 +2557,8 @@ fn validate_inputs(
         symbol_relocation_sites,
         got_symbols,
         relative_got_symbols,
+        copy_symbols,
+        copy_relocation_sites,
         plt_symbols,
         tls_gd_symbols,
         tls_ie_symbols,
@@ -2343,6 +2567,159 @@ fn validate_inputs(
         tls_ld_dtpoff_sites,
         uses_tls_ld,
     })
+}
+
+fn validate_dynamic_pie_copy_metadata(
+    planned: &BTreeSet<Vec<u8>>,
+    metadata: Option<&[DynamicPieCopyRelocation]>,
+) -> Result<BTreeMap<Vec<u8>, u64>, SharedObjectError> {
+    let Some(metadata) = metadata else {
+        debug_assert!(planned.is_empty());
+        return Ok(BTreeMap::new());
+    };
+
+    let mut sizes = BTreeMap::new();
+    for copy in metadata {
+        if !planned.contains(&copy.linker_name) {
+            return Err(SharedObjectError::UnexpectedCopyMetadata {
+                name: copy.linker_name.clone(),
+            });
+        }
+        if copy.size == 0 {
+            return Err(SharedObjectError::InvalidCopySize {
+                name: copy.linker_name.clone(),
+                size: copy.size,
+            });
+        }
+        if sizes.insert(copy.linker_name.clone(), copy.size).is_some() {
+            return Err(SharedObjectError::UnexpectedCopyMetadata {
+                name: copy.linker_name.clone(),
+            });
+        }
+    }
+    for name in planned {
+        if !sizes.contains_key(name) {
+            return Err(SharedObjectError::MissingCopyMetadata { name: name.clone() });
+        }
+    }
+    Ok(sizes)
+}
+
+fn allocate_dynamic_pie_copy_storage(
+    sections: &mut Vec<RelocatedSectionImage>,
+    sizes: &BTreeMap<Vec<u8>, u64>,
+) -> Result<BTreeMap<Vec<u8>, u64>, SharedObjectError> {
+    if sizes.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    let mut cursor = sections
+        .iter()
+        .map(|section| {
+            section
+                .address
+                .checked_add(section.size)
+                .ok_or(SharedObjectError::AddressOverflow)
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+    cursor = align_up(cursor, DYNAMIC_COPY_ALIGNMENT).ok_or(SharedObjectError::AddressOverflow)?;
+    let base = cursor;
+    let mut addresses = BTreeMap::new();
+    for (name, size) in sizes {
+        cursor =
+            align_up(cursor, DYNAMIC_COPY_ALIGNMENT).ok_or(SharedObjectError::AddressOverflow)?;
+        addresses.insert(name.clone(), cursor);
+        cursor = cursor
+            .checked_add(*size)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+    }
+    let total_size = cursor
+        .checked_sub(base)
+        .ok_or(SharedObjectError::AddressOverflow)?;
+    sections.push(RelocatedSectionImage {
+        object_index: DYNAMIC_COPY_OBJECT_INDEX,
+        section_index: DYNAMIC_COPY_SECTION_INDEX,
+        section_type: SHT_NOBITS,
+        flags: SHF_ALLOC | SHF_WRITE,
+        address: base,
+        size: total_size,
+        alignment: DYNAMIC_COPY_ALIGNMENT,
+        bytes: Vec::new(),
+    });
+    Ok(addresses)
+}
+
+fn apply_dynamic_pie_copy_relocations(
+    inputs: &[LinkerInputObject<'_>],
+    sections: &mut [RelocatedSectionImage],
+    sites: &BTreeSet<DynamicSymbolRelocationSite>,
+    addresses: &BTreeMap<Vec<u8>, u64>,
+) -> Result<(), SharedObjectError> {
+    for site in sites {
+        let input = inputs
+            .iter()
+            .find(|input| input.object_index == site.object_index)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let table = input
+            .object
+            .rela_tables
+            .iter()
+            .find(|table| table.section_index == site.rela_section_index)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let relocation = table
+            .relocations
+            .get(site.relocation_index)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        debug_assert_eq!(relocation.relocation_type, R_X86_64_PC32);
+        let symbol_table = input
+            .object
+            .symbol_tables
+            .iter()
+            .find(|candidate| candidate.section_index == table.symbol_table_index)
+            .expect("validated RELA table references validated symbol table");
+        let symbols = named_symbols_from_table(
+            input.file,
+            &input.object.sections,
+            symbol_table,
+            input.object_index,
+        )
+        .map_err(|source| SharedObjectError::ObjectSymbols {
+            object_index: input.object_index,
+            source,
+        })?;
+        let symbol = &symbols[relocation.symbol_index as usize];
+        let copy_address = addresses.get(symbol.name).copied().ok_or_else(|| {
+            SharedObjectError::MissingCopyMetadata {
+                name: symbol.name.to_vec(),
+            }
+        })?;
+        let target = sections
+            .iter_mut()
+            .find(|section| {
+                section.object_index == input.object_index
+                    && section.section_index == table.target_section_index
+            })
+            .ok_or(SharedObjectError::MissingCopyRelocationTarget {
+                object_index: input.object_index,
+                target_section_index: table.target_section_index,
+            })?;
+        let place = target
+            .address
+            .checked_add(relocation.offset)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        apply_relocation(&mut target.bytes, relocation, copy_address, place).map_err(|source| {
+            SharedObjectError::CopyRelocationApply {
+                object_index: input.object_index,
+                rela_section_index: table.section_index,
+                relocation_index: site.relocation_index,
+                source,
+            }
+        })?;
+    }
+    Ok(())
 }
 
 fn mask_deferred_relocations<'a>(
@@ -2723,6 +3100,33 @@ fn build_dynamic_symbol_relocation_table(
         }
     }
 
+    Ok(bytes)
+}
+
+fn build_copy_relocation_table(
+    copy_symbols: &BTreeSet<Vec<u8>>,
+    copy_addresses: &BTreeMap<Vec<u8>, u64>,
+    export_dynamic_indices: &BTreeMap<Vec<u8>, u32>,
+) -> Result<Vec<u8>, SharedObjectError> {
+    let capacity = copy_symbols
+        .len()
+        .checked_mul(ELF64_RELA_SIZE)
+        .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let mut bytes = Vec::with_capacity(capacity);
+    for name in copy_symbols {
+        let offset = copy_addresses
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingCopyMetadata { name: name.clone() })?;
+        let dynamic_index = export_dynamic_indices
+            .get(name)
+            .copied()
+            .ok_or_else(|| SharedObjectError::MissingDynamicSymbol { name: name.clone() })?;
+        let info = (u64::from(dynamic_index) << 32) | u64::from(R_X86_64_COPY);
+        bytes.extend_from_slice(&offset.to_le_bytes());
+        bytes.extend_from_slice(&info.to_le_bytes());
+        bytes.extend_from_slice(&0_i64.to_le_bytes());
+    }
     Ok(bytes)
 }
 

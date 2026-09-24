@@ -5,6 +5,7 @@ pub(crate) const SHARED_METADATA_OBJECT_INDEX: usize = usize::MAX - 3;
 pub(crate) const PLT_OBJECT_INDEX: usize = usize::MAX - 4;
 pub(crate) const PLT_GOT_OBJECT_INDEX: usize = usize::MAX - 5;
 pub(crate) const DYNAMIC_INTERP_OBJECT_INDEX: usize = usize::MAX - 6;
+pub(crate) const DYNAMIC_COPY_OBJECT_INDEX: usize = usize::MAX - 7;
 
 #[cfg(test)]
 mod tests {
@@ -21,6 +22,7 @@ mod tests {
             PLT_OBJECT_INDEX,
             PLT_GOT_OBJECT_INDEX,
             DYNAMIC_INTERP_OBJECT_INDEX,
+            DYNAMIC_COPY_OBJECT_INDEX,
         ];
         assert_eq!(
             indices.into_iter().collect::<BTreeSet<_>>().len(),

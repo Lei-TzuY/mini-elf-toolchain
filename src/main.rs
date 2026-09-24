@@ -18,10 +18,10 @@ use mini_elf_toolchain::partial_link::{
 };
 use mini_elf_toolchain::provider_closure::resolve_provider_path;
 use mini_elf_toolchain::shared_object::{
-    link_dynamic_pie_with_checked_providers,
+    dynamic_pie_import_requirements, link_dynamic_pie_with_checked_providers,
     link_shared_object_with_version_script_and_checked_providers, shared_import_requirements,
-    DynamicPieLinkOptions, SharedImportRequirement, SharedObjectLinkOptions,
-    SharedVersionRequirement,
+    DynamicPieCopyRelocation, DynamicPieLinkOptions, SharedImportRequirement,
+    SharedObjectLinkOptions, SharedVersionRequirement,
 };
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
@@ -1020,6 +1020,7 @@ struct ResolvedNeededDependencies {
     names: Vec<Vec<u8>>,
     version_requirements: Vec<SharedVersionRequirement>,
     checked_version_providers: Vec<Vec<u8>>,
+    copy_relocations: Vec<DynamicPieCopyRelocation>,
 }
 
 #[derive(Default)]
@@ -1037,6 +1038,8 @@ fn resolve_needed_dependencies(
     let mut names = Vec::new();
     let mut version_requirements =
         std::collections::BTreeMap::<Vec<u8>, SharedVersionRequirement>::new();
+    let mut copy_relocations =
+        std::collections::BTreeMap::<Vec<u8>, DynamicPieCopyRelocation>::new();
 
     for spec in specs {
         let name = match spec {
@@ -1058,6 +1061,51 @@ fn resolve_needed_dependencies(
                 let direct_match = !direct_matches.is_empty();
 
                 for import in &direct_matches {
+                    if import.requires_copy && !copy_relocations.contains_key(&import.linker_name) {
+                        if import.version.is_some() {
+                            return Err(CliError::Failure(format!(
+                                "{}: dynamic PIE COPY relocation {:?} must be unversioned in this bounded phase",
+                                root_path.display(),
+                                String::from_utf8_lossy(&import.name)
+                            )));
+                        }
+                        let sizes = provider
+                            .export_sizes
+                            .get(&(import.name.clone(), import.symbol_type))
+                            .ok_or_else(|| {
+                                CliError::Failure(format!(
+                                    "{}: checked direct provider {:?} has no size metadata for dynamic PIE COPY symbol {:?}",
+                                    root_path.display(),
+                                    String::from_utf8_lossy(&provider.soname),
+                                    String::from_utf8_lossy(&import.name)
+                                ))
+                            })?;
+                        if sizes.len() != 1 {
+                            return Err(CliError::Failure(format!(
+                                "{}: checked direct provider {:?} has ambiguous sizes {:?} for dynamic PIE COPY symbol {:?}",
+                                root_path.display(),
+                                String::from_utf8_lossy(&provider.soname),
+                                sizes,
+                                String::from_utf8_lossy(&import.name)
+                            )));
+                        }
+                        let size = *sizes.iter().next().expect("non-empty unique size set");
+                        if size == 0 {
+                            return Err(CliError::Failure(format!(
+                                "{}: dynamic PIE COPY symbol {:?} requires nonzero provider size",
+                                root_path.display(),
+                                String::from_utf8_lossy(&import.name)
+                            )));
+                        }
+                        copy_relocations.insert(
+                            import.linker_name.clone(),
+                            DynamicPieCopyRelocation {
+                                linker_name: import.linker_name.clone(),
+                                size,
+                            },
+                        );
+                    }
+
                     let Some(version) = import.version.as_ref() else {
                         continue;
                     };
@@ -1125,6 +1173,12 @@ fn resolve_needed_dependencies(
     }
 
     for import in imports {
+        if import.requires_copy && !copy_relocations.contains_key(&import.linker_name) {
+            return Err(CliError::Failure(format!(
+                "dynamic PIE COPY symbol {:?} requires a checked direct provider with nonzero provider size metadata",
+                String::from_utf8_lossy(&import.name)
+            )));
+        }
         let Some(version) = import.version.as_ref() else {
             continue;
         };
@@ -1152,6 +1206,7 @@ fn resolve_needed_dependencies(
         names,
         version_requirements,
         checked_version_providers,
+        copy_relocations: copy_relocations.into_values().collect(),
     })
 }
 
@@ -1322,8 +1377,12 @@ fn link_files(
     )
     .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
     if options.shared_object || options.dynamic_pie {
-        let imports = shared_import_requirements(&prepared.objects)
-            .map_err(|error| CliError::Failure(format!("loader image link failed: {error}")))?;
+        let imports = if options.dynamic_pie {
+            dynamic_pie_import_requirements(&prepared.objects)
+        } else {
+            shared_import_requirements(&prepared.objects)
+        }
+        .map_err(|error| CliError::Failure(format!("loader image link failed: {error}")))?;
         let needed =
             resolve_needed_dependencies(options.needed, &imports, options.provider_search_paths)?;
         let image = if options.dynamic_pie {
@@ -1340,6 +1399,7 @@ fn link_files(
                     checked_version_providers: &needed.checked_version_providers,
                     entry_symbol: options.entry_symbol.to_string_lossy().as_bytes(),
                     interpreter,
+                    copy_relocations: &needed.copy_relocations,
                 },
             )
         } else {
