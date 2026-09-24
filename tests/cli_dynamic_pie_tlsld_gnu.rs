@@ -169,6 +169,8 @@ tls_b:
 .size tls_b, .-tls_b
 
 .section .text
+.extern __tls_get_addr
+.type __tls_get_addr,@function
 .globl _start
 .type _start,@function
 _start:
