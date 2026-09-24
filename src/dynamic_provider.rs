@@ -42,6 +42,8 @@ pub struct DynamicProviderMetadata {
     pub runpath: Option<Vec<u8>>,
     pub exports: BTreeMap<Vec<u8>, BTreeSet<u8>>,
     pub versioned_exports: BTreeMap<(Vec<u8>, Vec<u8>), BTreeSet<u8>>,
+    pub export_sizes: BTreeMap<(Vec<u8>, u8), BTreeSet<u64>>,
+    pub versioned_export_sizes: BTreeMap<(Vec<u8>, Vec<u8>, u8), BTreeSet<u64>>,
 }
 
 #[derive(Debug)]
@@ -206,6 +208,9 @@ pub fn inspect_dynamic_provider(
 
     let mut exports = BTreeMap::<Vec<u8>, BTreeSet<u8>>::new();
     let mut versioned_exports = BTreeMap::<(Vec<u8>, Vec<u8>), BTreeSet<u8>>::new();
+    let mut export_sizes = BTreeMap::<(Vec<u8>, u8), BTreeSet<u64>>::new();
+    let mut versioned_export_sizes =
+        BTreeMap::<(Vec<u8>, Vec<u8>, u8), BTreeSet<u64>>::new();
     for symbol_index in 0..symbol_count {
         let relative = symbol_index
             .checked_mul(syment)
@@ -233,6 +238,8 @@ pub fn inspect_dynamic_provider(
         };
 
         let binding = info >> 4;
+        let symbol_type = info & 0x0f;
+        let size = read_u64(file, offset + 16);
         let visibility = other & 0x03;
         let version_allows_unversioned =
             version_allows_unversioned_export(&versions, file, symbol_index, section_index)?;
@@ -245,13 +252,21 @@ pub fn inspect_dynamic_provider(
             && !name.is_empty()
         {
             if version_allows_unversioned {
-                exports.entry(name.clone()).or_default().insert(info & 0x0f);
+                exports.entry(name.clone()).or_default().insert(symbol_type);
+                export_sizes
+                    .entry((name.clone(), symbol_type))
+                    .or_default()
+                    .insert(size);
             }
             if let Some(version_name) = version_name {
                 versioned_exports
-                    .entry((name, version_name))
+                    .entry((name.clone(), version_name.clone()))
                     .or_default()
-                    .insert(info & 0x0f);
+                    .insert(symbol_type);
+                versioned_export_sizes
+                    .entry((name, version_name, symbol_type))
+                    .or_default()
+                    .insert(size);
             }
         }
     }
@@ -262,6 +277,8 @@ pub fn inspect_dynamic_provider(
         runpath,
         exports,
         versioned_exports,
+        export_sizes,
+        versioned_export_sizes,
     })
 }
 
