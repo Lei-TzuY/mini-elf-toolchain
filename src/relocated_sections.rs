@@ -451,6 +451,25 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
     )
 }
 
+pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    external_got_symbols: &BTreeSet<Vec<u8>>,
+    external_plt_symbols: &BTreeSet<Vec<u8>>,
+    tls: TlsSyntheticRequests<'_>,
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
+        inputs,
+        start_address,
+        page_alignment,
+        external_got_symbols,
+        external_plt_symbols,
+        tls,
+        Some(page_alignment),
+    )
+}
+
 fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
     inputs: &[LinkerInputObject<'_>],
     start_address: u64,
