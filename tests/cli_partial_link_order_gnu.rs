@@ -199,7 +199,10 @@ _start:
     let target = section(&records, ".text.target");
     let metadata = section(&records, ".meta.target");
     assert_ne!(target.index, 0);
-    assert_eq!(metadata.flags & (SHF_ALLOC | SHF_LINK_ORDER), SHF_ALLOC | SHF_LINK_ORDER);
+    assert_eq!(
+        metadata.flags & (SHF_ALLOC | SHF_LINK_ORDER),
+        SHF_ALLOC | SHF_LINK_ORDER
+    );
     assert_eq!(metadata.link, u32::from(target.index));
     assert_eq!(metadata.info, 0);
 
@@ -248,7 +251,11 @@ _start:
     #[cfg(target_os = "linux")]
     for executable in [&mini_exe, &gnu_exe] {
         let status = Command::new(executable).status().unwrap();
-        assert!(status.success(), "{} returned {status}", executable.display());
+        assert!(
+            status.success(),
+            "{} returned {status}",
+            executable.display()
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
@@ -314,7 +321,10 @@ helper:
     for path in [&ours, &gnu] {
         let records = sections(path);
         assert_eq!(
-            records.iter().filter(|record| record.name == ".meta").count(),
+            records
+                .iter()
+                .filter(|record| record.name == ".meta")
+                .count(),
             1
         );
         let text = section(&records, ".text");
