@@ -241,7 +241,11 @@ fn dynamic_pie_defined_tls_executes_across_gd_ie_and_tlsdesc() {
             );
 
             let symbols = readelf(&ours, &["-sDW"]);
-            let expected_binding = if weak_definition { " WEAK " } else { " GLOBAL " };
+            let expected_binding = if weak_definition {
+                " WEAK "
+            } else {
+                " GLOBAL "
+            };
             assert!(
                 symbols.lines().any(|line| {
                     line.contains(expected_binding)
@@ -268,8 +272,7 @@ fn dynamic_pie_defined_tls_executes_across_gd_ie_and_tlsdesc() {
                     );
                 }
                 "ie" => assert!(
-                    relocations.contains("R_X86_64_TPOFF64")
-                        && relocations.contains("local_tls"),
+                    relocations.contains("R_X86_64_TPOFF64") && relocations.contains("local_tls"),
                     "{relocations}"
                 ),
                 "tlsdesc" => assert!(
