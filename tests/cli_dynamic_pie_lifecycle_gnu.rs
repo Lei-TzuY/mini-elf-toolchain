@@ -276,3 +276,58 @@ fn dynamic_pie_lifecycle_arrays_match_gnu_metadata_and_execution() {
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn malformed_lifecycle_pointer_array_is_rejected_before_output() {
+    if !have_tools() {
+        return;
+    }
+    let Some(interpreter) = dynamic_linker() else {
+        return;
+    };
+
+    let dir = temp_dir("malformed-size");
+    let object = assemble(
+        &dir,
+        "malformed",
+        r#".text
+.globl _start
+.type _start,@function
+_start:
+    mov $60, %eax
+    xor %edi, %edi
+    syscall
+.size _start, .-_start
+
+.section .init_array,"aw",@init_array
+.byte 0
+
+.section .note.GNU-stack,"",@progbits
+"#,
+    );
+    let output = dir.join("should-not-exist");
+    let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--dynamic-pie")
+        .arg("--dynamic-linker")
+        .arg(&interpreter)
+        .arg(&object)
+        .output()
+        .unwrap();
+
+    assert!(!linked.status.success(), "malformed lifecycle array was accepted");
+    assert!(
+        String::from_utf8_lossy(&linked.stderr)
+            .contains("lifecycle arrays must contain whole 8-byte function pointers"),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    assert!(
+        !output.exists(),
+        "failed lifecycle validation must not leave an output image"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
