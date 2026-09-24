@@ -1155,14 +1155,20 @@ fn resolve_needed_dependencies(
     })
 }
 
+fn provider_symbol_types_match_import(
+    provider_types: &std::collections::BTreeSet<u8>,
+    import_type: u8,
+) -> bool {
+    provider_types.contains(&import_type)
+        || (import_type == STT_FUNC && provider_types.contains(&STT_GNU_IFUNC))
+}
+
 fn provider_matches_import(
     provider: &DynamicProviderMetadata,
     import: &SharedImportRequirement,
 ) -> bool {
-    let matches_type = |types: &std::collections::BTreeSet<u8>| {
-        types.contains(&import.symbol_type)
-            || (import.symbol_type == STT_FUNC && types.contains(&STT_GNU_IFUNC))
-    };
+    let matches_type =
+        |types: &std::collections::BTreeSet<u8>| provider_symbol_types_match_import(types, import.symbol_type);
     match &import.version {
         Some(version) => provider
             .versioned_exports
@@ -1592,8 +1598,19 @@ fn checked_total(total: usize, addend: usize, kind: &str) -> Result<usize, CliEr
 
 #[cfg(test)]
 mod tests {
-    use super::{run, CliError, USAGE};
+    use super::{
+        provider_symbol_types_match_import, run, CliError, STT_FUNC, STT_GNU_IFUNC, USAGE,
+    };
+    use std::collections::BTreeSet;
     use std::ffi::OsString;
+
+    #[test]
+    fn ifunc_provider_type_only_satisfies_function_imports() {
+        let provider_types = BTreeSet::from([STT_GNU_IFUNC]);
+        assert!(provider_symbol_types_match_import(&provider_types, STT_FUNC));
+        assert!(!provider_symbol_types_match_import(&provider_types, 1));
+        assert!(!provider_symbol_types_match_import(&provider_types, 6));
+    }
 
     #[test]
     fn help_is_available_without_input() {
