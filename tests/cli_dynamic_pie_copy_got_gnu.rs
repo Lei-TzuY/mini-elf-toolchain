@@ -1,4 +1,3 @@
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -225,12 +224,15 @@ _start:
     );
     let gnu_relocations = readelf(&gnu, &["-rW", "--use-dynamic"]);
     assert!(
-        gnu_relocations.contains("R_X86_64_COPY")
-            && gnu_relocations.contains("R_X86_64_GLOB_DAT"),
+        gnu_relocations.contains("R_X86_64_COPY") && gnu_relocations.contains("R_X86_64_GLOB_DAT"),
         "GNU reference must expose COPY + GLOB_DAT:\n{gnu_relocations}"
     );
     let gnu_status = Command::new(&gnu).status().unwrap();
-    assert_eq!(gnu_status.code(), Some(42), "GNU reference status={gnu_status}");
+    assert_eq!(
+        gnu_status.code(),
+        Some(42),
+        "GNU reference status={gnu_status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
