@@ -139,9 +139,7 @@ provider_tls:
 "#
         .to_owned()
     } else {
-        format!(
-            ".section .text\n{binding} provider_tls\n.type provider_tls,@tls_object\n"
-        )
+        format!(".section .text\n{binding} provider_tls\n.type provider_tls,@tls_object\n")
     };
     format!(
         r#"{declaration}
@@ -232,8 +230,7 @@ fn dynamic_pie_initial_exec_import_matches_gnu_and_executes() {
 
     let relocations = readelf(&ours, &["-rW", "--use-dynamic"]);
     assert!(
-        relocations.contains("R_X86_64_TPOFF64")
-            && relocations.contains("provider_tls"),
+        relocations.contains("R_X86_64_TPOFF64") && relocations.contains("provider_tls"),
         "{relocations}"
     );
     assert!(
@@ -277,12 +274,15 @@ fn dynamic_pie_initial_exec_import_matches_gnu_and_executes() {
     );
     let gnu_relocations = readelf(&gnu, &["-rW", "--use-dynamic"]);
     assert!(
-        gnu_relocations.contains("R_X86_64_TPOFF64")
-            && gnu_relocations.contains("provider_tls"),
+        gnu_relocations.contains("R_X86_64_TPOFF64") && gnu_relocations.contains("provider_tls"),
         "{gnu_relocations}"
     );
     let gnu_status = Command::new(&gnu).status().unwrap();
-    assert_eq!(gnu_status.code(), Some(42), "GNU reference status={gnu_status}");
+    assert_eq!(
+        gnu_status.code(),
+        Some(42),
+        "GNU reference status={gnu_status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
@@ -301,16 +301,8 @@ fn dynamic_pie_initial_exec_keeps_weak_and_defined_tls_fail_closed() {
     let provider = build_mini_provider(&dir);
 
     for (label, source, needs_provider) in [
-        (
-            "weak",
-            initial_exec_consumer_source(".weak", false),
-            true,
-        ),
-        (
-            "defined",
-            initial_exec_consumer_source("", true),
-            false,
-        ),
+        ("weak", initial_exec_consumer_source(".weak", false), true),
+        ("defined", initial_exec_consumer_source("", true), false),
     ] {
         let consumer = assemble(&dir, label, &source);
         let input_relocations = readelf(&consumer, &["-rW"]);
