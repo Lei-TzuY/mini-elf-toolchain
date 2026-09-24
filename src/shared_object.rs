@@ -753,7 +753,7 @@ impl fmt::Display for SharedObjectError {
                 name,
             } => write!(
                 f,
-                "dynamic PIE bounded TLS slice rejects relocation type {relocation_type} in object {object_index} RELA section {rela_section_index} relocation {relocation_index} for symbol {:?}; qualified loader-backed dynamic-executable TLS models require an unresolved default-visible strong or unversioned weak STT_TLS import through R_X86_64_TLSGD, R_X86_64_GOTTPOFF, or a matched R_X86_64_GOTPC32_TLSDESC/R_X86_64_TLSDESC_CALL sequence",
+                "dynamic PIE bounded TLS slice rejects relocation type {relocation_type} in object {object_index} RELA section {rela_section_index} relocation {relocation_index} for symbol {:?}; qualified loader-backed dynamic-executable TLS models require a default-visible global/weak STT_TLS definition or import through R_X86_64_TLSGD, R_X86_64_GOTTPOFF, or a matched R_X86_64_GOTPC32_TLSDESC/R_X86_64_TLSDESC_CALL sequence",
                 String::from_utf8_lossy(name)
             ),
             Self::TlsImportUnsupported {
@@ -1140,14 +1140,14 @@ struct DynamicSymbolRelocationSite {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoaderTlsPolicy {
     SharedObject,
-    DynamicPieExternalGdIeDesc,
+    DynamicPieGdIeDesc,
 }
 
 impl LoaderTlsPolicy {
     fn allows(self, relocation_type: u32) -> bool {
         match self {
             Self::SharedObject => true,
-            Self::DynamicPieExternalGdIeDesc => matches!(
+            Self::DynamicPieGdIeDesc => matches!(
                 relocation_type,
                 R_X86_64_TLSGD
                     | R_X86_64_GOTTPOFF
@@ -1158,15 +1158,13 @@ impl LoaderTlsPolicy {
     }
 }
 
-fn dynamic_pie_external_tls_import_supported(
+fn dynamic_pie_tls_reference_supported(
     symbol_info: u8,
     symbol_other: u8,
-    unresolved: bool,
     symbol_type: u8,
 ) -> bool {
     let binding = symbol_info >> 4;
-    unresolved
-        && matches!(binding, STB_GLOBAL | STB_WEAK)
+    matches!(binding, STB_GLOBAL | STB_WEAK)
         && symbol_other == 0
         && symbol_type == STT_TLS
 }
@@ -1241,7 +1239,7 @@ pub fn dynamic_pie_import_requirements(
         InputValidationOptions {
             allow_copy_relocations: true,
             allow_explicit_ifunc_imports: true,
-            tls_policy: LoaderTlsPolicy::DynamicPieExternalGdIeDesc,
+            tls_policy: LoaderTlsPolicy::DynamicPieGdIeDesc,
         },
     )
 }
@@ -1480,7 +1478,7 @@ fn link_loader_image(
             allow_copy_relocations: dynamic_pie,
             allow_explicit_ifunc_imports: dynamic_pie,
             tls_policy: if dynamic_pie {
-                LoaderTlsPolicy::DynamicPieExternalGdIeDesc
+                LoaderTlsPolicy::DynamicPieGdIeDesc
             } else {
                 LoaderTlsPolicy::SharedObject
             },
@@ -2081,11 +2079,10 @@ fn validate_inputs(
                 {
                     let unresolved = symbol.symbol.section_index == SHN_UNDEF
                         && !definitions.contains_key(symbol.name);
-                    if options.tls_policy == LoaderTlsPolicy::DynamicPieExternalGdIeDesc
-                        && !dynamic_pie_external_tls_import_supported(
+                    if options.tls_policy == LoaderTlsPolicy::DynamicPieGdIeDesc
+                        && !dynamic_pie_tls_reference_supported(
                             symbol.symbol.info,
                             symbol.symbol.other,
-                            unresolved,
                             symbol_type,
                         )
                     {
@@ -2151,11 +2148,10 @@ fn validate_inputs(
                 if relocation.relocation_type == R_X86_64_TLSGD {
                     let unresolved = symbol.symbol.section_index == SHN_UNDEF
                         && !definitions.contains_key(symbol.name);
-                    if options.tls_policy == LoaderTlsPolicy::DynamicPieExternalGdIeDesc
-                        && !dynamic_pie_external_tls_import_supported(
+                    if options.tls_policy == LoaderTlsPolicy::DynamicPieGdIeDesc
+                        && !dynamic_pie_tls_reference_supported(
                             symbol.symbol.info,
                             symbol.symbol.other,
-                            unresolved,
                             symbol_type,
                         )
                     {
@@ -2212,11 +2208,10 @@ fn validate_inputs(
                 if relocation.relocation_type == R_X86_64_GOTTPOFF {
                     let unresolved = symbol.symbol.section_index == SHN_UNDEF
                         && !definitions.contains_key(symbol.name);
-                    if options.tls_policy == LoaderTlsPolicy::DynamicPieExternalGdIeDesc
-                        && !dynamic_pie_external_tls_import_supported(
+                    if options.tls_policy == LoaderTlsPolicy::DynamicPieGdIeDesc
+                        && !dynamic_pie_tls_reference_supported(
                             symbol.symbol.info,
                             symbol.symbol.other,
-                            unresolved,
                             symbol_type,
                         )
                     {
