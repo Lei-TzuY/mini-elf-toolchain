@@ -1111,8 +1111,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
                         section_index_u16,
                     )?
                 } else {
-                    let placement =
-                        push_output_section(&mut output_sections, name, section, data)?;
+                    let placement = push_output_section(&mut output_sections, name, section, data)?;
                     let output_slot = usize::from(placement.output_section_index - 1);
                     output_sections[output_slot].link =
                         u32::from(target_placement.output_section_index);
@@ -2018,13 +2017,15 @@ fn parse_comdat_groups(
                     });
                 }
                 if member.link != 0 || member.info != 0 {
-                    return Err(PartialLinkError::UnsupportedGroupedNonAllocSectionMetadata {
-                        input_index,
-                        group_section_index,
-                        member_section_index,
-                        link: member.link,
-                        info: member.info,
-                    });
+                    return Err(
+                        PartialLinkError::UnsupportedGroupedNonAllocSectionMetadata {
+                            input_index,
+                            group_section_index,
+                            member_section_index,
+                            link: member.link,
+                            info: member.info,
+                        },
+                    );
                 }
             }
             if !member_sections.insert(member_section_index) {
