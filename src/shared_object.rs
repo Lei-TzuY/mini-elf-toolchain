@@ -34,11 +34,10 @@ use crate::tls::{
 };
 use crate::version_script::{VersionScript, VersionScriptMatchError};
 use crate::x86_64_relocations::{
-    apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_DTPMOD64, R_X86_64_DTPOFF32,
-    R_X86_64_COPY, R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPC32_TLSDESC,
+    apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_COPY, R_X86_64_DTPMOD64,
+    R_X86_64_DTPOFF32, R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPC32_TLSDESC,
     R_X86_64_GOTPCREL, R_X86_64_GOTTPOFF, R_X86_64_JUMP_SLOT, R_X86_64_PC32, R_X86_64_PLT32,
-    R_X86_64_TLSDESC, R_X86_64_TLSDESC_CALL,
-    R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
+    R_X86_64_TLSDESC, R_X86_64_TLSDESC_CALL, R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
 };
 
 const SHT_PROGBITS: u32 = 1;
@@ -1398,15 +1397,8 @@ fn link_loader_image(
         .collect::<Vec<_>>();
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
-    let imports = validate_inputs(
-        inputs,
-        &resolved.definitions,
-        copy_relocations.is_some(),
-    )?;
-    let copy_sizes = validate_dynamic_pie_copy_metadata(
-        &imports.copy_symbols,
-        copy_relocations,
-    )?;
+    let imports = validate_inputs(inputs, &resolved.definitions, copy_relocations.is_some())?;
+    let copy_sizes = validate_dynamic_pie_copy_metadata(&imports.copy_symbols, copy_relocations)?;
     validate_version_requirements(
         checked_version_providers,
         &imports.symbols,
@@ -2633,13 +2625,12 @@ fn allocate_dynamic_pie_copy_storage(
         .into_iter()
         .max()
         .unwrap_or(0);
-    cursor = align_up(cursor, DYNAMIC_COPY_ALIGNMENT)
-        .ok_or(SharedObjectError::AddressOverflow)?;
+    cursor = align_up(cursor, DYNAMIC_COPY_ALIGNMENT).ok_or(SharedObjectError::AddressOverflow)?;
     let base = cursor;
     let mut addresses = BTreeMap::new();
     for (name, size) in sizes {
-        cursor = align_up(cursor, DYNAMIC_COPY_ALIGNMENT)
-            .ok_or(SharedObjectError::AddressOverflow)?;
+        cursor =
+            align_up(cursor, DYNAMIC_COPY_ALIGNMENT).ok_or(SharedObjectError::AddressOverflow)?;
         addresses.insert(name.clone(), cursor);
         cursor = cursor
             .checked_add(*size)
@@ -2700,12 +2691,11 @@ fn apply_dynamic_pie_copy_relocations(
             source,
         })?;
         let symbol = &symbols[relocation.symbol_index as usize];
-        let copy_address = addresses
-            .get(symbol.name)
-            .copied()
-            .ok_or_else(|| SharedObjectError::MissingCopyMetadata {
+        let copy_address = addresses.get(symbol.name).copied().ok_or_else(|| {
+            SharedObjectError::MissingCopyMetadata {
                 name: symbol.name.to_vec(),
-            })?;
+            }
+        })?;
         let target = sections
             .iter_mut()
             .find(|section| {
