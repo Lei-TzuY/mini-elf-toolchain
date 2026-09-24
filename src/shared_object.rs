@@ -1921,12 +1921,18 @@ fn link_loader_image(
     };
     let mut relro = Vec::new();
     if let Some(region) = got_relro {
+        // glibc tracks one RELRO interval per loaded object. Preserve the
+        // already-qualified GOT/TLS-GOT protection when that range exists;
+        // emitting a second disjoint metadata PT_GNU_RELRO would replace the
+        // effective loader interval and silently leave the GOT writable.
         relro.push(RuntimeRelroProgramHeader {
             address: region.address,
             size: region.size,
         });
-    }
-    if dynamic_pie {
+    } else if dynamic_pie {
+        // First non-GOT metadata RELRO slice: when no loader-bound GOT state
+        // needs protection, the page-aligned synthetic loader metadata block
+        // becomes the object's single RELRO interval.
         relro.push(RuntimeRelroProgramHeader {
             address: metadata_address,
             size: metadata_size,
