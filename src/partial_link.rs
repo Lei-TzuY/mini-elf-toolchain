@@ -18,6 +18,8 @@ const EM_X86_64: u16 = 62;
 const ET_REL: u16 = 1;
 const SHT_PROGBITS: u32 = 1;
 const SHT_GROUP: u32 = 17;
+const SHF_MERGE: u64 = 0x10;
+const SHF_STRINGS: u64 = 0x20;
 const SHF_LINK_ORDER: u64 = 0x80;
 const SHF_GROUP: u64 = 0x200;
 const SHN_XINDEX: u16 = 0xffff;
@@ -955,7 +957,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 section.flags,
                 section.entry_size,
             );
-            let existing = if is_canonical_alloc_section_name(&name) && !grouped {
+            let existing = if is_coalescible_alloc_section(&name, section) && !grouped {
                 coalesced_canonical_sections.get(&merge_key).copied()
             } else {
                 None
@@ -973,7 +975,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
             } else {
                 let placement =
                     push_output_alloc_section(&mut output_sections, name.clone(), section, data)?;
-                if is_canonical_alloc_section_name(&name) && !grouped {
+                if is_coalescible_alloc_section(&name, section) && !grouped {
                     coalesced_canonical_sections
                         .insert(merge_key, usize::from(placement.output_section_index - 1));
                 }
@@ -2111,6 +2113,17 @@ fn push_output_alloc_section(
 
 fn is_canonical_alloc_section_name(name: &[u8]) -> bool {
     matches!(name, b".text" | b".rodata" | b".data" | b".bss")
+}
+
+fn is_coalescible_alloc_section(name: &[u8], section: &Elf64SectionHeader) -> bool {
+    is_canonical_alloc_section_name(name) || is_bounded_merge_string_section(section)
+}
+
+fn is_bounded_merge_string_section(section: &Elf64SectionHeader) -> bool {
+    section.section_type == SHT_PROGBITS
+        && section.flags & (SHF_MERGE | SHF_STRINGS) == (SHF_MERGE | SHF_STRINGS)
+        && section.entry_size == 1
+        && section.address_alignment == 1
 }
 
 fn align_section_contribution(value: u64, alignment: u64) -> Option<u64> {
