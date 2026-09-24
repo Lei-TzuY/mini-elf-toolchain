@@ -1353,12 +1353,11 @@ fn link_loader_image(
         .collect::<Vec<_>>();
 
     let entry_address = if let Some(name) = entry_symbol {
-        let definition = resolved
-            .definitions
-            .get(name)
-            .ok_or_else(|| SharedObjectError::DynamicExecutableMissingEntry {
+        let definition = resolved.definitions.get(name).ok_or_else(|| {
+            SharedObjectError::DynamicExecutableMissingEntry {
                 name: name.to_vec(),
-            })?;
+            }
+        })?;
         Some(final_symbol_address(definition, &layout).map_err(SharedObjectError::SymbolAddress)?)
     } else {
         None
@@ -1549,10 +1548,7 @@ fn link_loader_image(
         bytes
     });
     let interpreter_address = if interpreter_payload.is_some() {
-        Some(
-            align_up(relocated_end, page_alignment)
-                .ok_or(SharedObjectError::AddressOverflow)?,
-        )
+        Some(align_up(relocated_end, page_alignment).ok_or(SharedObjectError::AddressOverflow)?)
     } else {
         None
     };
