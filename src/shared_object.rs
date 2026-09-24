@@ -54,6 +54,7 @@ const STT_NOTYPE: u8 = 0;
 const STT_OBJECT: u8 = 1;
 const STT_FUNC: u8 = 2;
 const STT_TLS: u8 = 6;
+const STT_GNU_IFUNC: u8 = 10;
 const STV_PROTECTED: u8 = 3;
 const GLOBAL_OFFSET_TABLE_SYMBOL: &[u8] = b"_GLOBAL_OFFSET_TABLE_";
 
@@ -1117,6 +1118,12 @@ struct DynamicSymbolRelocationSite {
     relocation_index: usize,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct InputValidationOptions {
+    allow_copy_relocations: bool,
+    allow_explicit_ifunc_imports: bool,
+}
+
 #[derive(Debug)]
 struct ImportPlan {
     symbols: BTreeMap<Vec<u8>, ImportSymbol>,
@@ -1162,18 +1169,30 @@ struct DynamicMetadata {
 pub fn shared_import_requirements(
     inputs: &[LinkerInputObject<'_>],
 ) -> Result<Vec<SharedImportRequirement>, SharedObjectError> {
-    import_requirements(inputs, false)
+    import_requirements(
+        inputs,
+        InputValidationOptions {
+            allow_copy_relocations: false,
+            allow_explicit_ifunc_imports: false,
+        },
+    )
 }
 
 pub fn dynamic_pie_import_requirements(
     inputs: &[LinkerInputObject<'_>],
 ) -> Result<Vec<SharedImportRequirement>, SharedObjectError> {
-    import_requirements(inputs, true)
+    import_requirements(
+        inputs,
+        InputValidationOptions {
+            allow_copy_relocations: true,
+            allow_explicit_ifunc_imports: true,
+        },
+    )
 }
 
 fn import_requirements(
     inputs: &[LinkerInputObject<'_>],
-    allow_copy_relocations: bool,
+    options: InputValidationOptions,
 ) -> Result<Vec<SharedImportRequirement>, SharedObjectError> {
     let validated = inputs
         .iter()
@@ -1181,7 +1200,7 @@ fn import_requirements(
         .collect::<Vec<_>>();
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
-    let plan = validate_inputs(inputs, &resolved.definitions, allow_copy_relocations)?;
+    let plan = validate_inputs(inputs, &resolved.definitions, options)?;
     let ImportPlan {
         symbols,
         copy_symbols,
@@ -1397,7 +1416,15 @@ fn link_loader_image(
         .collect::<Vec<_>>();
     let resolved =
         resolve_validated_objects_with_common(&validated).map_err(SharedObjectError::Symbols)?;
-    let imports = validate_inputs(inputs, &resolved.definitions, copy_relocations.is_some())?;
+    let dynamic_pie = copy_relocations.is_some();
+    let imports = validate_inputs(
+        inputs,
+        &resolved.definitions,
+        InputValidationOptions {
+            allow_copy_relocations: dynamic_pie,
+            allow_explicit_ifunc_imports: dynamic_pie,
+        },
+    )?;
     let copy_sizes = validate_dynamic_pie_copy_metadata(&imports.copy_symbols, copy_relocations)?;
     validate_version_requirements(
         checked_version_providers,
@@ -1916,7 +1943,7 @@ fn validate_runpath(runpath: Option<&[u8]>) -> Result<(), SharedObjectError> {
 fn validate_inputs(
     inputs: &[LinkerInputObject<'_>],
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
-    allow_copy_relocations: bool,
+    options: InputValidationOptions,
 ) -> Result<ImportPlan, SharedObjectError> {
     let mut import_symbols = BTreeMap::<Vec<u8>, ImportSymbol>::new();
     let mut symbol_relocation_sites = BTreeSet::<DynamicSymbolRelocationSite>::new();
@@ -2163,7 +2190,7 @@ fn validate_inputs(
                         | R_X86_64_GOTTPOFF
                         | R_X86_64_TLSLD
                         | R_X86_64_DTPOFF32
-                ) && !(allow_copy_relocations && relocation.relocation_type == R_X86_64_PC32)
+                ) && !(options.allow_copy_relocations && relocation.relocation_type == R_X86_64_PC32)
             }) {
                 return Err(SharedObjectError::RelocationUnsupported {
                     object_index: input.object_index,
@@ -2179,7 +2206,7 @@ fn validate_inputs(
                 let is_got_import = relocation.relocation_type == R_X86_64_GOTPCREL;
                 let is_plt_import = relocation.relocation_type == R_X86_64_PLT32;
                 let is_copy_import =
-                    allow_copy_relocations && relocation.relocation_type == R_X86_64_PC32;
+                    options.allow_copy_relocations && relocation.relocation_type == R_X86_64_PC32;
                 if matches!(
                     relocation.relocation_type,
                     R_X86_64_TLSGD
@@ -2387,7 +2414,9 @@ fn validate_inputs(
                         symbol_type,
                     });
                 }
-                if !is_plt_import && !matches!(symbol_type, STT_OBJECT | STT_FUNC) {
+                let supported_nonplt_import_type = matches!(symbol_type, STT_OBJECT | STT_FUNC)
+                    || (options.allow_explicit_ifunc_imports && symbol_type == STT_GNU_IFUNC);
+                if !is_plt_import && !supported_nonplt_import_type {
                     return Err(SharedObjectError::ExternalImportUnsupportedType {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
@@ -2530,11 +2559,15 @@ fn validate_inputs(
                     }
                     let tls_get_addr_notype =
                         symbol.name == b"__tls_get_addr" && symbol_type == STT_NOTYPE;
+                    let explicit_ifunc_import =
+                        options.allow_explicit_ifunc_imports && symbol_type == STT_GNU_IFUNC;
                     let supported_import = import_symbols.contains_key(symbol.name)
                         && (binding == STB_GLOBAL
                             || (binding == STB_WEAK
                                 && matches!(symbol_type, STT_OBJECT | STT_FUNC)))
-                        && (matches!(symbol_type, STT_OBJECT | STT_FUNC) || tls_get_addr_notype);
+                        && (matches!(symbol_type, STT_OBJECT | STT_FUNC)
+                            || explicit_ifunc_import
+                            || tls_get_addr_notype);
                     if !supported_import {
                         return Err(SharedObjectError::UndefinedNonlocal {
                             object_index: input.object_index,
