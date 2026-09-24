@@ -88,6 +88,15 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_interp(
     map_runtime_program_headers_impl(image, Some(dynamic), Some(interp), None, &[])
 }
 
+pub(crate) fn map_runtime_program_headers_with_dynamic_interp_and_relros(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+    interp: RuntimeInterpProgramHeader,
+    relro: &[RuntimeRelroProgramHeader],
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(image, Some(dynamic), Some(interp), None, relro)
+}
+
 fn map_runtime_program_headers_impl(
     mut image: ExecutableImage,
     dynamic: Option<RuntimeDynamicProgramHeader>,
