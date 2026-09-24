@@ -198,9 +198,9 @@ _start:
         "expected GOT/GLOB_DAT IFUNC binding:\n{relocations}"
     );
     assert!(
-        relocations.lines().any(|line| {
-            line.contains("R_X86_64_64") && line.contains("provider_value")
-        }),
+        relocations
+            .lines()
+            .any(|line| { line.contains("R_X86_64_64") && line.contains("provider_value") }),
         "expected writable function-pointer IFUNC binding:\n{relocations}"
     );
 
