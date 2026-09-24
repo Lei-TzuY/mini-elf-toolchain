@@ -16,7 +16,9 @@ const ELF64_SECTION_HEADER_SIZE: usize = 64;
 const ELF64_SYMBOL_SIZE: usize = 24;
 const EM_X86_64: u16 = 62;
 const ET_REL: u16 = 1;
+const SHT_PROGBITS: u32 = 1;
 const SHT_GROUP: u32 = 17;
+const SHF_LINK_ORDER: u64 = 0x80;
 const SHF_GROUP: u64 = 0x200;
 const SHN_XINDEX: u16 = 0xffff;
 const GRP_COMDAT: u32 = 1;
@@ -64,6 +66,46 @@ pub enum PartialLinkError {
         section_index: u16,
         link: u32,
         info: u32,
+    },
+    UnsupportedLinkOrderSectionType {
+        input_index: usize,
+        section_index: u16,
+        section_type: u32,
+    },
+    InvalidLinkOrderInfo {
+        input_index: usize,
+        section_index: u16,
+        info: u32,
+    },
+    InvalidLinkOrderTarget {
+        input_index: usize,
+        section_index: u16,
+        target_section_index: u32,
+        section_count: usize,
+    },
+    LinkOrderTargetNotAllocatable {
+        input_index: usize,
+        section_index: u16,
+        target_section_index: u16,
+    },
+    LinkOrderTargetIsLinkOrder {
+        input_index: usize,
+        section_index: u16,
+        target_section_index: u16,
+    },
+    LinkOrderTargetGrouped {
+        input_index: usize,
+        section_index: u16,
+        target_section_index: u16,
+    },
+    UnsupportedGroupedLinkOrderSection {
+        input_index: usize,
+        section_index: u16,
+    },
+    MissingLinkOrderTargetOutput {
+        input_index: usize,
+        section_index: u16,
+        target_section_index: u16,
     },
     UnsupportedGroupedAllocSection {
         input_index: usize,
@@ -311,6 +353,70 @@ impl fmt::Display for PartialLinkError {
             } => write!(
                 f,
                 "partial-link input {input_index} allocatable section {section_index} carries unsupported sh_link={link} sh_info={info}; bounded partial linking requires self-contained allocatable sections"
+            ),
+            Self::UnsupportedLinkOrderSectionType {
+                input_index,
+                section_index,
+                section_type,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHF_LINK_ORDER section {section_index} has unsupported type {section_type}; bounded link-order preservation supports allocatable SHT_PROGBITS only"
+            ),
+            Self::InvalidLinkOrderInfo {
+                input_index,
+                section_index,
+                info,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHF_LINK_ORDER section {section_index} has unsupported sh_info={info}; bounded link-order preservation requires sh_info=0"
+            ),
+            Self::InvalidLinkOrderTarget {
+                input_index,
+                section_index,
+                target_section_index,
+                section_count,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHF_LINK_ORDER section {section_index} links to section {target_section_index}, outside section count {section_count}"
+            ),
+            Self::LinkOrderTargetNotAllocatable {
+                input_index,
+                section_index,
+                target_section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHF_LINK_ORDER section {section_index} links to non-allocatable section {target_section_index}"
+            ),
+            Self::LinkOrderTargetIsLinkOrder {
+                input_index,
+                section_index,
+                target_section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHF_LINK_ORDER section {section_index} links to SHF_LINK_ORDER section {target_section_index}; chained link-order relationships are outside the bounded model"
+            ),
+            Self::LinkOrderTargetGrouped {
+                input_index,
+                section_index,
+                target_section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHF_LINK_ORDER section {section_index} links to grouped section {target_section_index}; COMDAT/group-coupled link-order semantics are outside the bounded model"
+            ),
+            Self::UnsupportedGroupedLinkOrderSection {
+                input_index,
+                section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHF_LINK_ORDER section {section_index} is itself grouped; grouped link-order sections are outside the bounded model"
+            ),
+            Self::MissingLinkOrderTargetOutput {
+                input_index,
+                section_index,
+                target_section_index,
+            } => write!(
+                f,
+                "partial-link input {input_index} SHF_LINK_ORDER section {section_index} cannot map linked section {target_section_index} into the partial-link output"
             ),
             Self::UnsupportedGroupedAllocSection {
                 input_index,
@@ -634,6 +740,14 @@ impl PartialLinkError {
             | Self::InvalidSectionNameOffset { input_index, .. }
             | Self::UnterminatedSectionName { input_index, .. }
             | Self::UnsupportedAllocSectionMetadata { input_index, .. }
+            | Self::UnsupportedLinkOrderSectionType { input_index, .. }
+            | Self::InvalidLinkOrderInfo { input_index, .. }
+            | Self::InvalidLinkOrderTarget { input_index, .. }
+            | Self::LinkOrderTargetNotAllocatable { input_index, .. }
+            | Self::LinkOrderTargetIsLinkOrder { input_index, .. }
+            | Self::LinkOrderTargetGrouped { input_index, .. }
+            | Self::UnsupportedGroupedLinkOrderSection { input_index, .. }
+            | Self::MissingLinkOrderTargetOutput { input_index, .. }
             | Self::UnsupportedGroupedAllocSection { input_index, .. }
             | Self::InvalidGroupEntrySize { input_index, .. }
             | Self::InvalidGroupAlignment { input_index, .. }
@@ -793,15 +907,19 @@ pub fn link_relocatable_objects_with_forced_undefined(
     let comdat_selection = select_comdat_groups(&parsed, &parsed_groups)?;
 
     let mut output_sections = Vec::<OutputSection>::new();
-    let mut section_maps = Vec::with_capacity(parsed.len());
+    let mut section_maps = parsed
+        .iter()
+        .map(|input| vec![None; input.object.sections.len()])
+        .collect::<Vec<_>>();
     let mut coalesced_canonical_sections = BTreeMap::<(Vec<u8>, u32, u64, u64), usize>::new();
 
+    // First place ordinary allocatable sections. SHF_LINK_ORDER sections are
+    // delayed until every bounded linked-to section has a stable output index.
     for (input_index, input) in parsed.iter().enumerate() {
         let names = section_names(input_index, input)?;
-        let mut mapping = vec![None; input.object.sections.len()];
 
         for (section_index, section) in input.object.sections.iter().enumerate() {
-            if section.flags & SHF_ALLOC == 0 {
+            if section.flags & SHF_ALLOC == 0 || section.flags & SHF_LINK_ORDER != 0 {
                 continue;
             }
             let section_index_u16 =
@@ -844,82 +962,156 @@ pub fn link_relocatable_objects_with_forced_undefined(
             };
 
             let placement = if let Some(output_slot) = existing {
-                let output_section_index = u16::try_from(output_slot + 1).map_err(|_| {
-                    PartialLinkError::TooManySections {
-                        count: output_slot + 5,
-                    }
-                })?;
-                let output = &mut output_sections[output_slot];
-                let contribution_offset =
-                    align_section_contribution(output.size, section.address_alignment).ok_or(
-                        PartialLinkError::SectionContributionOverflow {
-                            input_index,
-                            section_index: section_index_u16,
-                        },
-                    )?;
-                let new_size = contribution_offset.checked_add(section.size).ok_or(
-                    PartialLinkError::SectionContributionOverflow {
-                        input_index,
-                        section_index: section_index_u16,
-                    },
-                )?;
-
-                if section.section_type != SHT_NOBITS {
-                    let contribution_offset =
-                        usize::try_from(contribution_offset).map_err(|_| {
-                            PartialLinkError::SectionContributionOverflow {
-                                input_index,
-                                section_index: section_index_u16,
-                            }
-                        })?;
-                    if output.data.len() < contribution_offset {
-                        output.data.resize(contribution_offset, 0);
-                    }
-                    output.data.extend_from_slice(&data);
-                }
-                output.size = new_size;
-                output.alignment = output.alignment.max(section.address_alignment);
-
-                SectionPlacement {
-                    output_section_index,
-                    contribution_offset,
-                }
+                append_section_contribution(
+                    &mut output_sections,
+                    output_slot,
+                    section,
+                    &data,
+                    input_index,
+                    section_index_u16,
+                )?
             } else {
-                let output_index = output_sections
-                    .len()
-                    .checked_add(1)
-                    .ok_or(PartialLinkError::SizeOverflow("section count"))?;
-                if output_index >= usize::from(SHN_LORESERVE) {
-                    return Err(PartialLinkError::TooManySections {
-                        count: output_index + 4,
-                    });
-                }
-                let output_slot = output_sections.len();
-                output_sections.push(OutputSection {
-                    name: name.clone(),
-                    section_type: section.section_type,
-                    flags: section.flags,
-                    size: section.size,
-                    link: 0,
-                    info: 0,
-                    alignment: section.address_alignment,
-                    entry_size: section.entry_size,
+                let placement = push_output_alloc_section(
+                    &mut output_sections,
+                    name.clone(),
+                    section,
                     data,
-                    offset: 0,
-                });
+                )?;
                 if is_canonical_alloc_section_name(&name) && !grouped {
-                    coalesced_canonical_sections.insert(merge_key, output_slot);
+                    coalesced_canonical_sections
+                        .insert(merge_key, usize::from(placement.output_section_index - 1));
                 }
-                SectionPlacement {
-                    output_section_index: output_index as u16,
-                    contribution_offset: 0,
-                }
+                placement
             };
 
-            mapping[section_index] = Some(placement);
+            section_maps[input_index][section_index] = Some(placement);
         }
+    }
 
-        section_maps.push(mapping);
+    let mut coalesced_link_order_sections =
+        BTreeMap::<(Vec<u8>, u32, u64, u64, u16), usize>::new();
+
+    // Then place bounded SHF_LINK_ORDER sections and rewrite sh_link to the
+    // linked section's output index. Coalescing is allowed only when both the
+    // section metadata and final linked-to output section are identical.
+    for (input_index, input) in parsed.iter().enumerate() {
+        let names = section_names(input_index, input)?;
+
+        for (section_index, section) in input.object.sections.iter().enumerate() {
+            if section.flags & SHF_ALLOC == 0 || section.flags & SHF_LINK_ORDER == 0 {
+                continue;
+            }
+            let section_index_u16 =
+                u16::try_from(section_index).map_err(|_| PartialLinkError::TooManySections {
+                    count: input.object.sections.len(),
+                })?;
+            if comdat_selection.discarded_sections[input_index].contains(&section_index_u16) {
+                continue;
+            }
+            if section.section_type != SHT_PROGBITS {
+                return Err(PartialLinkError::UnsupportedLinkOrderSectionType {
+                    input_index,
+                    section_index: section_index_u16,
+                    section_type: section.section_type,
+                });
+            }
+            if section.info != 0 {
+                return Err(PartialLinkError::InvalidLinkOrderInfo {
+                    input_index,
+                    section_index: section_index_u16,
+                    info: section.info,
+                });
+            }
+            if section.flags & SHF_GROUP != 0
+                || parsed_groups[input_index]
+                    .member_sections
+                    .contains(&section_index_u16)
+            {
+                return Err(PartialLinkError::UnsupportedGroupedLinkOrderSection {
+                    input_index,
+                    section_index: section_index_u16,
+                });
+            }
+            let target_index = usize::try_from(section.link)
+                .ok()
+                .filter(|index| *index != 0 && *index < input.object.sections.len())
+                .ok_or(PartialLinkError::InvalidLinkOrderTarget {
+                    input_index,
+                    section_index: section_index_u16,
+                    target_section_index: section.link,
+                    section_count: input.object.sections.len(),
+                })?;
+            let target_section_index = target_index as u16;
+            let target = &input.object.sections[target_index];
+            if target.flags & SHF_ALLOC == 0 {
+                return Err(PartialLinkError::LinkOrderTargetNotAllocatable {
+                    input_index,
+                    section_index: section_index_u16,
+                    target_section_index,
+                });
+            }
+            if target.flags & SHF_LINK_ORDER != 0 {
+                return Err(PartialLinkError::LinkOrderTargetIsLinkOrder {
+                    input_index,
+                    section_index: section_index_u16,
+                    target_section_index,
+                });
+            }
+            if target.flags & SHF_GROUP != 0
+                || parsed_groups[input_index]
+                    .member_sections
+                    .contains(&target_section_index)
+            {
+                return Err(PartialLinkError::LinkOrderTargetGrouped {
+                    input_index,
+                    section_index: section_index_u16,
+                    target_section_index,
+                });
+            }
+            let target_placement = section_maps[input_index][target_index].ok_or(
+                PartialLinkError::MissingLinkOrderTargetOutput {
+                    input_index,
+                    section_index: section_index_u16,
+                    target_section_index,
+                },
+            )?;
+
+            let name = names[section_index].clone();
+            let data = section_bytes(input.file, section);
+            let merge_key = (
+                name.clone(),
+                section.section_type,
+                section.flags,
+                section.entry_size,
+                target_placement.output_section_index,
+            );
+            let placement = if let Some(&output_slot) =
+                coalesced_link_order_sections.get(&merge_key)
+            {
+                append_section_contribution(
+                    &mut output_sections,
+                    output_slot,
+                    section,
+                    &data,
+                    input_index,
+                    section_index_u16,
+                )?
+            } else {
+                let placement = push_output_alloc_section(
+                    &mut output_sections,
+                    name,
+                    section,
+                    data,
+                )?;
+                let output_slot = usize::from(placement.output_section_index - 1);
+                output_sections[output_slot].link =
+                    u32::from(target_placement.output_section_index);
+                coalesced_link_order_sections.insert(merge_key, output_slot);
+                placement
+            };
+
+            section_maps[input_index][section_index] = Some(placement);
+        }
     }
 
     let mut static_tables = Vec::<Option<Elf64SymbolTable>>::with_capacity(parsed.len());
@@ -1845,6 +2037,87 @@ fn parse_comdat_groups(
     Ok(ParsedComdatGroups {
         groups,
         member_sections,
+    })
+}
+
+fn append_section_contribution(
+    output_sections: &mut [OutputSection],
+    output_slot: usize,
+    section: &Elf64SectionHeader,
+    data: &[u8],
+    input_index: usize,
+    section_index: u16,
+) -> Result<SectionPlacement, PartialLinkError> {
+    let output_section_index =
+        u16::try_from(output_slot + 1).map_err(|_| PartialLinkError::TooManySections {
+            count: output_slot + 5,
+        })?;
+    let output = &mut output_sections[output_slot];
+    let contribution_offset =
+        align_section_contribution(output.size, section.address_alignment).ok_or(
+            PartialLinkError::SectionContributionOverflow {
+                input_index,
+                section_index,
+            },
+        )?;
+    let new_size = contribution_offset
+        .checked_add(section.size)
+        .ok_or(PartialLinkError::SectionContributionOverflow {
+            input_index,
+            section_index,
+        })?;
+
+    if section.section_type != SHT_NOBITS {
+        let contribution_offset = usize::try_from(contribution_offset).map_err(|_| {
+            PartialLinkError::SectionContributionOverflow {
+                input_index,
+                section_index,
+            }
+        })?;
+        if output.data.len() < contribution_offset {
+            output.data.resize(contribution_offset, 0);
+        }
+        output.data.extend_from_slice(data);
+    }
+    output.size = new_size;
+    output.alignment = output.alignment.max(section.address_alignment);
+
+    Ok(SectionPlacement {
+        output_section_index,
+        contribution_offset,
+    })
+}
+
+fn push_output_alloc_section(
+    output_sections: &mut Vec<OutputSection>,
+    name: Vec<u8>,
+    section: &Elf64SectionHeader,
+    data: Vec<u8>,
+) -> Result<SectionPlacement, PartialLinkError> {
+    let output_index = output_sections
+        .len()
+        .checked_add(1)
+        .ok_or(PartialLinkError::SizeOverflow("section count"))?;
+    if output_index >= usize::from(SHN_LORESERVE) {
+        return Err(PartialLinkError::TooManySections {
+            count: output_index + 4,
+        });
+    }
+    output_sections.push(OutputSection {
+        name,
+        section_type: section.section_type,
+        flags: section.flags,
+        size: section.size,
+        link: 0,
+        info: 0,
+        alignment: section.address_alignment,
+        entry_size: section.entry_size,
+        data,
+        offset: 0,
+    });
+    Ok(SectionPlacement {
+        output_section_index: output_index as u16,
+        contribution_offset: 0,
     })
 }
 
