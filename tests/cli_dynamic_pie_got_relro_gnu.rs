@@ -312,7 +312,7 @@ fn dynamic_pie_relro_keeps_lazy_plt_live_and_seals_ordinary_got() {
 }
 
 #[test]
-fn dynamic_pie_without_ordinary_got_does_not_claim_this_relro_slice() {
+fn dynamic_pie_without_ordinary_got_uses_metadata_relro_slice() {
     if !have_gnu_tools() {
         return;
     }
@@ -349,8 +349,8 @@ _start:
     let ours = link_mini(&dir, "mini-plt-only", &object, &provider, &interpreter);
     let headers = readelf(&ours, &["-lW"]);
     assert!(
-        !headers.contains("GNU_RELRO"),
-        "first bounded dynamic-PIE RELRO slice is intentionally ordinary-GOT-driven:\n{headers}"
+        headers.contains("GNU_RELRO"),
+        "dynamic PIE without loader-bound GOT state should protect its loader metadata:\n{headers}"
     );
 
     let _ = fs::remove_dir_all(dir);
