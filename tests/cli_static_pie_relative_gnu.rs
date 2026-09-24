@@ -249,7 +249,7 @@ _start:
 }
 
 #[test]
-fn relative_runtime_relocation_rejects_undefined_weak_symbol() {
+fn relative_runtime_relocation_preserves_undefined_weak_zero() {
     if !command_reports("as", "GNU assembler") {
         return;
     }
@@ -267,8 +267,15 @@ pointer:
 .section .text
 .globl _start
 _start:
+    lea pointer(%rip), %rbx
+    cmpq $0, (%rbx)
+    jne .Lfail
     mov $60, %rax
     xor %rdi, %rdi
+    syscall
+.Lfail:
+    mov $60, %rax
+    mov $1, %rdi
     syscall
 "#,
     );
@@ -281,7 +288,7 @@ _start:
     assert!(relocations.status.success());
     assert!(String::from_utf8_lossy(&relocations.stdout).contains("R_X86_64_64"));
 
-    let output = dir.join("must-not-exist");
+    let output = dir.join("weak-zero-pie");
     let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
         .arg(&output)
@@ -290,12 +297,29 @@ _start:
         .output()
         .unwrap();
 
-    assert!(!mini.status.success());
-    assert!(mini.stdout.is_empty());
-    let stderr = String::from_utf8_lossy(&mini.stderr);
-    assert!(stderr.contains("undefined weak"));
-    assert!(stderr.contains("R_X86_64_RELATIVE"));
-    assert!(!output.exists());
+    assert!(
+        mini.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
+    );
+
+    let dynamic_relocations = Command::new("readelf")
+        .args(["-rW", "--use-dynamic"])
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(dynamic_relocations.status.success());
+    assert!(
+        !String::from_utf8_lossy(&dynamic_relocations.stdout).contains("R_X86_64_"),
+        "undefined weak zero must not synthesize a runtime relocation: {}",
+        String::from_utf8_lossy(&dynamic_relocations.stdout)
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let status = Command::new(&output).status().unwrap();
+        assert!(status.success(), "{} returned {status}", output.display());
+    }
 
     let _ = fs::remove_dir_all(dir);
 }
