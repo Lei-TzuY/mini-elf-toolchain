@@ -35,6 +35,18 @@ fn dynamic_linker() -> Option<PathBuf> {
     .find(|path| path.is_file())
 }
 
+fn libc_path() -> Option<PathBuf> {
+    let output = Command::new("cc")
+        .arg("-print-file-name=libc.so.6")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
+    path.is_file().then_some(path)
+}
+
 fn temp_dir(label: &str) -> PathBuf {
     let nonce = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -120,6 +132,9 @@ fn dynamic_pie_tlsgd_import_binds_provider_tls_through_glibc() {
     let Some(interpreter) = dynamic_linker() else {
         return;
     };
+    let Some(libc) = libc_path() else {
+        return;
+    };
 
     let dir = temp_dir("runtime");
     let provider = build_provider(&dir);
@@ -163,6 +178,8 @@ _start:
         .arg(&interpreter)
         .arg("--needed-from")
         .arg(&provider)
+        .arg("--needed-from")
+        .arg(&libc)
         .args(["--runpath", "$ORIGIN"])
         .arg(&consumer)
         .output()
@@ -177,6 +194,10 @@ _start:
     assert!(
         dynamic.contains("NEEDED") && dynamic.contains("libprovider.so"),
         "{dynamic}"
+    );
+    assert!(
+        dynamic.contains("libc.so.6"),
+        "TLSGD resolver dependency must remain explicit:\n{dynamic}"
     );
     assert!(
         dynamic.contains("RUNPATH") && dynamic.contains("$ORIGIN"),
