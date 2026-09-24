@@ -94,38 +94,33 @@ weak_tls_probe:
             Self::TlsGd => {
                 assert!(
                     text.lines().any(|line| {
-                        line.contains("R_X86_64_DTPMOD64")
-                            && line.contains("provider_tls@VERS_1")
+                        line.contains("R_X86_64_DTPMOD64") && line.contains("provider_tls@VERS_1")
                     }),
                     "{text}"
                 );
                 assert!(
                     text.lines().any(|line| {
-                        line.contains("R_X86_64_DTPOFF64")
-                            && line.contains("provider_tls@VERS_1")
+                        line.contains("R_X86_64_DTPOFF64") && line.contains("provider_tls@VERS_1")
                     }),
                     "{text}"
                 );
                 assert!(
                     text.lines().any(|line| {
-                        line.contains("R_X86_64_JUMP_SLOT")
-                            && line.contains("__tls_get_addr")
+                        line.contains("R_X86_64_JUMP_SLOT") && line.contains("__tls_get_addr")
                     }),
                     "{text}"
                 );
             }
             Self::InitialExec => assert!(
                 text.lines().any(|line| {
-                    line.contains("R_X86_64_TPOFF64")
-                        && line.contains("provider_tls@VERS_1")
+                    line.contains("R_X86_64_TPOFF64") && line.contains("provider_tls@VERS_1")
                 }),
                 "{text}"
             ),
             Self::TlsDesc => {
                 assert!(
                     text.lines().any(|line| {
-                        line.contains("R_X86_64_TLSDESC")
-                            && line.contains("provider_tls@VERS_1")
+                        line.contains("R_X86_64_TLSDESC") && line.contains("provider_tls@VERS_1")
                     }),
                     "{text}"
                 );
@@ -390,11 +385,7 @@ fn versioned_weak_dynamic_pie_tls_preserves_symbol_and_version_semantics_across_
 
     for model in [Model::TlsGd, Model::InitialExec, Model::TlsDesc] {
         let bound_dir = dir.join(format!("{}-bound", model.label()));
-        let bound_object = assemble(
-            &bound_dir,
-            "consumer",
-            &model.source(true),
-        );
+        let bound_object = assemble(&bound_dir, "consumer", &model.source(true));
         let bound = link_versioned_weak(
             &bound_dir,
             model,
@@ -415,11 +406,7 @@ fn versioned_weak_dynamic_pie_tls_preserves_symbol_and_version_semantics_across_
         );
 
         let probe_dir = dir.join(format!("{}-probe", model.label()));
-        let probe_object = assemble(
-            &probe_dir,
-            "consumer",
-            &model.source(false),
-        );
+        let probe_object = assemble(&probe_dir, "consumer", &model.source(false));
         let probe = link_versioned_weak(
             &probe_dir,
             model,
