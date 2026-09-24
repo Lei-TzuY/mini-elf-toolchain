@@ -396,8 +396,7 @@ _start:
     );
     let input_relocations = readelf(&consumer, &["-rW"]);
     assert!(
-        input_relocations.contains("R_X86_64_TLSGD")
-            && input_relocations.contains("provider_tls"),
+        input_relocations.contains("R_X86_64_TLSGD") && input_relocations.contains("provider_tls"),
         "{input_relocations}"
     );
     let input_symbols = readelf(&consumer, &["-sW"]);
