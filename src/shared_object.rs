@@ -1501,16 +1501,17 @@ fn link_loader_image(
     masked_sites.extend(imports.tls_desc_call_sites.iter().copied());
     let relocation_inputs = mask_deferred_relocations(inputs, &masked_sites);
 
-    // First dynamic-executable RELRO slice: isolate only the ordinary GOT.
-    // TLS descriptors/GOT entries remain outside this bounded claim, while
-    // GOTPLT stays on its separate writable page so lazy JUMP_SLOT binding
-    // continues to work.
+    // Dynamic-executable partial RELRO: isolate the synthetic GOT whenever
+    // it carries ordinary or TLS loader state. The loader applies GLOB_DAT,
+    // TLSGD/TLSLD, TPOFF64, and TLSDESC relocations before sealing RELRO,
+    // while GOTPLT stays on its separate writable page so lazy JUMP_SLOT
+    // binding continues to work.
     let dynamic_pie_got_relro = dynamic_pie
-        && !imports.got_symbols.is_empty()
-        && imports.tls_gd_symbols.is_empty()
-        && imports.tls_ie_symbols.is_empty()
-        && imports.tls_desc_symbols.is_empty()
-        && !imports.uses_tls_ld;
+        && (!imports.got_symbols.is_empty()
+            || !imports.tls_gd_symbols.is_empty()
+            || !imports.tls_ie_symbols.is_empty()
+            || !imports.tls_desc_symbols.is_empty()
+            || imports.uses_tls_ld);
     let tls_requests = TlsSyntheticRequests {
         tls_gd_symbols: &imports.tls_gd_symbols,
         tls_ld_enabled: imports.uses_tls_ld,
