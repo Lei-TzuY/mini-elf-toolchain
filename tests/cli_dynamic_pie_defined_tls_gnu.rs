@@ -93,7 +93,7 @@ fn readelf(path: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn source_for(model: &str) -> String {
+fn source_for(model: &str, weak_definition: bool) -> String {
     let access = match model {
         "tlsgd" => {
             r#"
@@ -121,10 +121,15 @@ fn source_for(model: &str) -> String {
         }
         other => panic!("unknown TLS model {other}"),
     };
+    let binding = if weak_definition {
+        ".weak local_tls"
+    } else {
+        ".globl local_tls"
+    };
     format!(
         r#".section .tdata,"awT",@progbits
 .align 8
-.globl local_tls
+{binding}
 .type local_tls,@tls_object
 local_tls:
     .quad 42
@@ -206,10 +211,12 @@ fn dynamic_pie_defined_tls_executes_across_gd_ie_and_tlsdesc() {
     };
 
     let dir = temp_dir("models");
-    for model in ["tlsgd", "ie", "tlsdesc"] {
-        let object = assemble(&dir, model, &source_for(model));
-        let input_relocations = readelf(&object, &["-rW"]);
-        match model {
+    for (binding, weak_definition) in [("global", false), ("weak", true)] {
+        for model in ["tlsgd", "ie", "tlsdesc"] {
+            let label = format!("{binding}-{model}");
+            let object = assemble(&dir, &label, &source_for(model, weak_definition));
+            let input_relocations = readelf(&object, &["-rW"]);
+            match model {
             "tlsgd" => assert!(input_relocations.contains("R_X86_64_TLSGD")),
             "ie" => assert!(input_relocations.contains("R_X86_64_GOTTPOFF")),
             "tlsdesc" => {
@@ -219,30 +226,31 @@ fn dynamic_pie_defined_tls_executes_across_gd_ie_and_tlsdesc() {
             _ => unreachable!(),
         }
 
-        let ours = link_mini(
-            &dir,
-            model,
-            &object,
+            let ours = link_mini(
+                &dir,
+                &label,
+                &object,
             &interpreter,
-            (model == "tlsgd").then_some(libc.as_path()),
-        );
+                (model == "tlsgd").then_some(libc.as_path()),
+            );
 
-        let headers = readelf(&ours, &["-lW"]);
+            let headers = readelf(&ours, &["-lW"]);
         assert!(
             headers.contains("TLS"),
             "{model}: missing PT_TLS\n{headers}"
         );
 
-        let symbols = readelf(&ours, &["-sDW"]);
-        assert!(
-            symbols.lines().any(|line| {
-                line.contains(" GLOBAL ")
-                    && line.contains(" TLS ")
-                    && !line.contains(" UND ")
-                    && line.ends_with(" local_tls")
-            }),
-            "{model}: defined TLS symbol missing from dynsym\n{symbols}"
-        );
+            let symbols = readelf(&ours, &["-sDW"]);
+            let expected_binding = if weak_definition { " WEAK " } else { " GLOBAL " };
+            assert!(
+                symbols.lines().any(|line| {
+                    line.contains(expected_binding)
+                        && line.contains(" TLS ")
+                        && !line.contains(" UND ")
+                        && line.ends_with(" local_tls")
+                }),
+                "{binding}/{model}: defined TLS symbol missing from dynsym\n{symbols}"
+            );
 
         let relocations = readelf(&ours, &["-rW", "--use-dynamic"]);
         match model {
@@ -276,21 +284,22 @@ fn dynamic_pie_defined_tls_executes_across_gd_ie_and_tlsdesc() {
         assert_eq!(
             status.code(),
             Some(42),
-            "mini {model} executable should read its own TLS definition; status={status}"
+            "mini {binding}/{model} executable should read its own TLS definition; status={status}"
         );
 
-        let gnu = link_gnu(&dir, model, &object, &interpreter, &libc);
+            let gnu = link_gnu(&dir, &label, &object, &interpreter, &libc);
         let gnu_headers = readelf(&gnu, &["-lW"]);
         assert!(
             gnu_headers.contains("TLS"),
             "GNU {model} reference missing PT_TLS\n{gnu_headers}"
         );
         let gnu_status = Command::new(&gnu).status().unwrap();
-        assert_eq!(
-            gnu_status.code(),
-            Some(42),
-            "GNU {model} reference status={gnu_status}"
-        );
+            assert_eq!(
+                gnu_status.code(),
+                Some(42),
+                "GNU {binding}/{model} reference status={gnu_status}"
+            );
+        }
     }
 
     let _ = fs::remove_dir_all(dir);
