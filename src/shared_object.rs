@@ -1951,6 +1951,7 @@ fn validate_version_requirements(
     imports: &BTreeMap<Vec<u8>, ImportSymbol>,
     requirements: &[SharedVersionRequirement],
 ) -> Result<(), SharedObjectError> {
+    let mut requirement_names = BTreeSet::new();
     for requirement in requirements {
         if !checked_providers
             .iter()
@@ -1963,7 +1964,7 @@ fn validate_version_requirements(
         let valid = imports.get(&requirement.linker_name).is_some_and(|import| {
             import.version.as_deref() == Some(requirement.version.as_slice())
         });
-        if !valid {
+        if !valid || !requirement_names.insert(requirement.linker_name.as_slice()) {
             let name = imports
                 .get(&requirement.linker_name)
                 .map(|import| import.dynamic_name.clone())
@@ -1971,6 +1972,18 @@ fn validate_version_requirements(
             return Err(SharedObjectError::InvalidVersionRequirement {
                 name,
                 version: requirement.version.clone(),
+            });
+        }
+    }
+
+    for (linker_name, import) in imports {
+        let Some(version) = import.version.as_ref() else {
+            continue;
+        };
+        if !requirement_names.contains(linker_name.as_slice()) {
+            return Err(SharedObjectError::InvalidVersionRequirement {
+                name: import.dynamic_name.clone(),
+                version: version.clone(),
             });
         }
     }
