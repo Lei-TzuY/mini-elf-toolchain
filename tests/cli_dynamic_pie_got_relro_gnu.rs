@@ -244,8 +244,14 @@ fn assert_partial_relro_metadata(path: &Path) {
 
     let dynamic = readelf(path, &["-dW"]);
     assert!(
-        !dynamic.contains("BIND_NOW") && !dynamic.contains("FLAGS_1") || !dynamic.contains(" NOW "),
-        "bounded partial RELRO must preserve lazy PLT binding:\n{dynamic}"
+        !dynamic.contains("BIND_NOW"),
+        "bounded partial RELRO must not force eager PLT binding:\n{dynamic}"
+    );
+    assert!(
+        !dynamic
+            .lines()
+            .any(|line| line.contains("FLAGS_1") && line.contains(" NOW ")),
+        "bounded partial RELRO must not set DF_1_NOW:\n{dynamic}"
     );
 }
 
