@@ -22,6 +22,7 @@ fn command_available(program: &str) -> bool {
 
 fn have_tools() -> bool {
     command_reports("as", "GNU assembler")
+        && command_reports("ld", "GNU ld")
         && command_reports("readelf", "GNU readelf")
         && command_available("cc")
 }
@@ -92,11 +93,7 @@ fn readelf(path: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn build_provider(dir: &Path) -> PathBuf {
-    let object = assemble(
-        dir,
-        "provider",
-        r#".section .tdata,"awT",@progbits
+const PROVIDER_SOURCE: &str = r#".section .tdata,"awT",@progbits
 .align 8
 .globl provider_tls
 .type provider_tls,@tls_object
@@ -105,13 +102,32 @@ provider_tls:
 .size provider_tls, .-provider_tls
 
 .section .note.GNU-stack,"",@progbits
-"#,
-    );
+"#;
+
+fn build_provider(dir: &Path) -> PathBuf {
+    let object = assemble(dir, "provider", PROVIDER_SOURCE);
     let provider = dir.join("libprovider.so");
     let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
         .arg(&provider)
         .args(["--shared", "--soname", "libprovider.so"])
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    provider
+}
+
+fn build_gnu_provider(dir: &Path) -> PathBuf {
+    let object = assemble(dir, "provider-gnu", PROVIDER_SOURCE);
+    let provider = dir.join("libprovider-gnu.so");
+    let linked = Command::new("ld")
+        .args(["-shared", "-soname", "libprovider-gnu.so", "-o"])
+        .arg(&provider)
         .arg(&object)
         .output()
         .unwrap();
@@ -138,6 +154,7 @@ fn dynamic_pie_tlsgd_import_binds_provider_tls_through_glibc() {
 
     let dir = temp_dir("runtime");
     let provider = build_provider(&dir);
+    let gnu_provider = build_gnu_provider(&dir);
 
     let consumer = assemble(
         &dir,
@@ -232,6 +249,14 @@ _start:
         ours.display()
     );
 
+    let gnu_provider_symbols = readelf(&gnu_provider, &["-sDW"]);
+    assert!(
+        gnu_provider_symbols
+            .lines()
+            .any(|line| line.contains(" TLS ") && line.ends_with(" provider_tls")),
+        "{gnu_provider_symbols}"
+    );
+
     let gnu = dir.join("gnu-tlsgd-app");
     let gnu_link = Command::new("cc")
         .args(["-nostartfiles", "-fPIE", "-pie"])
@@ -243,7 +268,7 @@ _start:
         .arg(&consumer)
         .arg("-L")
         .arg(&dir)
-        .arg("-lprovider")
+        .arg("-lprovider-gnu")
         .output()
         .unwrap();
     assert!(
