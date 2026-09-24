@@ -553,7 +553,7 @@ impl fmt::Display for SharedObjectError {
             ),
             Self::CopyRelocationMixedReference { name } => write!(
                 f,
-                "dynamic PIE copy relocation {:?} is mixed with another loader-binding reference plane; bounded COPY support requires the symbol to be referenced only through copy-eligible PC32 sites",
+                "dynamic PIE copy relocation {:?} is mixed with an unsupported loader-binding reference plane; bounded COPY support permits copy-eligible PC32 sites plus ordinary GOTPCREL references to the same executable-owned copy symbol",
                 String::from_utf8_lossy(name)
             ),
             Self::MissingCopyRelocationTarget {
@@ -2353,7 +2353,9 @@ fn validate_inputs(
                             symbol_type,
                         });
                     }
-                    if noncopy_import_symbols.contains(symbol.name) {
+                    if noncopy_import_symbols.contains(symbol.name)
+                        && !got_symbols.contains(symbol.name)
+                    {
                         return Err(SharedObjectError::CopyRelocationMixedReference {
                             name: symbol.name.to_vec(),
                         });
@@ -2403,7 +2405,7 @@ fn validate_inputs(
                     });
                 }
 
-                if copy_symbols.contains(symbol.name) {
+                if copy_symbols.contains(symbol.name) && !is_got_import {
                     return Err(SharedObjectError::CopyRelocationMixedReference {
                         name: symbol.name.to_vec(),
                     });
