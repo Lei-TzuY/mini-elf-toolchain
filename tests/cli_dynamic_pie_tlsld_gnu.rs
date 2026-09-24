@@ -221,8 +221,7 @@ _start:
         "local symbol offsets must be linked into DTPOFF32 sites: {relocations}"
     );
     assert!(
-        relocations.contains("R_X86_64_JUMP_SLOT")
-            && relocations.contains("__tls_get_addr"),
+        relocations.contains("R_X86_64_JUMP_SLOT") && relocations.contains("__tls_get_addr"),
         "{relocations}"
     );
 
@@ -237,7 +236,10 @@ _start:
     let gnu_headers = readelf(&gnu, &["-lW"]);
     assert!(gnu_headers.contains("TLS"), "{gnu_headers}");
     let gnu_status = Command::new(&gnu).status().unwrap();
-    assert!(gnu_status.success(), "GNU TLSLD reference returned {gnu_status}");
+    assert!(
+        gnu_status.success(),
+        "GNU TLSLD reference returned {gnu_status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
