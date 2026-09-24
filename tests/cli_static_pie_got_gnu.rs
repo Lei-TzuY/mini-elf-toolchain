@@ -330,7 +330,6 @@ _start:
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 fn runtime_relocated_got_is_sealed_without_freezing_user_data() {
     if !have_gnu_tools() {
@@ -455,8 +454,7 @@ _start:
         String::from_utf8_lossy(&inspected.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&inspected.stdout)
-            .contains("Found 2 PT_GNU_RELRO segment(s)"),
+        String::from_utf8_lossy(&inspected.stdout).contains("Found 2 PT_GNU_RELRO segment(s)"),
         "{}",
         String::from_utf8_lossy(&inspected.stdout)
     );
