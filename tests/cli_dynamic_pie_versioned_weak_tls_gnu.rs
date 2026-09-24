@@ -329,13 +329,23 @@ fn assert_versioned_weak_metadata(path: &Path, model: Model) {
         "dynamic PIE must not inherit DSO-only DF_STATIC_TLS:\n{dynamic}"
     );
 
-    let versions = readelf(path, &["-VW"]);
-    let requirement = versions
-        .lines()
-        .find(|line| line.contains("Name: VERS_1"))
-        .unwrap_or_else(|| panic!("missing VERS_1 requirement:\n{versions}"));
+    let verneed = Command::new(env!("CARGO_BIN_EXE_mini-elf-verneed"))
+        .arg(path)
+        .output()
+        .unwrap();
     assert!(
-        requirement.contains("Flags: none"),
+        verneed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verneed.stderr)
+    );
+    let verneed = String::from_utf8_lossy(&verneed.stdout);
+    assert!(verneed.contains("libprovider.so:"), "{verneed}");
+    let requirement = verneed
+        .lines()
+        .find(|line| line.contains("name=VERS_1"))
+        .unwrap_or_else(|| panic!("missing VERS_1 requirement:\n{verneed}"));
+    assert!(
+        requirement.contains("flags=0x0000"),
         "weak symbol binding must not weaken the version-node requirement: {requirement}"
     );
 
