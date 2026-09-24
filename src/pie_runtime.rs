@@ -49,7 +49,7 @@ pub struct PieRuntimeOutput {
     pub sections: Vec<RelocatedSectionImage>,
     pub entry_address: u64,
     pub dynamic: Option<PieDynamicSegment>,
-    pub relro: Option<PieRelroSegment>,
+    pub relro: Vec<PieRelroSegment>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +140,11 @@ pub enum PieRuntimeError {
     RuntimeSectionTooLarge,
     InvalidPageAlignment {
         alignment: u64,
+    },
+    InvalidRelroRange {
+        address: u64,
+        size: u64,
+        page_alignment: u64,
     },
     TrampolineBranchOutOfRange,
 }
@@ -268,6 +273,14 @@ impl fmt::Display for PieRuntimeError {
                 f,
                 "PIE runtime page alignment {alignment} must be a non-zero power of two"
             ),
+            Self::InvalidRelroRange {
+                address,
+                size,
+                page_alignment,
+            } => write!(
+                f,
+                "PIE RELRO range {address:#x}..+{size:#x} must be non-empty and start on page alignment {page_alignment:#x}"
+            ),
             Self::TrampolineBranchOutOfRange => {
                 write!(f, "PIE self-relocation trampoline branch exceeds rel8 range")
             }
@@ -291,6 +304,7 @@ pub fn add_runtime_relative_relocations(
     mut sections: Vec<RelocatedSectionImage>,
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
     got_entries: &BTreeMap<Vec<u8>, u64>,
+    got_relro: Option<PieRelroSegment>,
     user_entry_address: u64,
     page_alignment: u64,
 ) -> Result<PieRuntimeOutput, PieRuntimeError> {
@@ -307,7 +321,7 @@ pub fn add_runtime_relative_relocations(
             sections,
             entry_address: user_entry_address,
             dynamic: None,
-            relro: None,
+            relro: Vec::new(),
         });
     }
     let max_end = sections.iter().try_fold(0_u64, |max_end, section| {
@@ -324,17 +338,23 @@ pub fn add_runtime_relative_relocations(
             .ok_or(PieRuntimeError::RuntimeAddressOverflow)?,
         page_alignment,
     )?;
-    // The RELRO page is the page-aligned runtime .dynamic page. The trampoline
-    // must know its address before final emission, but the address itself depends
-    // on the fixed-size trampoline. Build once with a placeholder to establish
-    // the size, then rebuild with the checked final RELRO address.
+    // The trampoline size depends on how many independently protected RELRO
+    // ranges exist. Build once with a placeholder .dynamic range to establish
+    // the final address, then rebuild with the checked concrete ranges.
+    let mut prototype_relro = Vec::new();
+    if let Some(got_relro) = got_relro {
+        prototype_relro.push(got_relro);
+    }
+    prototype_relro.push(PieRelroSegment {
+        address: 0,
+        size: 5 * ELF64_DYN_SIZE,
+    });
     let trampoline_prototype = build_trampoline(
         trampoline_address,
         rela_address,
         relocation_count,
         user_entry_address,
-        0,
-        page_alignment,
+        &prototype_relro,
     )?;
     let dynamic_address = align_up(
         trampoline_address
@@ -342,18 +362,28 @@ pub fn add_runtime_relative_relocations(
             .ok_or(PieRuntimeError::RuntimeAddressOverflow)?,
         page_alignment,
     )?;
+    let dynamic = build_dynamic_table(rela_address, rela_bytes.len(), relocation_count)?;
+    let dynamic_relro = PieRelroSegment {
+        address: dynamic_address,
+        size: u64::try_from(dynamic.len())
+            .map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?,
+    };
+    let mut relro = Vec::new();
+    if let Some(got_relro) = got_relro {
+        relro.push(got_relro);
+    }
+    relro.push(dynamic_relro);
+    for segment in &relro {
+        validate_relro_segment(*segment, page_alignment)?;
+    }
     let trampoline = build_trampoline(
         trampoline_address,
         rela_address,
         relocation_count,
         user_entry_address,
-        dynamic_address,
-        page_alignment,
+        &relro,
     )?;
     debug_assert_eq!(trampoline.len(), trampoline_prototype.len());
-    let dynamic = build_dynamic_table(rela_address, rela_bytes.len(), relocation_count)?;
-    let relro_size =
-        u64::try_from(dynamic.len()).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
 
     sections.push(runtime_section(
         PIE_RELA_SECTION_INDEX,
@@ -384,10 +414,7 @@ pub fn add_runtime_relative_relocations(
             address: dynamic_address,
             size: 5 * ELF64_DYN_SIZE,
         }),
-        relro: Some(PieRelroSegment {
-            address: dynamic_address,
-            size: relro_size,
-        }),
+        relro,
     })
 }
 
@@ -664,13 +691,26 @@ fn push_dynamic(bytes: &mut Vec<u8>, tag: i64, value: u64) {
     bytes.extend_from_slice(&value.to_le_bytes());
 }
 
+fn validate_relro_segment(
+    segment: PieRelroSegment,
+    page_alignment: u64,
+) -> Result<(), PieRuntimeError> {
+    if segment.size == 0 || segment.address & (page_alignment - 1) != 0 {
+        return Err(PieRuntimeError::InvalidRelroRange {
+            address: segment.address,
+            size: segment.size,
+            page_alignment,
+        });
+    }
+    Ok(())
+}
+
 fn build_trampoline(
     trampoline_address: u64,
     rela_address: u64,
     relocation_count: usize,
     user_entry_address: u64,
-    relro_address: u64,
-    relro_protection_size: u64,
+    relro: &[PieRelroSegment],
 ) -> Result<Vec<u8>, PieRuntimeError> {
     let relocation_count =
         u64::try_from(relocation_count).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
@@ -708,28 +748,31 @@ fn build_trampoline(
     patch_rel8(&mut bytes, done_disp, done)?;
     patch_rel8(&mut bytes, loop_disp, loop_start)?;
 
-    // Seal the page containing runtime-owned .dynamic metadata before user
-    // code runs. Linux x86-64 syscall ABI: mprotect(addr, len, PROT_READ).
-    push_movabs(&mut bytes, 0xbf, relro_address);
-    bytes.extend_from_slice(&[0x48, 0x01, 0xdf]);
-    push_movabs(&mut bytes, 0xbe, relro_protection_size);
-    push_movabs(&mut bytes, 0xba, PROT_READ);
-    push_movabs(&mut bytes, 0xb8, SYS_MPROTECT);
-    bytes.extend_from_slice(&[0x0f, 0x05]);
-    bytes.extend_from_slice(&[0x48, 0x85, 0xc0]);
-    bytes.push(0x78);
-    let mprotect_fail_disp = bytes.len();
-    bytes.push(0);
+    // Seal every independent post-relocation region before user code runs.
+    // Linux x86-64 syscall ABI: mprotect(addr, len, PROT_READ).
+    for segment in relro {
+        push_movabs(&mut bytes, 0xbf, segment.address);
+        bytes.extend_from_slice(&[0x48, 0x01, 0xdf]);
+        push_movabs(&mut bytes, 0xbe, segment.size);
+        push_movabs(&mut bytes, 0xba, PROT_READ);
+        push_movabs(&mut bytes, 0xb8, SYS_MPROTECT);
+        bytes.extend_from_slice(&[0x0f, 0x05]);
+        bytes.extend_from_slice(&[0x48, 0x85, 0xc0]);
+        bytes.push(0x79);
+        let protected_disp = bytes.len();
+        bytes.push(0);
+
+        push_movabs(&mut bytes, 0xb8, SYS_EXIT);
+        push_movabs(&mut bytes, 0xbf, RELRO_FAILURE_EXIT_CODE);
+        bytes.extend_from_slice(&[0x0f, 0x05, 0x0f, 0x0b]);
+
+        let protected = bytes.len();
+        patch_rel8(&mut bytes, protected_disp, protected)?;
+    }
 
     push_movabs(&mut bytes, 0xb8, user_entry_address);
     bytes.extend_from_slice(&[0x48, 0x01, 0xd8]);
     bytes.extend_from_slice(&[0xff, 0xe0]);
-
-    let mprotect_fail = bytes.len();
-    patch_rel8(&mut bytes, mprotect_fail_disp, mprotect_fail)?;
-    push_movabs(&mut bytes, 0xb8, SYS_EXIT);
-    push_movabs(&mut bytes, 0xbf, RELRO_FAILURE_EXIT_CODE);
-    bytes.extend_from_slice(&[0x0f, 0x05, 0x0f, 0x0b]);
 
     Ok(bytes)
 }
