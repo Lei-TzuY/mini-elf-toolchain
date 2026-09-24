@@ -231,12 +231,15 @@ fn dynamic_pie_executes_direct_provider_copy_relocation() {
     );
     let gnu_relocations = readelf(&gnu, &["-rW", "--use-dynamic"]);
     assert!(
-        gnu_relocations.contains("R_X86_64_COPY")
-            && gnu_relocations.contains("provider_value"),
+        gnu_relocations.contains("R_X86_64_COPY") && gnu_relocations.contains("provider_value"),
         "{gnu_relocations}"
     );
     let gnu_status = Command::new(&gnu).status().unwrap();
-    assert_eq!(gnu_status.code(), Some(42), "GNU reference status={gnu_status}");
+    assert_eq!(
+        gnu_status.code(),
+        Some(42),
+        "GNU reference status={gnu_status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
