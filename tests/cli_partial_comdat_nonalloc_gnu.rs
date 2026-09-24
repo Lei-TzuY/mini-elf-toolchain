@@ -103,17 +103,17 @@ fn poison_grouped_nonalloc_sh_link(path: &Path) {
         const SHT_PROGBITS: u32 = 1;
         const SHF_ALLOC: u64 = 0x2;
         const SHF_GROUP: u64 = 0x200;
-        if section_type == SHT_PROGBITS
-            && flags & SHF_GROUP != 0
-            && flags & SHF_ALLOC == 0
-        {
+        if section_type == SHT_PROGBITS && flags & SHF_GROUP != 0 && flags & SHF_ALLOC == 0 {
             bytes[section + 40..section + 44].copy_from_slice(&1_u32.to_le_bytes());
             changed = true;
             break;
         }
     }
 
-    assert!(changed, "fixture did not contain grouped non-alloc SHT_PROGBITS");
+    assert!(
+        changed,
+        "fixture did not contain grouped non-alloc SHT_PROGBITS"
+    );
     fs::write(path, bytes).unwrap();
 }
 
