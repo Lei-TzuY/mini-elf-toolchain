@@ -570,12 +570,11 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
                 ));
             }
             let mask = alignment - 1;
-            let size = got_size
-                .checked_add(mask)
-                .map(|sum| sum & !mask)
-                .ok_or(RelocatedSectionError::GotSizeOverflow {
+            let size = got_size.checked_add(mask).map(|sum| sum & !mask).ok_or(
+                RelocatedSectionError::GotSizeOverflow {
                     symbol_count: got_symbol_count,
-                })?;
+                },
+            )?;
             (size, alignment)
         } else {
             (got_size, GOT_ALIGNMENT)
