@@ -2110,15 +2110,13 @@ fn validate_inputs(
                             || symbol.symbol.other != 0
                             || symbol_type != STT_TLS
                         {
-                            return Err(
-                                SharedObjectError::DynamicExecutableTlsModelUnsupported {
-                                    object_index: input.object_index,
-                                    rela_section_index: table.section_index,
-                                    relocation_index,
-                                    relocation_type: relocation.relocation_type,
-                                    name: symbol.name.to_vec(),
-                                },
-                            );
+                            return Err(SharedObjectError::DynamicExecutableTlsModelUnsupported {
+                                object_index: input.object_index,
+                                rela_section_index: table.section_index,
+                                relocation_index,
+                                relocation_type: relocation.relocation_type,
+                                name: symbol.name.to_vec(),
+                            });
                         }
                     }
                     let definition = definitions.get(symbol.name);
