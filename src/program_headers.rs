@@ -56,28 +56,6 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_stack(
     map_runtime_program_headers_impl(image, Some(dynamic), Some(stack), &[])
 }
 
-pub(crate) fn map_runtime_program_headers_with_dynamic_and_relro(
-    image: ExecutableImage,
-    dynamic: RuntimeDynamicProgramHeader,
-    relro: RuntimeRelroProgramHeader,
-) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, std::slice::from_ref(&relro))
-}
-
-pub(crate) fn map_runtime_program_headers_with_dynamic_stack_and_relro(
-    image: ExecutableImage,
-    dynamic: RuntimeDynamicProgramHeader,
-    stack: RuntimeStackProgramHeader,
-    relro: RuntimeRelroProgramHeader,
-) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(
-        image,
-        Some(dynamic),
-        Some(stack),
-        std::slice::from_ref(&relro),
-    )
-}
-
 pub(crate) fn map_runtime_program_headers_with_dynamic_and_relros(
     image: ExecutableImage,
     dynamic: RuntimeDynamicProgramHeader,
