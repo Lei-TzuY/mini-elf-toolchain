@@ -171,13 +171,7 @@ fn link_mini(
     output
 }
 
-fn link_gnu(
-    dir: &Path,
-    model: &str,
-    object: &Path,
-    interpreter: &Path,
-    libc: &Path,
-) -> PathBuf {
+fn link_gnu(dir: &Path, model: &str, object: &Path, interpreter: &Path, libc: &Path) -> PathBuf {
     let output = dir.join(format!("gnu-{model}"));
     let mut command = Command::new("ld");
     command
