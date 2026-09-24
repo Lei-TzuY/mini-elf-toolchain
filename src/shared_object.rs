@@ -2190,7 +2190,8 @@ fn validate_inputs(
                         | R_X86_64_GOTTPOFF
                         | R_X86_64_TLSLD
                         | R_X86_64_DTPOFF32
-                ) && !(options.allow_copy_relocations && relocation.relocation_type == R_X86_64_PC32)
+                ) && !(options.allow_copy_relocations
+                    && relocation.relocation_type == R_X86_64_PC32)
             }) {
                 return Err(SharedObjectError::RelocationUnsupported {
                     object_index: input.object_index,
