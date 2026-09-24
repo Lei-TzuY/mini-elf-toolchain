@@ -1857,7 +1857,8 @@ fn link_loader_image(
     let metadata_size = if metadata_relro {
         let padded = align_up(unpadded_metadata_size, page_alignment)
             .ok_or(SharedObjectError::AddressOverflow)?;
-        let padded_len = usize::try_from(padded).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        let padded_len =
+            usize::try_from(padded).map_err(|_| SharedObjectError::MetadataTooLarge)?;
         metadata.bytes.resize(padded_len, 0);
         padded
     } else {
