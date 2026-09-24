@@ -25,6 +25,7 @@ use crate::relocated_sections::{
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
+use crate::synthetic_ids::{DYNAMIC_INTERP_OBJECT_INDEX, SHARED_METADATA_OBJECT_INDEX};
 use crate::tls::{
     compute_static_tls_layout, inject_static_tls_program_header, StaticTlsLayout,
     StaticTlsLayoutError, StaticTlsProgramHeaderError,
@@ -38,9 +39,7 @@ use crate::x86_64_relocations::{
 };
 
 const SHT_PROGBITS: u32 = 1;
-const SHARED_METADATA_OBJECT_INDEX: usize = usize::MAX - 3;
 const SHARED_METADATA_SECTION_INDEX: u16 = 1;
-const DYNAMIC_INTERP_OBJECT_INDEX: usize = usize::MAX - 4;
 const DYNAMIC_INTERP_SECTION_INDEX: u16 = 1;
 const ELF64_SYMBOL_SIZE: usize = 24;
 const ELF64_DYNAMIC_SIZE: usize = 16;
