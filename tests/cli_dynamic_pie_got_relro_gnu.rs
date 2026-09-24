@@ -164,6 +164,126 @@ _start:
     )
 }
 
+fn metadata_probe_source() -> &'static str {
+    r#".text
+.globl provider_value
+.type provider_value,@object
+.globl provider_func
+.type provider_func,@function
+
+.globl _start
+.type _start,@function
+_start:
+    # Prove ordinary GOT binding completed before probing loader metadata.
+    lea provider_value@GOTPCREL(%rip), %r12
+    mov (%r12), %rbx
+    cmpq $42, (%rbx)
+    jne .Lfail
+
+    # Lazy GOTPLT must remain writable and reusable outside RELRO.
+    call provider_func@PLT
+    cmp $7, %eax
+    jne .Lfail
+    call provider_func@PLT
+    cmp $7, %eax
+    jne .Lfail
+
+    # Walk argv and envp to the auxiliary vector.
+    lea 8(%rsp), %rsi
+.Largv:
+    mov (%rsi), %rax
+    add $8, %rsi
+    test %rax, %rax
+    jne .Largv
+.Lenv:
+    mov (%rsi), %rax
+    add $8, %rsi
+    test %rax, %rax
+    jne .Lenv
+
+    xor %r13, %r13
+    xor %r14, %r14
+    xor %r15, %r15
+.Laux:
+    mov (%rsi), %rax
+    mov 8(%rsi), %rdx
+    test %rax, %rax
+    je .Laux_done
+    cmp $3, %rax
+    je .Lset_phdr
+    cmp $4, %rax
+    je .Lset_phent
+    cmp $5, %rax
+    je .Lset_phnum
+.Laux_next:
+    add $16, %rsi
+    jmp .Laux
+.Lset_phdr:
+    mov %rdx, %r13
+    jmp .Laux_next
+.Lset_phent:
+    mov %rdx, %r14
+    jmp .Laux_next
+.Lset_phnum:
+    mov %rdx, %r15
+    jmp .Laux_next
+
+.Laux_done:
+    test %r13, %r13
+    je .Lfail
+    test %r14, %r14
+    je .Lfail
+    test %r15, %r15
+    je .Lfail
+
+    # Find PT_PHDR and PT_DYNAMIC link-time virtual addresses.
+    xor %r8, %r8
+    xor %r9, %r9
+    mov %r13, %rsi
+    mov %r15, %rcx
+.Lphdr_loop:
+    test %rcx, %rcx
+    je .Lphdr_done
+    mov (%rsi), %eax
+    cmp $6, %eax
+    jne .Lcheck_dynamic
+    mov 16(%rsi), %r8
+.Lcheck_dynamic:
+    cmp $2, %eax
+    jne .Lphdr_next
+    mov 16(%rsi), %r9
+.Lphdr_next:
+    add %r14, %rsi
+    dec %rcx
+    jmp .Lphdr_loop
+
+.Lphdr_done:
+    test %r8, %r8
+    je .Lfail
+    test %r9, %r9
+    je .Lfail
+
+    # AT_PHDR - PT_PHDR.p_vaddr gives load bias. The coalesced RELRO range
+    # must cover PT_DYNAMIC even when an ordinary GOT interval is present.
+    mov %r13, %rax
+    sub %r8, %rax
+    add %r9, %rax
+    movb $0, (%rax)
+
+    mov $60, %eax
+    mov $99, %edi
+    syscall
+
+.Lfail:
+    mov $60, %eax
+    mov $77, %edi
+    syscall
+.size _start, .-_start
+
+.section .note.GNU-stack,"",@progbits
+"#
+}
+
 fn link_mini(
     dir: &Path,
     name: &str,
@@ -306,6 +426,59 @@ fn dynamic_pie_relro_keeps_lazy_plt_live_and_seals_ordinary_got() {
         gnu_probe_status.signal(),
         Some(11),
         "GNU partial RELRO reference must fault on the same ordinary GOT write; status={gnu_probe_status}"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dynamic_pie_coalesces_got_and_metadata_into_one_enforced_relro_interval() {
+    if !have_gnu_tools() {
+        return;
+    }
+    let Some(interpreter) = dynamic_linker() else {
+        return;
+    };
+
+    use std::os::unix::process::ExitStatusExt;
+
+    let dir = temp_dir("coalesced");
+    let provider = provider(&dir);
+    let object = assemble(&dir, "metadata-probe", metadata_probe_source());
+    let ours = link_mini(&dir, "mini-coalesced", &object, &provider, &interpreter);
+
+    let relro = Command::new(env!("CARGO_BIN_EXE_mini-elf-relro"))
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        relro.status.success(),
+        "{}",
+        String::from_utf8_lossy(&relro.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&relro.stdout).contains("Found 1 PT_GNU_RELRO segment(s)"),
+        "{}",
+        String::from_utf8_lossy(&relro.stdout)
+    );
+    assert_partial_relro_metadata(&ours);
+
+    let status = Command::new(&ours).status().unwrap();
+    assert_eq!(
+        status.signal(),
+        Some(11),
+        "{} must fault on PT_DYNAMIC after GOT binding and two lazy PLT calls; status={status}",
+        ours.display()
+    );
+
+    let gnu = link_gnu(&dir, "gnu-coalesced", &object, &interpreter);
+    assert_partial_relro_metadata(&gnu);
+    let gnu_status = Command::new(&gnu).status().unwrap();
+    assert_eq!(
+        gnu_status.signal(),
+        Some(11),
+        "GNU partial RELRO reference must also protect PT_DYNAMIC while preserving lazy PLT; status={gnu_status}"
     );
 
     let _ = fs::remove_dir_all(dir);
