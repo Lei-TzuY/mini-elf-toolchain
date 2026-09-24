@@ -16,7 +16,7 @@ use crate::permission_layout::{
     layout_sections_by_permissions, PermissionLayoutError, PermissionLayoutInput,
 };
 use crate::relocations::Elf64RelaTable;
-use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, STB_GLOBAL, STB_WEAK};
+use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, SHN_UNDEF, STB_GLOBAL, STB_WEAK};
 use crate::x86_64_relocations::{
     is_static_got_entry_type, is_static_tls_gotpcrel_type, is_tls_desc_address_relocation_type,
     is_tls_gd_relocation_type, is_tls_ld_relocation_type, R_X86_64_PLT32,
@@ -799,13 +799,15 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
                 bytes.extend_from_slice(&0_u64.to_le_bytes());
                 continue;
             }
-            let address = context
-                .global_addresses()
-                .get(name)
-                .copied()
-                .ok_or_else(|| RelocatedSectionError::MissingGotSymbolAddress {
-                    name: name.clone(),
-                })?;
+            let address = match context.global_addresses().get(name).copied() {
+                Some(address) => address,
+                None if is_unresolved_weak_symbol(inputs, name)? => 0,
+                None => {
+                    return Err(RelocatedSectionError::MissingGotSymbolAddress {
+                        name: name.clone(),
+                    });
+                }
+            };
             bytes.extend_from_slice(&address.to_le_bytes());
         }
         for _ in &tls_got_symbols {
@@ -1124,6 +1126,36 @@ fn append_rip_indirect(
     bytes.extend_from_slice(&opcode);
     bytes.extend_from_slice(&displacement.to_le_bytes());
     Ok(())
+}
+
+fn is_unresolved_weak_symbol(
+    inputs: &[LinkerInputObject<'_>],
+    name: &[u8],
+) -> Result<bool, RelocatedSectionError> {
+    for input in inputs {
+        for table in &input.object.symbol_tables {
+            let symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                table,
+                input.object_index,
+            )
+            .map_err(|source| {
+                RelocatedSectionError::Symbols(LinkSymbolError::ObjectSymbols {
+                    object_index: input.object_index,
+                    source,
+                })
+            })?;
+            if symbols.iter().any(|symbol| {
+                symbol.name == name
+                    && symbol.symbol.info >> 4 == STB_WEAK
+                    && symbol.symbol.section_index == SHN_UNDEF
+            }) {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
 }
 
 fn collect_static_got_symbols(

@@ -1,5 +1,5 @@
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::link_symbols::LinkSymbolError;
 use crate::linker_input::LinkerInputObject;
@@ -87,12 +87,6 @@ pub enum PieRuntimeError {
         binding: u8,
     },
     AbsoluteSymbol {
-        object_index: usize,
-        rela_section_index: u16,
-        relocation_index: usize,
-        symbol_index: u32,
-    },
-    UndefinedWeakSymbol {
         object_index: usize,
         rela_section_index: u16,
         relocation_index: usize,
@@ -202,15 +196,6 @@ impl fmt::Display for PieRuntimeError {
             } => write!(
                 f,
                 "object {object_index} RELA section {rela_section_index} relocation {relocation_index} symbol {symbol_index} resolves to SHN_ABS and cannot become R_X86_64_RELATIVE"
-            ),
-            Self::UndefinedWeakSymbol {
-                object_index,
-                rela_section_index,
-                relocation_index,
-                symbol_index,
-            } => write!(
-                f,
-                "object {object_index} RELA section {rela_section_index} relocation {relocation_index} references undefined weak symbol {symbol_index}; zero-valued weak semantics cannot become R_X86_64_RELATIVE"
             ),
             Self::MissingGlobalDefinition {
                 object_index,
@@ -464,6 +449,7 @@ fn collect_runtime_relocations(
     got_entries: &BTreeMap<Vec<u8>, u64>,
     enable_ifunc: bool,
 ) -> Result<(Vec<RuntimeRelocation>, usize), PieRuntimeError> {
+    let unresolved_weak_names = collect_unresolved_weak_names(inputs)?;
     let layout = sections
         .iter()
         .map(|section| crate::layout::LaidOutSection {
@@ -567,12 +553,7 @@ fn collect_runtime_relocations(
                     STB_GLOBAL | STB_WEAK => {
                         let Some(definition) = definitions.get(symbol.name) else {
                             if binding == STB_WEAK && symbol.symbol.section_index == SHN_UNDEF {
-                                return Err(PieRuntimeError::UndefinedWeakSymbol {
-                                    object_index: input.object_index,
-                                    rela_section_index: table.section_index,
-                                    relocation_index,
-                                    symbol_index: relocation.symbol_index,
-                                });
+                                continue;
                             }
                             return Err(PieRuntimeError::MissingGlobalDefinition {
                                 object_index: input.object_index,
@@ -652,9 +633,12 @@ fn collect_runtime_relocations(
     }
 
     for (name, entry_address) in got_entries {
-        let definition = definitions
-            .get(name)
-            .ok_or_else(|| PieRuntimeError::MissingGotDefinition { name: name.clone() })?;
+        let Some(definition) = definitions.get(name) else {
+            if unresolved_weak_names.contains(name) {
+                continue;
+            }
+            return Err(PieRuntimeError::MissingGotDefinition { name: name.clone() });
+        };
         if definition.symbol.section_index == SHN_ABS {
             continue;
         }
@@ -710,6 +694,37 @@ fn collect_runtime_relocations(
     let relative_count = runtime.len();
     runtime.extend(irelative);
     Ok((runtime, relative_count))
+}
+
+fn collect_unresolved_weak_names(
+    inputs: &[LinkerInputObject<'_>],
+) -> Result<BTreeSet<Vec<u8>>, PieRuntimeError> {
+    let mut names = BTreeSet::new();
+    for input in inputs {
+        for table in &input.object.symbol_tables {
+            let symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                table,
+                input.object_index,
+            )
+            .map_err(|source| {
+                PieRuntimeError::Symbols(LinkSymbolError::ObjectSymbols {
+                    object_index: input.object_index,
+                    source,
+                })
+            })?;
+            for symbol in symbols {
+                if symbol.symbol.info >> 4 == STB_WEAK
+                    && symbol.symbol.section_index == SHN_UNDEF
+                    && !symbol.name.is_empty()
+                {
+                    names.insert(symbol.name.to_vec());
+                }
+            }
+        }
+    }
+    Ok(names)
 }
 
 fn runtime_relocation_kind(
