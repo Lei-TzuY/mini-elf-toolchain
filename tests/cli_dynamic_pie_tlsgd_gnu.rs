@@ -463,7 +463,7 @@ _start:
 
 #[test]
 #[cfg(target_os = "linux")]
-fn dynamic_pie_rejects_tlsdesc_until_separately_qualified() {
+fn dynamic_pie_rejects_weak_tlsdesc_until_separately_qualified() {
     if !have_tools() {
         return;
     }
@@ -471,7 +471,7 @@ fn dynamic_pie_rejects_tlsdesc_until_separately_qualified() {
         return;
     };
 
-    let dir = temp_dir("tlsdesc-rejected");
+    let dir = temp_dir("weak-tlsdesc-rejected");
     let provider = build_provider(&dir);
     let consumer = assemble(
         &dir,
@@ -479,7 +479,7 @@ fn dynamic_pie_rejects_tlsdesc_until_separately_qualified() {
         r#".text
 .globl _start
 .type _start,@function
-.extern provider_tls
+.weak provider_tls
 .type provider_tls,@tls_object
 _start:
     leaq provider_tls@TLSDESC(%rip), %rax
@@ -500,7 +500,18 @@ _start:
         "{input_relocations}"
     );
 
-    let output = dir.join("must-not-exist-tlsdesc");
+    let input_symbols = readelf(&consumer, &["-sW"]);
+    assert!(
+        input_symbols.lines().any(|line| {
+            line.contains("WEAK")
+                && line.contains(" TLS ")
+                && line.contains(" UND ")
+                && line.ends_with(" provider_tls")
+        }),
+        "{input_symbols}"
+    );
+
+    let output = dir.join("must-not-exist-weak-tlsdesc");
     let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
         .arg(&output)
