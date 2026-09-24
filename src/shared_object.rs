@@ -1158,15 +1158,9 @@ impl LoaderTlsPolicy {
     }
 }
 
-fn dynamic_pie_tls_reference_supported(
-    symbol_info: u8,
-    symbol_other: u8,
-    symbol_type: u8,
-) -> bool {
+fn dynamic_pie_tls_reference_supported(symbol_info: u8, symbol_other: u8, symbol_type: u8) -> bool {
     let binding = symbol_info >> 4;
-    matches!(binding, STB_GLOBAL | STB_WEAK)
-        && symbol_other == 0
-        && symbol_type == STT_TLS
+    matches!(binding, STB_GLOBAL | STB_WEAK) && symbol_other == 0 && symbol_type == STT_TLS
 }
 
 #[derive(Debug, Clone, Copy)]
