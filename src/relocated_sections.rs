@@ -17,22 +17,20 @@ use crate::permission_layout::{
 };
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, SHN_UNDEF, STB_GLOBAL, STB_WEAK};
+use crate::synthetic_ids::{GOT_OBJECT_INDEX, PLT_GOT_OBJECT_INDEX, PLT_OBJECT_INDEX};
 use crate::x86_64_relocations::{
     is_static_got_entry_type, is_static_tls_gotpcrel_type, is_tls_desc_address_relocation_type,
     is_tls_gd_relocation_type, is_tls_ld_relocation_type, R_X86_64_PLT32,
 };
 
 const SHT_PROGBITS: u32 = 1;
-const GOT_OBJECT_INDEX: usize = usize::MAX - 1;
 const GOT_SECTION_INDEX: u16 = 1;
 const GOT_ENTRY_SIZE: u64 = 8;
 const TLS_GD_ENTRY_SIZE: u64 = 16;
 const TLS_LD_ENTRY_SIZE: u64 = 16;
 const TLS_DESC_ENTRY_SIZE: u64 = 16;
 const GOT_ALIGNMENT: u64 = 8;
-const PLT_OBJECT_INDEX: usize = usize::MAX - 4;
 const PLT_SECTION_INDEX: u16 = 1;
-const PLT_GOT_OBJECT_INDEX: usize = usize::MAX - 5;
 const PLT_GOT_SECTION_INDEX: u16 = 1;
 const PLT0_SIZE: u64 = 16;
 const PLT_ENTRY_SIZE: u64 = 16;

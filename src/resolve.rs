@@ -2,13 +2,13 @@ use std::collections::btree_map::Entry;
 use std::collections::BTreeMap;
 
 use crate::elf64::Elf64Symbol;
+pub use crate::synthetic_ids::COMMON_OBJECT_INDEX;
 
 pub const STB_LOCAL: u8 = 0;
 pub const STB_GLOBAL: u8 = 1;
 pub const STB_WEAK: u8 = 2;
 pub const SHN_UNDEF: u16 = 0;
 pub const SHN_COMMON: u16 = 0xfff2;
-pub const COMMON_OBJECT_INDEX: usize = usize::MAX;
 pub const COMMON_SECTION_INDEX: u16 = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

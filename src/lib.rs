@@ -39,6 +39,7 @@ pub mod static_link;
 mod static_link_core;
 pub mod symbol_addresses;
 pub mod symbol_names;
+mod synthetic_ids;
 pub mod system_preload;
 pub mod tls;
 pub mod version_script;

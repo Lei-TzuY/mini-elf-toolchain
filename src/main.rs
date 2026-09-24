@@ -18,8 +18,10 @@ use mini_elf_toolchain::partial_link::{
 };
 use mini_elf_toolchain::provider_closure::resolve_provider_path;
 use mini_elf_toolchain::shared_object::{
+    link_dynamic_pie_with_checked_providers,
     link_shared_object_with_version_script_and_checked_providers, shared_import_requirements,
-    SharedImportRequirement, SharedObjectLinkOptions, SharedVersionRequirement,
+    DynamicPieLinkOptions, SharedImportRequirement, SharedObjectLinkOptions,
+    SharedVersionRequirement,
 };
 use mini_elf_toolchain::static_link::{
     link_static_executable_with_map, link_static_position_independent_executable_with_map,
@@ -41,7 +43,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--shared] [-Bsymbolic] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--dynamic-pie|--shared] [-Bsymbolic] [--dynamic-linker <path>|--dynamic-linker=<path>] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -150,7 +152,20 @@ where
         };
         let raw_remaining: Vec<_> = args.collect();
         let (position_independent, raw_remaining) = extract_pie_argument(&raw_remaining)?;
+        let (dynamic_pie, raw_remaining) = extract_dynamic_pie_argument(&raw_remaining)?;
         let (shared_object, raw_remaining) = extract_shared_argument(&raw_remaining)?;
+        let dynamic_linker = extract_dynamic_linker_argument(&raw_remaining)?;
+        let raw_remaining = dynamic_linker.arguments;
+        if dynamic_pie && dynamic_linker.path.is_none() {
+            return Err(CliError::Usage(
+                "--dynamic-pie requires --dynamic-linker <absolute-path>".to_owned(),
+            ));
+        }
+        if !dynamic_pie && dynamic_linker.path.is_some() {
+            return Err(CliError::Usage(
+                "--dynamic-linker is only supported with --dynamic-pie".to_owned(),
+            ));
+        }
         let (symbolic, raw_remaining) = extract_symbolic_argument(&raw_remaining)?;
         if symbolic && !shared_object {
             return Err(CliError::Usage(
@@ -164,22 +179,22 @@ where
             ));
         }
         let runpath = extract_runpath_argument(&soname.arguments)?;
-        if !shared_object && runpath.runpath.is_some() {
+        if !(shared_object || dynamic_pie) && runpath.runpath.is_some() {
             return Err(CliError::Usage(
-                "--runpath is only supported with --shared".to_owned(),
+                "--runpath is only supported with --shared or --dynamic-pie".to_owned(),
             ));
         }
         let mut needed = extract_needed_arguments(&runpath.arguments)?;
-        if !shared_object && !needed.specs.is_empty() {
+        if !(shared_object || dynamic_pie) && !needed.specs.is_empty() {
             let provider_requested = needed
                 .specs
                 .iter()
                 .any(|spec| matches!(spec, NeededSpec::Provider(_)));
             return Err(CliError::Usage(
                 if provider_requested {
-                    "--needed-from is only supported with --shared"
+                    "--needed-from is only supported with --shared or --dynamic-pie"
                 } else {
-                    "--needed is only supported with --shared"
+                    "--needed is only supported with --shared or --dynamic-pie"
                 }
                 .to_owned(),
             ));
@@ -199,23 +214,39 @@ where
             None
         };
         let raw_remaining = version_script.arguments;
-        if position_independent && shared_object {
+        let selected_dynamic_modes = usize::from(position_independent)
+            + usize::from(dynamic_pie)
+            + usize::from(shared_object);
+        if selected_dynamic_modes > 1 {
             return Err(CliError::Usage(
-                "--pie cannot be combined with --shared".to_owned(),
+                "--pie, --dynamic-pie, and --shared are mutually exclusive".to_owned(),
             ));
         }
-        if (position_independent || shared_object) && contains_image_base_argument(&raw_remaining) {
+        if (position_independent || dynamic_pie || shared_object)
+            && contains_image_base_argument(&raw_remaining)
+        {
+            let mode = if shared_object {
+                "--shared"
+            } else if dynamic_pie {
+                "--dynamic-pie"
+            } else {
+                "--pie"
+            };
             return Err(CliError::Usage(format!(
-                "{} cannot be combined with --image-base",
-                if shared_object { "--shared" } else { "--pie" }
+                "{mode} cannot be combined with --image-base"
             )));
         }
         let forced =
             extract_forced_undefined_arguments(&raw_remaining).map_err(forced_undefined_error)?;
-        if shared_object && !forced.symbols.is_empty() {
-            return Err(CliError::Usage(
-                "--shared does not support forced undefined roots".to_owned(),
-            ));
+        if (shared_object || dynamic_pie) && !forced.symbols.is_empty() {
+            return Err(CliError::Usage(format!(
+                "{} does not support forced undefined roots",
+                if shared_object {
+                    "--shared"
+                } else {
+                    "--dynamic-pie"
+                }
+            )));
         }
         let image_base =
             extract_image_base_argument(&forced.arguments).map_err(image_base_error)?;
@@ -270,10 +301,15 @@ where
             }
         }
 
-        if shared_object && map_output.is_some() {
-            return Err(CliError::Usage(
-                "--shared does not support link map output".to_owned(),
-            ));
+        if (shared_object || dynamic_pie) && map_output.is_some() {
+            return Err(CliError::Usage(format!(
+                "{} does not support link map output",
+                if shared_object {
+                    "--shared"
+                } else {
+                    "--dynamic-pie"
+                }
+            )));
         }
         if shared_object && entry_seen {
             return Err(CliError::Usage(
@@ -282,7 +318,7 @@ where
         }
 
         let mut provider_search_paths = Vec::new();
-        let remaining = if shared_object {
+        let remaining = if shared_object || dynamic_pie {
             let resolution =
                 resolve_shared_library_arguments(&remaining).map_err(library_search_error)?;
             provider_search_paths = resolution.search_paths;
@@ -304,6 +340,8 @@ where
             entry_symbol: &entry_symbol,
             image_base: image_base.image_base,
             position_independent,
+            dynamic_pie,
+            dynamic_linker: dynamic_linker.path.as_deref(),
             shared_object,
             symbolic,
             soname: soname.soname.as_deref(),
@@ -360,6 +398,95 @@ fn extract_pie_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>),
     }
 
     Ok((position_independent, remaining))
+}
+
+fn extract_dynamic_pie_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>), CliError> {
+    let mut dynamic_pie = false;
+    let mut remaining = Vec::with_capacity(arguments.len());
+
+    for argument in arguments {
+        if argument == "--dynamic-pie" {
+            if dynamic_pie {
+                return Err(CliError::Usage("duplicate --dynamic-pie option".to_owned()));
+            }
+            dynamic_pie = true;
+        } else if argument
+            .to_str()
+            .is_some_and(|argument| argument.starts_with("--dynamic-pie="))
+        {
+            return Err(CliError::Usage(
+                "--dynamic-pie does not accept a value".to_owned(),
+            ));
+        } else {
+            remaining.push(argument.clone());
+        }
+    }
+
+    Ok((dynamic_pie, remaining))
+}
+
+struct DynamicLinkerArguments {
+    path: Option<Vec<u8>>,
+    arguments: Vec<OsString>,
+}
+
+fn extract_dynamic_linker_argument(
+    arguments: &[OsString],
+) -> Result<DynamicLinkerArguments, CliError> {
+    let mut path = None;
+    let mut remaining = Vec::with_capacity(arguments.len());
+    let mut index = 0usize;
+
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        let value = if argument == "--dynamic-linker" {
+            index += 1;
+            Some(
+                arguments
+                    .get(index)
+                    .ok_or_else(|| {
+                        CliError::Usage("missing path after --dynamic-linker".to_owned())
+                    })?
+                    .to_str()
+                    .ok_or_else(|| {
+                        CliError::Usage("dynamic linker path must be valid UTF-8".to_owned())
+                    })?
+                    .to_owned(),
+            )
+        } else {
+            argument
+                .to_str()
+                .and_then(|argument| argument.strip_prefix("--dynamic-linker="))
+                .map(ToOwned::to_owned)
+        };
+
+        if let Some(value) = value {
+            if path.is_some() {
+                return Err(CliError::Usage(
+                    "duplicate --dynamic-linker option".to_owned(),
+                ));
+            }
+            if value.is_empty() {
+                return Err(CliError::Usage(
+                    "dynamic linker path cannot be empty".to_owned(),
+                ));
+            }
+            if !value.starts_with('/') {
+                return Err(CliError::Usage(
+                    "dynamic linker path must be absolute".to_owned(),
+                ));
+            }
+            path = Some(value.into_bytes());
+        } else {
+            remaining.push(argument.clone());
+        }
+        index += 1;
+    }
+
+    Ok(DynamicLinkerArguments {
+        path,
+        arguments: remaining,
+    })
 }
 
 fn extract_shared_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>), CliError> {
@@ -875,6 +1002,8 @@ struct LinkFilesOptions<'a> {
     entry_symbol: &'a OsString,
     image_base: u64,
     position_independent: bool,
+    dynamic_pie: bool,
+    dynamic_linker: Option<&'a [u8]>,
     shared_object: bool,
     symbolic: bool,
     soname: Option<&'a [u8]>,
@@ -1182,29 +1311,55 @@ fn link_files(
         options.forced_undefined,
     )
     .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
-    if options.shared_object {
+    if options.shared_object || options.dynamic_pie {
         let imports = shared_import_requirements(&prepared.objects)
-            .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
+            .map_err(|error| CliError::Failure(format!("loader image link failed: {error}")))?;
         let needed =
             resolve_needed_dependencies(options.needed, &imports, options.provider_search_paths)?;
-        let image = link_shared_object_with_version_script_and_checked_providers(
-            &prepared.objects,
-            DEFAULT_PAGE_ALIGNMENT,
-            SharedObjectLinkOptions {
-                needed: &needed.names,
-                soname: options.soname,
-                runpath: options.runpath,
-                version_requirements: &needed.version_requirements,
-                checked_version_providers: &needed.checked_version_providers,
-                version_script: options.version_script,
-                symbolic: options.symbolic,
-            },
-        )
-        .map_err(|error| CliError::Failure(format!("shared object link failed: {error}")))?;
+        let image = if options.dynamic_pie {
+            let interpreter = options.dynamic_linker.ok_or_else(|| {
+                CliError::Usage("--dynamic-pie requires --dynamic-linker".to_owned())
+            })?;
+            link_dynamic_pie_with_checked_providers(
+                &prepared.objects,
+                DEFAULT_PAGE_ALIGNMENT,
+                DynamicPieLinkOptions {
+                    needed: &needed.names,
+                    runpath: options.runpath,
+                    version_requirements: &needed.version_requirements,
+                    checked_version_providers: &needed.checked_version_providers,
+                    entry_symbol: options.entry_symbol.to_string_lossy().as_bytes(),
+                    interpreter,
+                },
+            )
+        } else {
+            link_shared_object_with_version_script_and_checked_providers(
+                &prepared.objects,
+                DEFAULT_PAGE_ALIGNMENT,
+                SharedObjectLinkOptions {
+                    needed: &needed.names,
+                    soname: options.soname,
+                    runpath: options.runpath,
+                    version_requirements: &needed.version_requirements,
+                    checked_version_providers: &needed.checked_version_providers,
+                    version_script: options.version_script,
+                    symbolic: options.symbolic,
+                },
+            )
+        }
+        .map_err(|error| CliError::Failure(format!("loader image link failed: {error}")))?;
         fs::write(output, &image.bytes)
             .map_err(|error| CliError::Failure(format!("{}: {error}", output.to_string_lossy())))?;
+        if options.dynamic_pie {
+            set_executable_permissions(output)?;
+        }
         return Ok(format!(
-            "linked shared ELF64 x86-64: output={}, objects={}, bytes={}",
+            "{}: output={}, objects={}, bytes={}",
+            if options.dynamic_pie {
+                "linked dynamic PIE ELF64 x86-64"
+            } else {
+                "linked shared ELF64 x86-64"
+            },
             output.to_string_lossy(),
             prepared.objects.len(),
             image.bytes.len()
