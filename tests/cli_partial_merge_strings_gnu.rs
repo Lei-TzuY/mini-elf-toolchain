@@ -261,11 +261,15 @@ sb:
 
         let symbols = nm_output(path);
         assert!(
-            symbols.lines().any(|line| line.starts_with("0000000000000000 ") && line.ends_with(" sa")),
+            symbols
+                .lines()
+                .any(|line| line.starts_with("0000000000000000 ") && line.ends_with(" sa")),
             "{symbols}"
         );
         assert!(
-            symbols.lines().any(|line| line.starts_with("0000000000000006 ") && line.ends_with(" sb")),
+            symbols
+                .lines()
+                .any(|line| line.starts_with("0000000000000006 ") && line.ends_with(" sb")),
             "{symbols}"
         );
 
@@ -352,11 +356,16 @@ second_string:
 
         let symbols = nm_output(path);
         assert!(
-            symbols.lines().any(|line| line.starts_with("0000000000000000 ") && line.ends_with(" first_string")),
+            symbols.lines().any(
+                |line| line.starts_with("0000000000000000 ") && line.ends_with(" first_string")
+            ),
             "{symbols}"
         );
         assert!(
-            symbols.lines().any(|line| line.starts_with("0000000000000005 ") && line.ends_with(" second_string")),
+            symbols
+                .lines()
+                .any(|line| line.starts_with("0000000000000005 ")
+                    && line.ends_with(" second_string")),
             "{symbols}"
         );
     }
