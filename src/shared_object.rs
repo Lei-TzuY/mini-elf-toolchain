@@ -1961,10 +1961,8 @@ fn link_loader_image(
             map_runtime_program_headers_with_dynamic_and_relros(image, dynamic, &relro)
                 .map_err(SharedObjectError::Write)
         }
-        (None, None) => {
-            map_runtime_program_headers_with_dynamic(image, dynamic)
-                .map_err(SharedObjectError::Write)
-        }
+        (None, None) => map_runtime_program_headers_with_dynamic(image, dynamic)
+            .map_err(SharedObjectError::Write),
         _ => unreachable!("interpreter payload and path are constructed together"),
     }
 }
