@@ -1161,7 +1161,6 @@ impl LoaderTlsPolicy {
 fn dynamic_pie_external_tls_import_supported(
     symbol_info: u8,
     symbol_other: u8,
-    name: &[u8],
     unresolved: bool,
     symbol_type: u8,
 ) -> bool {
@@ -1170,7 +1169,6 @@ fn dynamic_pie_external_tls_import_supported(
         && matches!(binding, STB_GLOBAL | STB_WEAK)
         && symbol_other == 0
         && symbol_type == STT_TLS
-        && !(binding == STB_WEAK && name.contains(&b'@'))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2074,7 +2072,6 @@ fn validate_inputs(
                         && !dynamic_pie_external_tls_import_supported(
                             symbol.symbol.info,
                             symbol.symbol.other,
-                            symbol.name,
                             unresolved,
                             symbol_type,
                         )
@@ -2145,7 +2142,6 @@ fn validate_inputs(
                         && !dynamic_pie_external_tls_import_supported(
                             symbol.symbol.info,
                             symbol.symbol.other,
-                            symbol.name,
                             unresolved,
                             symbol_type,
                         )
@@ -2207,7 +2203,6 @@ fn validate_inputs(
                         && !dynamic_pie_external_tls_import_supported(
                             symbol.symbol.info,
                             symbol.symbol.other,
-                            symbol.name,
                             unresolved,
                             symbol_type,
                         )
