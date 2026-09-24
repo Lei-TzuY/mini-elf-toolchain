@@ -361,6 +361,7 @@ fn dynamic_pie_initial_exec_tls_got_is_relro_after_loader_binding() {
 
     let dir = temp_dir("tls-got-relro");
     let provider = build_mini_provider(&dir);
+    build_gnu_provider(&dir);
     let consumer = assemble(
         &dir,
         "tls-got-relro-consumer",
@@ -433,7 +434,7 @@ _start:
         .arg(&consumer)
         .arg("-L")
         .arg(&dir)
-        .arg("-lprovider")
+        .arg("-lprovider-gnu")
         .output()
         .unwrap();
     assert!(
