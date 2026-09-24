@@ -215,6 +215,14 @@ fn dynamic_pie_tlsdesc_import_binds_provider_tls_through_glibc() {
         ours.display()
     );
 
+    let gnu_provider_symbols = readelf(&gnu_provider, &["-sDW"]);
+    assert!(
+        gnu_provider_symbols
+            .lines()
+            .any(|line| line.contains(" TLS ") && line.ends_with(" provider_tls")),
+        "{gnu_provider_symbols}"
+    );
+
     // GNU ld currently relaxes the same external TLSDESC input to initial-exec
     // for this executable shape. Use it as a runtime ABI reference rather than
     // asserting identical relocation types.
