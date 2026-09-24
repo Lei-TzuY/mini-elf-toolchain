@@ -1140,14 +1140,16 @@ struct DynamicSymbolRelocationSite {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum LoaderTlsPolicy {
     SharedObject,
-    DynamicPieTlsgdOnly,
+    DynamicPieExternalStrongGdIe,
 }
 
 impl LoaderTlsPolicy {
     fn allows(self, relocation_type: u32) -> bool {
         match self {
             Self::SharedObject => true,
-            Self::DynamicPieTlsgdOnly => relocation_type == R_X86_64_TLSGD,
+            Self::DynamicPieExternalStrongGdIe => {
+                matches!(relocation_type, R_X86_64_TLSGD | R_X86_64_GOTTPOFF)
+            }
         }
     }
 }
@@ -1222,7 +1224,7 @@ pub fn dynamic_pie_import_requirements(
         InputValidationOptions {
             allow_copy_relocations: true,
             allow_explicit_ifunc_imports: true,
-            tls_policy: LoaderTlsPolicy::DynamicPieTlsgdOnly,
+            tls_policy: LoaderTlsPolicy::DynamicPieExternalStrongGdIe,
         },
     )
 }
@@ -1461,7 +1463,7 @@ fn link_loader_image(
             allow_copy_relocations: dynamic_pie,
             allow_explicit_ifunc_imports: dynamic_pie,
             tls_policy: if dynamic_pie {
-                LoaderTlsPolicy::DynamicPieTlsgdOnly
+                LoaderTlsPolicy::DynamicPieExternalStrongGdIe
             } else {
                 LoaderTlsPolicy::SharedObject
             },
@@ -1797,10 +1799,10 @@ fn link_loader_image(
             relative_count: relative_relocation_count,
             jmprel: &jmprel_bytes,
             plt_got_address: plt_got_base,
-            flags: (if imports.tls_ie_symbols.is_empty() {
-                0
-            } else {
+            flags: (if !dynamic_pie && !imports.tls_ie_symbols.is_empty() {
                 DF_STATIC_TLS
+            } else {
+                0
             }) | if symbolic { DF_SYMBOLIC } else { 0 },
         },
     )?;
@@ -2103,7 +2105,7 @@ fn validate_inputs(
                 if relocation.relocation_type == R_X86_64_TLSGD {
                     let unresolved = symbol.symbol.section_index == SHN_UNDEF
                         && !definitions.contains_key(symbol.name);
-                    if options.tls_policy == LoaderTlsPolicy::DynamicPieTlsgdOnly {
+                    if options.tls_policy == LoaderTlsPolicy::DynamicPieExternalStrongGdIe {
                         let binding = symbol.symbol.info >> 4;
                         if !unresolved
                             || binding != STB_GLOBAL
@@ -2164,6 +2166,22 @@ fn validate_inputs(
                 if relocation.relocation_type == R_X86_64_GOTTPOFF {
                     let unresolved = symbol.symbol.section_index == SHN_UNDEF
                         && !definitions.contains_key(symbol.name);
+                    if options.tls_policy == LoaderTlsPolicy::DynamicPieExternalStrongGdIe {
+                        let binding = symbol.symbol.info >> 4;
+                        if !unresolved
+                            || binding != STB_GLOBAL
+                            || symbol.symbol.other != 0
+                            || symbol_type != STT_TLS
+                        {
+                            return Err(SharedObjectError::DynamicExecutableTlsModelUnsupported {
+                                object_index: input.object_index,
+                                rela_section_index: table.section_index,
+                                relocation_index,
+                                relocation_type: relocation.relocation_type,
+                                name: symbol.name.to_vec(),
+                            });
+                        }
+                    }
                     let definition = definitions.get(symbol.name);
                     if !is_supported_dynamic_tls_reference(
                         symbol.symbol.info,
