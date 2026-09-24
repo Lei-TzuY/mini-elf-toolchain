@@ -189,6 +189,7 @@ fn dynamic_pie_executes_direct_provider_copy_relocation() {
     );
 
     let checked = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynrela-copy"))
+        .args(["--load-bias", "0x70000000"])
         .arg(&ours)
         .output()
         .unwrap();
