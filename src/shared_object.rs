@@ -45,6 +45,9 @@ use crate::x86_64_relocations::{
 
 const SHT_PROGBITS: u32 = 1;
 const SHT_NOBITS: u32 = 8;
+const SHT_INIT_ARRAY: u32 = 14;
+const SHT_FINI_ARRAY: u32 = 15;
+const SHT_PREINIT_ARRAY: u32 = 16;
 const SHARED_METADATA_SECTION_INDEX: u16 = 1;
 const DYNAMIC_INTERP_SECTION_INDEX: u16 = 1;
 const DYNAMIC_COPY_SECTION_INDEX: u16 = 1;
@@ -75,7 +78,13 @@ const DT_SYMBOLIC: i64 = 16;
 const DT_RELA: i64 = 7;
 const DT_PLTREL: i64 = 20;
 const DT_JMPREL: i64 = 23;
+const DT_INIT_ARRAY: i64 = 25;
+const DT_FINI_ARRAY: i64 = 26;
+const DT_INIT_ARRAYSZ: i64 = 27;
+const DT_FINI_ARRAYSZ: i64 = 28;
 const DT_RUNPATH: i64 = 29;
+const DT_PREINIT_ARRAY: i64 = 32;
+const DT_PREINIT_ARRAYSZ: i64 = 33;
 const DT_FLAGS: i64 = 30;
 const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
@@ -343,6 +352,28 @@ pub enum SharedObjectError {
     TlsInput(LinkerInputError),
     TlsLayout(StaticTlsLayoutError),
     TlsProgramHeader(StaticTlsProgramHeaderError),
+    DynamicLifecycleSectionFlags {
+        object_index: usize,
+        section_index: u16,
+        section_type: u32,
+        flags: u64,
+    },
+    DynamicLifecycleSectionSize {
+        object_index: usize,
+        section_index: u16,
+        section_type: u32,
+        size: u64,
+    },
+    DynamicLifecycleMissingRelocatedSection {
+        object_index: usize,
+        section_index: u16,
+        section_type: u32,
+    },
+    DynamicLifecycleNonContiguous {
+        section_type: u32,
+        previous_end: u64,
+        next_address: u64,
+    },
     EmptyNeededName {
         dependency_index: usize,
     },
@@ -778,6 +809,40 @@ impl fmt::Display for SharedObjectError {
             Self::TlsProgramHeader(source) => {
                 write!(f, "cannot emit shared PT_TLS program header: {source}")
             },
+            Self::DynamicLifecycleSectionFlags {
+                object_index,
+                section_index,
+                section_type,
+                flags,
+            } => write!(
+                f,
+                "dynamic PIE lifecycle section type {section_type} at object {object_index} section {section_index} has flags {flags:#x}; bounded lifecycle arrays require SHF_ALLOC|SHF_WRITE"
+            ),
+            Self::DynamicLifecycleSectionSize {
+                object_index,
+                section_index,
+                section_type,
+                size,
+            } => write!(
+                f,
+                "dynamic PIE lifecycle section type {section_type} at object {object_index} section {section_index} has size {size}; lifecycle arrays must contain whole 8-byte function pointers"
+            ),
+            Self::DynamicLifecycleMissingRelocatedSection {
+                object_index,
+                section_index,
+                section_type,
+            } => write!(
+                f,
+                "dynamic PIE lifecycle section type {section_type} at object {object_index} section {section_index} has no relocated output section"
+            ),
+            Self::DynamicLifecycleNonContiguous {
+                section_type,
+                previous_end,
+                next_address,
+            } => write!(
+                f,
+                "dynamic PIE lifecycle section type {section_type} is split into non-contiguous output ranges ending at {previous_end:#x} and restarting at {next_address:#x}; bounded DT_*ARRAY emission requires one exact contiguous range"
+            ),
             Self::EmptyNeededName { dependency_index } => write!(
                 f,
                 "shared object DT_NEEDED dependency {dependency_index} has an empty name"
@@ -928,6 +993,10 @@ impl std::error::Error for SharedObjectError {
             | Self::DynamicExecutableTlsModelUnsupported { .. }
             | Self::TlsImportUnsupported { .. }
             | Self::TlsSymbolOutsideImage { .. }
+            | Self::DynamicLifecycleSectionFlags { .. }
+            | Self::DynamicLifecycleSectionSize { .. }
+            | Self::DynamicLifecycleMissingRelocatedSection { .. }
+            | Self::DynamicLifecycleNonContiguous { .. }
             | Self::EmptyNeededName { .. }
             | Self::NeededNameContainsNul { .. }
             | Self::EmptySoname
@@ -1208,6 +1277,19 @@ struct DynamicRelocations<'a> {
     jmprel: &'a [u8],
     plt_got_address: Option<u64>,
     flags: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DynamicLifecycleArray {
+    address: u64,
+    size: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct DynamicLifecycle {
+    preinit: Option<DynamicLifecycleArray>,
+    init: Option<DynamicLifecycleArray>,
+    fini: Option<DynamicLifecycleArray>,
 }
 
 #[derive(Debug)]
@@ -1607,6 +1689,11 @@ fn link_loader_image(
         tls_layout,
         &layout,
     )?;
+    let lifecycle = if dynamic_pie {
+        collect_dynamic_pie_lifecycle(inputs, &relocated)?
+    } else {
+        DynamicLifecycle::default()
+    };
 
     let mut matched_script_symbols = BTreeSet::new();
     let mut exports = Vec::new();
@@ -1863,6 +1950,7 @@ fn link_loader_image(
                 0
             }) | if symbolic { DF_SYMBOLIC } else { 0 },
         },
+        lifecycle,
     )?;
     let dynamic_address = metadata_address
         .checked_add(metadata.dynamic_offset)
@@ -3786,12 +3874,103 @@ fn build_version_metadata(
     })
 }
 
+fn collect_dynamic_pie_lifecycle(
+    inputs: &[LinkerInputObject<'_>],
+    relocated: &[RelocatedSectionImage],
+) -> Result<DynamicLifecycle, SharedObjectError> {
+    let preinit = collect_dynamic_pie_lifecycle_kind(inputs, relocated, SHT_PREINIT_ARRAY)?;
+    let init = collect_dynamic_pie_lifecycle_kind(inputs, relocated, SHT_INIT_ARRAY)?;
+    let fini = collect_dynamic_pie_lifecycle_kind(inputs, relocated, SHT_FINI_ARRAY)?;
+    Ok(DynamicLifecycle {
+        preinit,
+        init,
+        fini,
+    })
+}
+
+fn collect_dynamic_pie_lifecycle_kind(
+    inputs: &[LinkerInputObject<'_>],
+    relocated: &[RelocatedSectionImage],
+    section_type: u32,
+) -> Result<Option<DynamicLifecycleArray>, SharedObjectError> {
+    let mut ranges = Vec::new();
+
+    for input in inputs {
+        for (section_index, section) in input.object.sections.iter().enumerate() {
+            if section.section_type != section_type || section.size == 0 {
+                continue;
+            }
+            let section_index =
+                u16::try_from(section_index).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+            if section.flags & (SHF_ALLOC | SHF_WRITE) != (SHF_ALLOC | SHF_WRITE) {
+                return Err(SharedObjectError::DynamicLifecycleSectionFlags {
+                    object_index: input.object_index,
+                    section_index,
+                    section_type,
+                    flags: section.flags,
+                });
+            }
+            if section.size % 8 != 0 {
+                return Err(SharedObjectError::DynamicLifecycleSectionSize {
+                    object_index: input.object_index,
+                    section_index,
+                    section_type,
+                    size: section.size,
+                });
+            }
+            let output = relocated
+                .iter()
+                .find(|candidate| {
+                    candidate.object_index == input.object_index
+                        && candidate.section_index == section_index
+                })
+                .ok_or(SharedObjectError::DynamicLifecycleMissingRelocatedSection {
+                    object_index: input.object_index,
+                    section_index,
+                    section_type,
+                })?;
+            ranges.push(DynamicLifecycleArray {
+                address: output.address,
+                size: output.size,
+            });
+        }
+    }
+
+    if ranges.is_empty() {
+        return Ok(None);
+    }
+    ranges.sort_by_key(|range| range.address);
+    let first = ranges[0];
+    let mut end = first
+        .address
+        .checked_add(first.size)
+        .ok_or(SharedObjectError::AddressOverflow)?;
+    for range in ranges.iter().skip(1) {
+        if range.address != end {
+            return Err(SharedObjectError::DynamicLifecycleNonContiguous {
+                section_type,
+                previous_end: end,
+                next_address: range.address,
+            });
+        }
+        end = range
+            .address
+            .checked_add(range.size)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+    }
+    Ok(Some(DynamicLifecycleArray {
+        address: first.address,
+        size: end - first.address,
+    }))
+}
+
 fn build_dynamic_metadata(
     base_address: u64,
     exports: &[ExportSymbol],
     imports: &BTreeMap<Vec<u8>, ImportSymbol>,
     names: DynamicNames<'_>,
     relocations: DynamicRelocations<'_>,
+    lifecycle: DynamicLifecycle,
 ) -> Result<DynamicMetadata, SharedObjectError> {
     let rela_bytes = relocations.rela;
     let relative_relocation_count = relocations.relative_count;
@@ -3949,6 +4128,9 @@ fn build_dynamic_metadata(
         })
         .and_then(|count| count.checked_add(usize::from(symbolic)))
         .and_then(|count| count.checked_add(usize::from(dynamic_flags != 0)))
+        .and_then(|count| count.checked_add(2 * usize::from(lifecycle.preinit.is_some())))
+        .and_then(|count| count.checked_add(2 * usize::from(lifecycle.init.is_some())))
+        .and_then(|count| count.checked_add(2 * usize::from(lifecycle.fini.is_some())))
         .and_then(|count| count.checked_add(1))
         .ok_or(SharedObjectError::MetadataTooLarge)?;
     let dynamic_size = dynamic_entry_count
@@ -4080,6 +4262,24 @@ fn build_dynamic_metadata(
             (DT_JMPREL, jmprel_address),
             (DT_PLTRELSZ, jmprel_size),
             (DT_PLTREL, DT_RELA as u64),
+        ]);
+    }
+    if let Some(array) = lifecycle.preinit {
+        entries.extend_from_slice(&[
+            (DT_PREINIT_ARRAY, array.address),
+            (DT_PREINIT_ARRAYSZ, array.size),
+        ]);
+    }
+    if let Some(array) = lifecycle.init {
+        entries.extend_from_slice(&[
+            (DT_INIT_ARRAY, array.address),
+            (DT_INIT_ARRAYSZ, array.size),
+        ]);
+    }
+    if let Some(array) = lifecycle.fini {
+        entries.extend_from_slice(&[
+            (DT_FINI_ARRAY, array.address),
+            (DT_FINI_ARRAYSZ, array.size),
         ]);
     }
     entries.push((DT_NULL, 0));
