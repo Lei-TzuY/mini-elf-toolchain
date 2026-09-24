@@ -307,8 +307,7 @@ provider_resolver:
     assert!(relocations.status.success());
     let relocations = String::from_utf8_lossy(&relocations.stdout);
     assert!(
-        relocations.contains("R_X86_64_JUMP_SLOT")
-            && relocations.contains("provider_function"),
+        relocations.contains("R_X86_64_JUMP_SLOT") && relocations.contains("provider_function"),
         "{relocations}"
     );
 
