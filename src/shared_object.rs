@@ -922,6 +922,7 @@ impl std::error::Error for SharedObjectError {
             | Self::ExternalPltUnsupportedType { .. }
             | Self::ExternalPltTargetNotExecutable { .. }
             | Self::TlsRelocationUnsupported { .. }
+            | Self::DynamicExecutableTlsModelUnsupported { .. }
             | Self::TlsImportUnsupported { .. }
             | Self::TlsSymbolOutsideImage { .. }
             | Self::EmptyNeededName { .. }
