@@ -317,7 +317,10 @@ _start:
         .output()
         .unwrap();
 
-    assert!(!linked.status.success(), "malformed lifecycle array was accepted");
+    assert!(
+        !linked.status.success(),
+        "malformed lifecycle array was accepted"
+    );
     assert!(
         String::from_utf8_lossy(&linked.stderr)
             .contains("lifecycle arrays must contain whole 8-byte function pointers"),
