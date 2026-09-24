@@ -2,7 +2,8 @@ use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::executable_writer::{
-    write_elf64_x86_64_shared_segments, ExecutableImage, ExecutableWriteError, LoadSegmentInput,
+    write_elf64_x86_64_position_independent_segments, write_elf64_x86_64_shared_segments,
+    ExecutableImage, ExecutableWriteError, LoadSegmentInput,
 };
 use crate::layout::LaidOutSection;
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
@@ -15,7 +16,8 @@ use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
 use crate::permission_layout::SHF_TLS;
 use crate::pie_runtime::{build_relative_relocation_table, PieRuntimeError};
 use crate::program_headers::{
-    map_runtime_program_headers_with_dynamic, RuntimeDynamicProgramHeader,
+    map_runtime_program_headers_with_dynamic, map_runtime_program_headers_with_dynamic_and_interp,
+    RuntimeDynamicProgramHeader, RuntimeInterpProgramHeader,
 };
 use crate::relocated_sections::{
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests, RelocatedSectionError,
@@ -38,6 +40,8 @@ use crate::x86_64_relocations::{
 const SHT_PROGBITS: u32 = 1;
 const SHARED_METADATA_OBJECT_INDEX: usize = usize::MAX - 3;
 const SHARED_METADATA_SECTION_INDEX: u16 = 1;
+const DYNAMIC_INTERP_OBJECT_INDEX: usize = usize::MAX - 4;
+const DYNAMIC_INTERP_SECTION_INDEX: u16 = 1;
 const ELF64_SYMBOL_SIZE: usize = 24;
 const ELF64_DYNAMIC_SIZE: usize = 16;
 const ELF64_RELA_SIZE: usize = 24;
@@ -311,6 +315,12 @@ pub enum SharedObjectError {
     SonameContainsNul,
     EmptyRunpath,
     RunpathContainsNul,
+    DynamicExecutableMissingEntry {
+        name: Vec<u8>,
+    },
+    EmptyInterpreter,
+    InterpreterContainsNul,
+    InterpreterNotAbsolute,
     Symbols(LinkSymbolError),
     ObjectSymbols {
         object_index: usize,
@@ -698,6 +708,18 @@ impl fmt::Display for SharedObjectError {
             Self::EmptyRunpath => write!(f, "shared object DT_RUNPATH cannot be empty"),
             Self::RunpathContainsNul => {
                 write!(f, "shared object DT_RUNPATH cannot contain an embedded NUL byte")
+            }
+            Self::DynamicExecutableMissingEntry { name } => write!(
+                f,
+                "dynamic PIE entry symbol {:?} is not defined",
+                String::from_utf8_lossy(name)
+            ),
+            Self::EmptyInterpreter => write!(f, "dynamic PIE interpreter path cannot be empty"),
+            Self::InterpreterContainsNul => {
+                write!(f, "dynamic PIE interpreter path cannot contain an embedded NUL byte")
+            }
+            Self::InterpreterNotAbsolute => {
+                write!(f, "dynamic PIE interpreter path must be absolute")
             }
             Self::Symbols(source) => write!(f, "cannot resolve shared object symbols: {source}"),
             Self::ObjectSymbols {
@@ -1177,6 +1199,68 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
     page_alignment: u64,
     options: SharedObjectLinkOptions<'_>,
 ) -> Result<ExecutableImage, SharedObjectError> {
+    link_loader_image(
+        inputs,
+        page_alignment,
+        LoaderImageLinkOptions {
+            shared: options,
+            entry_symbol: None,
+            interpreter: None,
+        },
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct DynamicPieLinkOptions<'a> {
+    pub needed: &'a [Vec<u8>],
+    pub runpath: Option<&'a [u8]>,
+    pub version_requirements: &'a [SharedVersionRequirement],
+    pub checked_version_providers: &'a [Vec<u8>],
+    pub entry_symbol: &'a [u8],
+    pub interpreter: &'a [u8],
+}
+
+pub fn link_dynamic_pie_with_checked_providers(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    options: DynamicPieLinkOptions<'_>,
+) -> Result<ExecutableImage, SharedObjectError> {
+    link_loader_image(
+        inputs,
+        page_alignment,
+        LoaderImageLinkOptions {
+            shared: SharedObjectLinkOptions {
+                needed: options.needed,
+                soname: None,
+                runpath: options.runpath,
+                version_requirements: options.version_requirements,
+                checked_version_providers: options.checked_version_providers,
+                version_script: None,
+                symbolic: false,
+            },
+            entry_symbol: Some(options.entry_symbol),
+            interpreter: Some(options.interpreter),
+        },
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LoaderImageLinkOptions<'a> {
+    shared: SharedObjectLinkOptions<'a>,
+    entry_symbol: Option<&'a [u8]>,
+    interpreter: Option<&'a [u8]>,
+}
+
+fn link_loader_image(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    options: LoaderImageLinkOptions<'_>,
+) -> Result<ExecutableImage, SharedObjectError> {
+    let LoaderImageLinkOptions {
+        shared,
+        entry_symbol,
+        interpreter,
+    } = options;
     let SharedObjectLinkOptions {
         needed,
         soname,
@@ -1185,11 +1269,22 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
         checked_version_providers,
         version_script,
         symbolic,
-    } = options;
+    } = shared;
     validate_needed_names(needed)?;
     validate_needed_names(checked_version_providers)?;
     validate_soname(soname)?;
     validate_runpath(runpath)?;
+    if let Some(path) = interpreter {
+        if path.is_empty() {
+            return Err(SharedObjectError::EmptyInterpreter);
+        }
+        if path.contains(&0) {
+            return Err(SharedObjectError::InterpreterContainsNul);
+        }
+        if path.first() != Some(&b'/') {
+            return Err(SharedObjectError::InterpreterNotAbsolute);
+        }
+    }
 
     let validated = inputs
         .iter()
@@ -1256,6 +1351,18 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
             size: section.size,
         })
         .collect::<Vec<_>>();
+
+    let entry_address = if let Some(name) = entry_symbol {
+        let definition = resolved
+            .definitions
+            .get(name)
+            .ok_or_else(|| SharedObjectError::DynamicExecutableMissingEntry {
+                name: name.to_vec(),
+            })?;
+        Some(final_symbol_address(definition, &layout).map_err(SharedObjectError::SymbolAddress)?)
+    } else {
+        None
+    };
 
     let mut input_sections = Vec::new();
     for input in inputs {
@@ -1424,22 +1531,41 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
         &import_dynamic_indices,
     )?;
 
-    let metadata_address = align_up(
-        relocated
-            .iter()
-            .map(|section| {
-                section
-                    .address
-                    .checked_add(section.size)
-                    .ok_or(SharedObjectError::AddressOverflow)
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .max()
-            .unwrap_or(0),
-        page_alignment,
-    )
-    .ok_or(SharedObjectError::AddressOverflow)?;
+    let relocated_end = relocated
+        .iter()
+        .map(|section| {
+            section
+                .address
+                .checked_add(section.size)
+                .ok_or(SharedObjectError::AddressOverflow)
+        })
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+    let interpreter_payload = interpreter.map(|path| {
+        let mut bytes = path.to_vec();
+        bytes.push(0);
+        bytes
+    });
+    let interpreter_address = if interpreter_payload.is_some() {
+        Some(
+            align_up(relocated_end, page_alignment)
+                .ok_or(SharedObjectError::AddressOverflow)?,
+        )
+    } else {
+        None
+    };
+    let metadata_floor = match (interpreter_address, interpreter_payload.as_ref()) {
+        (Some(address), Some(bytes)) => address
+            .checked_add(
+                u64::try_from(bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?,
+            )
+            .ok_or(SharedObjectError::AddressOverflow)?,
+        _ => relocated_end,
+    };
+    let metadata_address =
+        align_up(metadata_floor, page_alignment).ok_or(SharedObjectError::AddressOverflow)?;
     let metadata = build_dynamic_metadata(
         metadata_address,
         &exports,
@@ -1468,6 +1594,18 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
         .ok_or(SharedObjectError::AddressOverflow)?;
 
     let mut sections = relocated;
+    if let (Some(address), Some(bytes)) = (interpreter_address, interpreter_payload) {
+        sections.push(RelocatedSectionImage {
+            object_index: DYNAMIC_INTERP_OBJECT_INDEX,
+            section_index: DYNAMIC_INTERP_SECTION_INDEX,
+            section_type: SHT_PROGBITS,
+            flags: SHF_ALLOC,
+            address,
+            size: u64::try_from(bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?,
+            alignment: 1,
+            bytes,
+        });
+    }
     sections.push(RelocatedSectionImage {
         object_index: SHARED_METADATA_OBJECT_INDEX,
         section_index: SHARED_METADATA_SECTION_INDEX,
@@ -1501,22 +1639,40 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
         })
         .collect::<Vec<_>>();
 
-    let image = write_elf64_x86_64_shared_segments(&writer_segments, page_alignment)
-        .map_err(SharedObjectError::Write)?;
+    let image = if let Some(entry_address) = entry_address {
+        write_elf64_x86_64_position_independent_segments(
+            &writer_segments,
+            entry_address,
+            page_alignment,
+        )
+    } else {
+        write_elf64_x86_64_shared_segments(&writer_segments, page_alignment)
+    }
+    .map_err(SharedObjectError::Write)?;
     let image = if let Some(tls) = tls_layout {
         inject_static_tls_program_header(image, tls, page_alignment)
             .map_err(SharedObjectError::TlsProgramHeader)?
     } else {
         image
     };
-    map_runtime_program_headers_with_dynamic(
-        image,
-        RuntimeDynamicProgramHeader {
-            address: dynamic_address,
-            size: metadata.dynamic_size,
-        },
-    )
-    .map_err(SharedObjectError::Write)
+    let dynamic = RuntimeDynamicProgramHeader {
+        address: dynamic_address,
+        size: metadata.dynamic_size,
+    };
+    if let (Some(address), Some(path)) = (interpreter_address, interpreter) {
+        map_runtime_program_headers_with_dynamic_and_interp(
+            image,
+            dynamic,
+            RuntimeInterpProgramHeader {
+                address,
+                size: u64::try_from(path.len() + 1)
+                    .map_err(|_| SharedObjectError::MetadataTooLarge)?,
+            },
+        )
+        .map_err(SharedObjectError::Write)
+    } else {
+        map_runtime_program_headers_with_dynamic(image, dynamic).map_err(SharedObjectError::Write)
+    }
 }
 
 fn tls_export_value(
