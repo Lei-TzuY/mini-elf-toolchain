@@ -304,7 +304,7 @@ _start:
 
 #[test]
 #[cfg(target_os = "linux")]
-fn dynamic_pie_initial_exec_requires_checked_provider() {
+fn dynamic_pie_initial_exec_rejects_checked_non_tls_provider() {
     if !have_tools() {
         return;
     }
@@ -312,7 +312,35 @@ fn dynamic_pie_initial_exec_requires_checked_provider() {
         return;
     };
 
-    let dir = temp_dir("ie-provider-required");
+    let dir = temp_dir("ie-provider-type-mismatch");
+    let wrong_provider_object = assemble(
+        &dir,
+        "wrong-ie-provider",
+        r#".section .data
+.align 8
+.globl provider_tls
+.type provider_tls,@object
+provider_tls:
+    .quad 42
+.size provider_tls, .-provider_tls
+
+.section .note.GNU-stack,"",@progbits
+"#,
+    );
+    let wrong_provider = dir.join("libwrong-ie-provider.so");
+    let provider_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&wrong_provider)
+        .args(["--shared", "--soname", "libwrong-ie-provider.so"])
+        .arg(&wrong_provider_object)
+        .output()
+        .unwrap();
+    assert!(
+        provider_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&provider_link.stderr)
+    );
+
     let consumer = assemble(
         &dir,
         "ie-consumer",
@@ -341,6 +369,8 @@ _start:
         .arg("--dynamic-pie")
         .arg("--dynamic-linker")
         .arg(&interpreter)
+        .arg("--needed-from")
+        .arg(&wrong_provider)
         .arg(&consumer)
         .output()
         .unwrap();
@@ -348,7 +378,7 @@ _start:
     assert!(linked.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&linked.stderr);
     assert!(
-        stderr.contains("provider") || stderr.contains("external imports"),
+        stderr.contains("exports none") || stderr.contains("bounded external imports"),
         "{stderr}"
     );
     assert!(!output.exists());
