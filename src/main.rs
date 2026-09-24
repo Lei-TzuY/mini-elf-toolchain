@@ -304,7 +304,11 @@ where
         if (shared_object || dynamic_pie) && map_output.is_some() {
             return Err(CliError::Usage(format!(
                 "{} does not support link map output",
-                if shared_object { "--shared" } else { "--dynamic-pie" }
+                if shared_object {
+                    "--shared"
+                } else {
+                    "--dynamic-pie"
+                }
             )));
         }
         if shared_object && entry_seen {
