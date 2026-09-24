@@ -612,12 +612,7 @@ pub fn relocate_allocatable_sections_with_static_tls(
     start_address: u64,
     page_alignment: u64,
 ) -> Result<StaticTlsRelocationOutput, StaticTlsRelocationError> {
-    relocate_allocatable_sections_with_static_tls_impl(
-        inputs,
-        start_address,
-        page_alignment,
-        false,
-    )
+    relocate_allocatable_sections_with_static_tls_impl(inputs, start_address, page_alignment, false)
 }
 
 pub(crate) fn relocate_allocatable_sections_with_static_tls_isolated_got(
@@ -625,12 +620,7 @@ pub(crate) fn relocate_allocatable_sections_with_static_tls_isolated_got(
     start_address: u64,
     page_alignment: u64,
 ) -> Result<StaticTlsRelocationOutput, StaticTlsRelocationError> {
-    relocate_allocatable_sections_with_static_tls_impl(
-        inputs,
-        start_address,
-        page_alignment,
-        true,
-    )
+    relocate_allocatable_sections_with_static_tls_impl(inputs, start_address, page_alignment, true)
 }
 
 fn relocate_allocatable_sections_with_static_tls_impl(
@@ -663,11 +653,7 @@ fn relocate_allocatable_sections_with_static_tls_impl(
             page_alignment,
         )
     } else {
-        relocate_allocatable_sections_with_metadata(
-            &stripped_inputs,
-            start_address,
-            page_alignment,
-        )
+        relocate_allocatable_sections_with_metadata(&stripped_inputs, start_address, page_alignment)
     }
     .map_err(StaticTlsRelocationError::Regular)?;
     let got_entries = relocated_output.got_entries;
