@@ -971,12 +971,8 @@ pub fn link_relocatable_objects_with_forced_undefined(
                     section_index_u16,
                 )?
             } else {
-                let placement = push_output_alloc_section(
-                    &mut output_sections,
-                    name.clone(),
-                    section,
-                    data,
-                )?;
+                let placement =
+                    push_output_alloc_section(&mut output_sections, name.clone(), section, data)?;
                 if is_canonical_alloc_section_name(&name) && !grouped {
                     coalesced_canonical_sections
                         .insert(merge_key, usize::from(placement.output_section_index - 1));
@@ -988,8 +984,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
         }
     }
 
-    let mut coalesced_link_order_sections =
-        BTreeMap::<(Vec<u8>, u32, u64, u64, u16), usize>::new();
+    let mut coalesced_link_order_sections = BTreeMap::<(Vec<u8>, u32, u64, u64, u16), usize>::new();
 
     // Then place bounded SHF_LINK_ORDER sections and rewrite sh_link to the
     // linked section's output index. Coalescing is allowed only when both the
@@ -1085,30 +1080,25 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 section.entry_size,
                 target_placement.output_section_index,
             );
-            let placement = if let Some(&output_slot) =
-                coalesced_link_order_sections.get(&merge_key)
-            {
-                append_section_contribution(
-                    &mut output_sections,
-                    output_slot,
-                    section,
-                    &data,
-                    input_index,
-                    section_index_u16,
-                )?
-            } else {
-                let placement = push_output_alloc_section(
-                    &mut output_sections,
-                    name,
-                    section,
-                    data,
-                )?;
-                let output_slot = usize::from(placement.output_section_index - 1);
-                output_sections[output_slot].link =
-                    u32::from(target_placement.output_section_index);
-                coalesced_link_order_sections.insert(merge_key, output_slot);
-                placement
-            };
+            let placement =
+                if let Some(&output_slot) = coalesced_link_order_sections.get(&merge_key) {
+                    append_section_contribution(
+                        &mut output_sections,
+                        output_slot,
+                        section,
+                        &data,
+                        input_index,
+                        section_index_u16,
+                    )?
+                } else {
+                    let placement =
+                        push_output_alloc_section(&mut output_sections, name, section, data)?;
+                    let output_slot = usize::from(placement.output_section_index - 1);
+                    output_sections[output_slot].link =
+                        u32::from(target_placement.output_section_index);
+                    coalesced_link_order_sections.insert(merge_key, output_slot);
+                    placement
+                };
 
             section_maps[input_index][section_index] = Some(placement);
         }
@@ -2053,19 +2043,17 @@ fn append_section_contribution(
             count: output_slot + 5,
         })?;
     let output = &mut output_sections[output_slot];
-    let contribution_offset =
-        align_section_contribution(output.size, section.address_alignment).ok_or(
-            PartialLinkError::SectionContributionOverflow {
-                input_index,
-                section_index,
-            },
-        )?;
-    let new_size = contribution_offset
-        .checked_add(section.size)
+    let contribution_offset = align_section_contribution(output.size, section.address_alignment)
         .ok_or(PartialLinkError::SectionContributionOverflow {
             input_index,
             section_index,
         })?;
+    let new_size = contribution_offset.checked_add(section.size).ok_or(
+        PartialLinkError::SectionContributionOverflow {
+            input_index,
+            section_index,
+        },
+    )?;
 
     if section.section_type != SHT_NOBITS {
         let contribution_offset = usize::try_from(contribution_offset).map_err(|_| {
