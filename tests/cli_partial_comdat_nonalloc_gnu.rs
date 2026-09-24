@@ -240,7 +240,6 @@ fn grouped_nonalloc_metadata_outside_bounded_contract_is_rejected() {
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 fn preserves_grouped_rela_targeting_nonalloc_member() {
     if !have_gnu_toolchain() {
@@ -323,8 +322,14 @@ external_debug_target:
             .unwrap();
         assert!(relocations.status.success());
         let relocations = String::from_utf8_lossy(&relocations.stdout);
-        assert!(relocations.contains(".rela.debug.debug_rela"), "{relocations}");
-        assert!(relocations.contains("external_debug_target"), "{relocations}");
+        assert!(
+            relocations.contains(".rela.debug.debug_rela"),
+            "{relocations}"
+        );
+        assert!(
+            relocations.contains("external_debug_target"),
+            "{relocations}"
+        );
     }
 
     let validate = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
