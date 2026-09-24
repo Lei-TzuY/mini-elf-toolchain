@@ -842,6 +842,10 @@ impl std::error::Error for SharedObjectError {
             | Self::SonameContainsNul
             | Self::EmptyRunpath
             | Self::RunpathContainsNul
+            | Self::DynamicExecutableMissingEntry { .. }
+            | Self::EmptyInterpreter
+            | Self::InterpreterContainsNul
+            | Self::InterpreterNotAbsolute
             | Self::UnsupportedBinding { .. }
             | Self::UndefinedNonlocal { .. }
             | Self::NondefaultVisibility { .. }
