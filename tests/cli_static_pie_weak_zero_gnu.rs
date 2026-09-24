@@ -68,7 +68,9 @@ fn link_mini(dir: &Path, stem: &str, objects: &[&Path]) -> PathBuf {
 fn link_gnu(dir: &Path, stem: &str, objects: &[&Path]) -> PathBuf {
     let output = dir.join(stem);
     let mut command = Command::new("ld");
-    command.args(["-pie", "--no-dynamic-linker", "-o"]).arg(&output);
+    command
+        .args(["-pie", "--no-dynamic-linker", "-o"])
+        .arg(&output);
     for object in objects {
         command.arg(object);
     }
@@ -153,7 +155,11 @@ _start:
     #[cfg(target_os = "linux")]
     for executable in [&mini, &gnu] {
         let status = Command::new(executable).status().unwrap();
-        assert!(status.success(), "{} returned {status}", executable.display());
+        assert!(
+            status.success(),
+            "{} returned {status}",
+            executable.display()
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
@@ -211,7 +217,11 @@ _start:
     #[cfg(target_os = "linux")]
     for executable in [&mini, &gnu] {
         let status = Command::new(executable).status().unwrap();
-        assert!(status.success(), "{} returned {status}", executable.display());
+        assert!(
+            status.success(),
+            "{} returned {status}",
+            executable.display()
+        );
     }
 
     let _ = fs::remove_dir_all(dir);
