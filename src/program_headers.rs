@@ -31,21 +31,21 @@ pub(crate) struct RuntimeRelroProgramHeader {
 pub(crate) fn map_runtime_program_headers(
     image: ExecutableImage,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, None, None, None)
+    map_runtime_program_headers_impl(image, None, None, &[])
 }
 
 pub(crate) fn map_runtime_program_headers_with_stack(
     image: ExecutableImage,
     stack: RuntimeStackProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, None, Some(stack), None)
+    map_runtime_program_headers_impl(image, None, Some(stack), &[])
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic(
     image: ExecutableImage,
     dynamic: RuntimeDynamicProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, None)
+    map_runtime_program_headers_impl(image, Some(dynamic), None, &[])
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_and_stack(
@@ -53,7 +53,7 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_stack(
     dynamic: RuntimeDynamicProgramHeader,
     stack: RuntimeStackProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), Some(stack), None)
+    map_runtime_program_headers_impl(image, Some(dynamic), Some(stack), &[])
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_and_relro(
@@ -61,7 +61,7 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_relro(
     dynamic: RuntimeDynamicProgramHeader,
     relro: RuntimeRelroProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, Some(relro))
+    map_runtime_program_headers_impl(image, Some(dynamic), None, std::slice::from_ref(&relro))
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_stack_and_relro(
@@ -70,14 +70,36 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_stack_and_relro(
     stack: RuntimeStackProgramHeader,
     relro: RuntimeRelroProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), Some(stack), Some(relro))
+    map_runtime_program_headers_impl(
+        image,
+        Some(dynamic),
+        Some(stack),
+        std::slice::from_ref(&relro),
+    )
+}
+
+pub(crate) fn map_runtime_program_headers_with_dynamic_and_relros(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+    relro: &[RuntimeRelroProgramHeader],
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(image, Some(dynamic), None, relro)
+}
+
+pub(crate) fn map_runtime_program_headers_with_dynamic_stack_and_relros(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+    stack: RuntimeStackProgramHeader,
+    relro: &[RuntimeRelroProgramHeader],
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(image, Some(dynamic), Some(stack), relro)
 }
 
 fn map_runtime_program_headers_impl(
     mut image: ExecutableImage,
     dynamic: Option<RuntimeDynamicProgramHeader>,
     stack: Option<RuntimeStackProgramHeader>,
-    relro: Option<RuntimeRelroProgramHeader>,
+    relro: &[RuntimeRelroProgramHeader],
 ) -> Result<ExecutableImage, ExecutableWriteError> {
     if image.load_segments.is_empty() {
         return Err(ExecutableWriteError::NoLoadSegments);
@@ -113,9 +135,10 @@ fn map_runtime_program_headers_impl(
     }
 
     let extra_headers = 1usize
-        + usize::from(dynamic.is_some())
-        + usize::from(relro.is_some())
-        + usize::from(stack.is_some());
+        .checked_add(usize::from(dynamic.is_some()))
+        .and_then(|count| count.checked_add(relro.len()))
+        .and_then(|count| count.checked_add(usize::from(stack.is_some())))
+        .ok_or(ExecutableWriteError::TooManyLoadSegments { count: usize::MAX })?;
     if old_phnum > u16::MAX as usize - extra_headers {
         return Err(ExecutableWriteError::TooManyLoadSegments {
             count: old_phnum + extra_headers,
@@ -233,39 +256,40 @@ fn map_runtime_program_headers_impl(
         None
     };
 
-    let relro_file_offset = if let Some(relro) = relro {
-        let relro_end = relro.address.checked_add(relro.size).ok_or(
-            ExecutableWriteError::MetadataRangeOutsideLoadSegments {
-                address: relro.address,
-                size: relro.size,
-            },
-        )?;
-        let segment = new_segments
-            .iter()
-            .find(|segment| {
-                segment
-                    .virtual_address
-                    .checked_add(segment.file_size)
-                    .is_some_and(|file_end| {
-                        relro.address >= segment.virtual_address && relro_end <= file_end
-                    })
-            })
-            .ok_or(ExecutableWriteError::MetadataRangeOutsideLoadSegments {
-                address: relro.address,
-                size: relro.size,
-            })?;
-        Some(
-            segment
+    let relro_file_offsets = relro
+        .iter()
+        .copied()
+        .map(|relro| {
+            let relro_end = relro.address.checked_add(relro.size).ok_or(
+                ExecutableWriteError::MetadataRangeOutsideLoadSegments {
+                    address: relro.address,
+                    size: relro.size,
+                },
+            )?;
+            let segment = new_segments
+                .iter()
+                .find(|segment| {
+                    segment
+                        .virtual_address
+                        .checked_add(segment.file_size)
+                        .is_some_and(|file_end| {
+                            relro.address >= segment.virtual_address && relro_end <= file_end
+                        })
+                })
+                .ok_or(ExecutableWriteError::MetadataRangeOutsideLoadSegments {
+                    address: relro.address,
+                    size: relro.size,
+                })?;
+            let file_offset = segment
                 .file_offset
                 .checked_add(relro.address - segment.virtual_address)
                 .ok_or(ExecutableWriteError::FileOffsetOverflow {
                     metadata_end: segment.file_offset,
                     alignment: 1,
-                })?,
-        )
-    } else {
-        None
-    };
+                })?;
+            Ok((relro, file_offset))
+        })
+        .collect::<Result<Vec<_>, ExecutableWriteError>>()?;
 
     let mut table = vec![0_u8; new_table_size];
     write_phdr_program_header(
@@ -294,7 +318,7 @@ fn map_runtime_program_headers_impl(
         );
         next_extra_index += 1;
     }
-    if let (Some(relro), Some(file_offset)) = (relro, relro_file_offset) {
+    for (relro, file_offset) in relro_file_offsets {
         let start = next_extra_index * ELF64_PHDR_SIZE;
         write_gnu_relro_program_header(
             &mut table[start..start + ELF64_PHDR_SIZE],
