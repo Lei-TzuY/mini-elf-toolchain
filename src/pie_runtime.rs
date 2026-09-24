@@ -365,8 +365,7 @@ pub fn add_runtime_relative_relocations(
     let dynamic = build_dynamic_table(rela_address, rela_bytes.len(), relocation_count)?;
     let dynamic_relro = PieRelroSegment {
         address: dynamic_address,
-        size: u64::try_from(dynamic.len())
-            .map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?,
+        size: u64::try_from(dynamic.len()).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?,
     };
     let mut relro = Vec::new();
     if let Some(got_relro) = got_relro {
