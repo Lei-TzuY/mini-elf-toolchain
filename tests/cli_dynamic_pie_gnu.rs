@@ -151,7 +151,10 @@ _start:
     );
 
     let header = readelf(&ours, &["-hW"]);
-    assert!(header.contains("Type:                              DYN"), "{header}");
+    assert!(
+        header.contains("Type:                              DYN"),
+        "{header}"
+    );
 
     let program_headers = readelf(&ours, &["-lW"]);
     assert!(program_headers.contains("INTERP"), "{program_headers}");
@@ -198,7 +201,11 @@ _start:
         String::from_utf8_lossy(&gnu_link.stderr)
     );
     let gnu_status = Command::new(&gnu).status().unwrap();
-    assert_eq!(gnu_status.code(), Some(42), "GNU reference status={gnu_status}");
+    assert_eq!(
+        gnu_status.code(),
+        Some(42),
+        "GNU reference status={gnu_status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
