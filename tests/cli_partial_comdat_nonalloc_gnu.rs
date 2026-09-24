@@ -239,3 +239,104 @@ fn grouped_nonalloc_metadata_outside_bounded_contract_is_rejected() {
 
     let _ = fs::remove_dir_all(dir);
 }
+
+
+#[test]
+fn preserves_grouped_rela_targeting_nonalloc_member() {
+    if !have_gnu_toolchain() {
+        return;
+    }
+
+    let dir = temp_dir("rela");
+    let grouped = assemble(
+        &dir,
+        "grouped-rela",
+        r#".section .text.debug_rela,"axG",@progbits,debug_rela,comdat
+.globl debug_rela
+.type debug_rela,@function
+debug_rela:
+    ret
+.size debug_rela, .-debug_rela
+
+.section .debug.debug_rela,"G",@progbits,debug_rela,comdat
+.extern external_debug_target
+.quad external_debug_target
+"#,
+    );
+    let target = assemble(
+        &dir,
+        "target",
+        r#".section .data
+.globl external_debug_target
+.type external_debug_target,@object
+external_debug_target:
+    .quad 0x8877665544332211
+.size external_debug_target, .-external_debug_target
+"#,
+    );
+
+    let input_groups = section_groups(&grouped);
+    assert!(input_groups.contains(".debug.debug_rela"), "{input_groups}");
+    assert!(
+        input_groups.contains(".rela.debug.debug_rela"),
+        "GNU fixture must group the relocation section with its non-alloc target: {input_groups}"
+    );
+
+    let ours = dir.join("ours-rela.o");
+    let gnu = dir.join("gnu-rela.o");
+
+    let partial = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["partial", "-o"])
+        .arg(&ours)
+        .arg(&grouped)
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        partial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&partial.stderr)
+    );
+
+    let gnu_partial = Command::new("ld")
+        .args(["-r", "-o"])
+        .arg(&gnu)
+        .arg(&grouped)
+        .arg(&target)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_partial.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_partial.stderr)
+    );
+
+    for output in [&ours, &gnu] {
+        let groups = section_groups(output);
+        assert!(groups.contains(".debug.debug_rela"), "{groups}");
+        assert!(groups.contains(".rela.debug.debug_rela"), "{groups}");
+
+        let relocations = Command::new("readelf")
+            .args(["-rW"])
+            .arg(output)
+            .output()
+            .unwrap();
+        assert!(relocations.status.success());
+        let relocations = String::from_utf8_lossy(&relocations.stdout);
+        assert!(relocations.contains(".rela.debug.debug_rela"), "{relocations}");
+        assert!(relocations.contains("external_debug_target"), "{relocations}");
+    }
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .arg("validate-rel")
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
