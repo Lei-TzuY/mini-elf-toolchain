@@ -92,12 +92,6 @@ pub enum PieRuntimeError {
         relocation_index: usize,
         symbol_index: u32,
     },
-    UndefinedWeakSymbol {
-        object_index: usize,
-        rela_section_index: u16,
-        relocation_index: usize,
-        symbol_index: u32,
-    },
     MissingGlobalDefinition {
         object_index: usize,
         rela_section_index: u16,
@@ -202,15 +196,6 @@ impl fmt::Display for PieRuntimeError {
             } => write!(
                 f,
                 "object {object_index} RELA section {rela_section_index} relocation {relocation_index} symbol {symbol_index} resolves to SHN_ABS and cannot become R_X86_64_RELATIVE"
-            ),
-            Self::UndefinedWeakSymbol {
-                object_index,
-                rela_section_index,
-                relocation_index,
-                symbol_index,
-            } => write!(
-                f,
-                "object {object_index} RELA section {rela_section_index} relocation {relocation_index} references undefined weak symbol {symbol_index}; zero-valued weak semantics cannot become R_X86_64_RELATIVE"
             ),
             Self::MissingGlobalDefinition {
                 object_index,
