@@ -159,6 +159,18 @@ _start:
     let program_headers = readelf(&ours, &["-lW"]);
     assert!(program_headers.contains("INTERP"), "{program_headers}");
     assert!(program_headers.contains("DYNAMIC"), "{program_headers}");
+    let interp_line = program_headers
+        .lines()
+        .position(|line| line.split_whitespace().next() == Some("INTERP"))
+        .expect("PT_INTERP line");
+    let first_load_line = program_headers
+        .lines()
+        .position(|line| line.split_whitespace().next() == Some("LOAD"))
+        .expect("first PT_LOAD line");
+    assert!(
+        interp_line < first_load_line,
+        "PT_INTERP must precede PT_LOAD entries:\n{program_headers}"
+    );
     assert!(
         program_headers.contains(&interpreter.to_string_lossy().to_string()),
         "{program_headers}"
