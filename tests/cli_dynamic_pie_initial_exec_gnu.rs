@@ -170,7 +170,7 @@ fn dynamic_pie_initial_exec_import_matches_gnu_and_executes() {
 
     let dir = temp_dir("runtime");
     let provider = build_mini_provider(&dir);
-    let gnu_provider = build_gnu_provider(&dir);
+    build_gnu_provider(&dir);
     let consumer = assemble(
         &dir,
         "consumer",
