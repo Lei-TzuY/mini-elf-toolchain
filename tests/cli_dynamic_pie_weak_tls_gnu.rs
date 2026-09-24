@@ -21,16 +21,22 @@ impl Model {
 
     fn source(self, execute_access: bool) -> String {
         let access = match self {
-            Self::TlsGd => r#"data16 leaq provider_tls@tlsgd(%rip), %rdi
+            Self::TlsGd => {
+                r#"data16 leaq provider_tls@tlsgd(%rip), %rdi
     .value 0x6666
     rex64
     call __tls_get_addr@PLT
-    mov (%rax), %edi"#,
-            Self::InitialExec => r#"mov provider_tls@gottpoff(%rip), %rax
-    mov %fs:(%rax), %edi"#,
-            Self::TlsDesc => r#"leaq provider_tls@TLSDESC(%rip), %rax
+    mov (%rax), %edi"#
+            }
+            Self::InitialExec => {
+                r#"mov provider_tls@gottpoff(%rip), %rax
+    mov %fs:(%rax), %edi"#
+            }
+            Self::TlsDesc => {
+                r#"leaq provider_tls@TLSDESC(%rip), %rax
     call *provider_tls@TLSCALL(%rax)
-    mov %fs:(%rax), %edi"#,
+    mov %fs:(%rax), %edi"#
+            },
         };
         let resolver = matches!(self, Self::TlsGd)
             .then_some(".extern __tls_get_addr\n.type __tls_get_addr,@function\n")
@@ -91,8 +97,7 @@ weak_tls_probe:
             ),
             Self::TlsDesc => assert!(
                 text.lines()
-                    .any(|line| line.contains("R_X86_64_TLSDESC")
-                        && line.contains("provider_tls")),
+                    .any(|line| line.contains("R_X86_64_TLSDESC") && line.contains("provider_tls")),
                 "{text}"
             ),
         }
