@@ -385,4 +385,3 @@ _start:
 
     let _ = fs::remove_dir_all(dir);
 }
-
