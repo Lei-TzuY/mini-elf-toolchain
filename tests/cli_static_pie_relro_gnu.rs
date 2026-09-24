@@ -149,10 +149,7 @@ fn runtime_relocating_static_pie_emits_checked_gnu_relro() {
         "{}",
         String::from_utf8_lossy(&inspected.stderr)
     );
-    assert!(
-        String::from_utf8_lossy(&inspected.stdout)
-            .contains("Found 1 PT_GNU_RELRO segment(s)")
-    );
+    assert!(String::from_utf8_lossy(&inspected.stdout).contains("Found 1 PT_GNU_RELRO segment(s)"));
 
     let gnu = dir.join("gnu-pie");
     let gnu_link = Command::new("ld")
