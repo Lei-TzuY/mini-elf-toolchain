@@ -1825,7 +1825,8 @@ fn link_loader_image(
     };
     let metadata_address =
         align_up(metadata_floor, page_alignment).ok_or(SharedObjectError::AddressOverflow)?;
-    let metadata = build_dynamic_metadata(
+    let metadata_relro = dynamic_pie && got_relro.is_none();
+    let mut metadata = build_dynamic_metadata(
         metadata_address,
         &exports,
         &dynamic_imports,
@@ -1851,6 +1852,18 @@ fn link_loader_image(
     let dynamic_address = metadata_address
         .checked_add(metadata.dynamic_offset)
         .ok_or(SharedObjectError::AddressOverflow)?;
+    let unpadded_metadata_size =
+        u64::try_from(metadata.bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+    let metadata_size = if metadata_relro {
+        let padded = align_up(unpadded_metadata_size, page_alignment)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let padded_len =
+            usize::try_from(padded).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        metadata.bytes.resize(padded_len, 0);
+        padded
+    } else {
+        unpadded_metadata_size
+    };
 
     let mut sections = relocated;
     if let (Some(address), Some(bytes)) = (interpreter_address, interpreter_payload) {
@@ -1871,8 +1884,7 @@ fn link_loader_image(
         section_type: SHT_PROGBITS,
         flags: SHF_ALLOC | SHF_WRITE,
         address: metadata_address,
-        size: u64::try_from(metadata.bytes.len())
-            .map_err(|_| SharedObjectError::MetadataTooLarge)?,
+        size: metadata_size,
         alignment: 8,
         bytes: metadata.bytes,
     });
@@ -1918,12 +1930,29 @@ fn link_loader_image(
         address: dynamic_address,
         size: metadata.dynamic_size,
     };
-    let relro = got_relro.map(|region| RuntimeRelroProgramHeader {
-        address: region.address,
-        size: region.size,
-    });
-    match ((interpreter_address, interpreter), relro) {
-        ((Some(address), Some(path)), Some(relro)) => {
+    let mut relro = Vec::new();
+    if let Some(region) = got_relro {
+        // glibc tracks one RELRO interval per loaded object. Preserve the
+        // already-qualified GOT/TLS-GOT protection when that range exists;
+        // emitting a second disjoint metadata PT_GNU_RELRO would replace the
+        // effective loader interval and silently leave the GOT writable.
+        relro.push(RuntimeRelroProgramHeader {
+            address: region.address,
+            size: region.size,
+        });
+    } else if metadata_relro {
+        // First non-GOT metadata RELRO slice: when no loader-bound GOT state
+        // needs protection, the page-aligned synthetic loader metadata block
+        // is padded to a whole-page boundary and becomes the object's single
+        // RELRO interval. glibc seals only complete pages from PT_GNU_RELRO.
+        relro.push(RuntimeRelroProgramHeader {
+            address: metadata_address,
+            size: metadata_size,
+        });
+    }
+
+    match (interpreter_address, interpreter) {
+        (Some(address), Some(path)) if !relro.is_empty() => {
             map_runtime_program_headers_with_dynamic_interp_and_relros(
                 image,
                 dynamic,
@@ -1932,11 +1961,11 @@ fn link_loader_image(
                     size: u64::try_from(path.len() + 1)
                         .map_err(|_| SharedObjectError::MetadataTooLarge)?,
                 },
-                &[relro],
+                &relro,
             )
             .map_err(SharedObjectError::Write)
         }
-        ((Some(address), Some(path)), None) => map_runtime_program_headers_with_dynamic_and_interp(
+        (Some(address), Some(path)) => map_runtime_program_headers_with_dynamic_and_interp(
             image,
             dynamic,
             RuntimeInterpProgramHeader {
@@ -1946,11 +1975,11 @@ fn link_loader_image(
             },
         )
         .map_err(SharedObjectError::Write),
-        ((None, None), Some(relro)) => {
-            map_runtime_program_headers_with_dynamic_and_relros(image, dynamic, &[relro])
+        (None, None) if !relro.is_empty() => {
+            map_runtime_program_headers_with_dynamic_and_relros(image, dynamic, &relro)
                 .map_err(SharedObjectError::Write)
         }
-        ((None, None), None) => map_runtime_program_headers_with_dynamic(image, dynamic)
+        (None, None) => map_runtime_program_headers_with_dynamic(image, dynamic)
             .map_err(SharedObjectError::Write),
         _ => unreachable!("interpreter payload and path are constructed together"),
     }
