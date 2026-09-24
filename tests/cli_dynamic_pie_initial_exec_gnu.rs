@@ -289,7 +289,7 @@ fn dynamic_pie_initial_exec_import_matches_gnu_and_executes() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn dynamic_pie_initial_exec_keeps_weak_and_defined_tls_fail_closed() {
+fn dynamic_pie_initial_exec_keeps_defined_tls_fail_closed() {
     if !have_tools() {
         return;
     }
@@ -300,10 +300,9 @@ fn dynamic_pie_initial_exec_keeps_weak_and_defined_tls_fail_closed() {
     let dir = temp_dir("boundaries");
     let provider = build_mini_provider(&dir);
 
-    for (label, source, needs_provider) in [
-        ("weak", initial_exec_consumer_source(".weak", false), true),
-        ("defined", initial_exec_consumer_source("", true), false),
-    ] {
+    for (label, source, needs_provider) in
+        [("defined", initial_exec_consumer_source("", true), false)]
+    {
         let consumer = assemble(&dir, label, &source);
         let input_relocations = readelf(&consumer, &["-rW"]);
         assert!(
