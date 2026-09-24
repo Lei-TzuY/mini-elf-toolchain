@@ -186,9 +186,7 @@ _start:
     let symbols = readelf(&ours, &["-sDW"]);
     assert!(
         symbols.lines().any(|line| {
-            line.contains(" TLS ")
-                && line.contains(" UND ")
-                && line.ends_with(" provider_tls")
+            line.contains(" TLS ") && line.contains(" UND ") && line.ends_with(" provider_tls")
         }),
         "{symbols}"
     );
@@ -201,8 +199,7 @@ _start:
         "{relocations}"
     );
     assert!(
-        relocations.contains("R_X86_64_JUMP_SLOT")
-            && relocations.contains("__tls_get_addr"),
+        relocations.contains("R_X86_64_JUMP_SLOT") && relocations.contains("__tls_get_addr"),
         "{relocations}"
     );
 
@@ -241,7 +238,11 @@ _start:
         "{gnu_relocations}"
     );
     let gnu_status = Command::new(&gnu).status().unwrap();
-    assert_eq!(gnu_status.code(), Some(42), "GNU reference status={gnu_status}");
+    assert_eq!(
+        gnu_status.code(),
+        Some(42),
+        "GNU reference status={gnu_status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
