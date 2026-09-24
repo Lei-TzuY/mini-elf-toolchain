@@ -222,7 +222,6 @@ _start:
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 #[cfg(target_os = "linux")]
 fn dynamic_pie_binds_external_ifunc_provider_through_plt() {
@@ -325,9 +324,9 @@ _start:
     );
     let symbols = readelf(&ours, &["-sW", "--dyn-syms"]);
     assert!(
-        symbols
-            .lines()
-            .any(|line| line.contains("FUNC") && line.contains("UND") && line.contains("provider_value")),
+        symbols.lines().any(|line| line.contains("FUNC")
+            && line.contains("UND")
+            && line.contains("provider_value")),
         "consumer must retain an ordinary undefined STT_FUNC import:\n{symbols}"
     );
 
@@ -358,7 +357,11 @@ _start:
         String::from_utf8_lossy(&gnu_link.stderr)
     );
     let gnu_status = Command::new(&gnu).status().unwrap();
-    assert_eq!(gnu_status.code(), Some(42), "GNU reference status={gnu_status}");
+    assert_eq!(
+        gnu_status.code(),
+        Some(42),
+        "GNU reference status={gnu_status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
