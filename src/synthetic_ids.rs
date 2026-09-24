@@ -1,4 +1,4 @@
-pub(crate) const COMMON_OBJECT_INDEX: usize = usize::MAX;
+pub const COMMON_OBJECT_INDEX: usize = usize::MAX;
 pub(crate) const GOT_OBJECT_INDEX: usize = usize::MAX - 1;
 pub(crate) const PIE_RUNTIME_OBJECT_INDEX: usize = usize::MAX - 2;
 pub(crate) const SHARED_METADATA_OBJECT_INDEX: usize = usize::MAX - 3;
