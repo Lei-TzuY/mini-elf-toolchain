@@ -17,11 +17,14 @@ use crate::permission_layout::SHF_TLS;
 use crate::pie_runtime::{build_relative_relocation_table, PieRuntimeError};
 use crate::program_headers::{
     map_runtime_program_headers_with_dynamic, map_runtime_program_headers_with_dynamic_and_interp,
-    RuntimeDynamicProgramHeader, RuntimeInterpProgramHeader,
+    map_runtime_program_headers_with_dynamic_and_relros,
+    map_runtime_program_headers_with_dynamic_interp_and_relros, RuntimeDynamicProgramHeader,
+    RuntimeInterpProgramHeader, RuntimeRelroProgramHeader,
 };
 use crate::relocated_sections::{
-    relocate_allocatable_sections_with_external_got_plt_and_tls_requests, RelocatedSectionError,
-    RelocatedSectionImage, TlsSyntheticRequests,
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests,
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got,
+    RelocatedSectionError, RelocatedSectionImage, TlsSyntheticRequests,
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
@@ -1498,20 +1501,47 @@ fn link_loader_image(
     masked_sites.extend(imports.tls_desc_call_sites.iter().copied());
     let relocation_inputs = mask_deferred_relocations(inputs, &masked_sites);
 
-    let relocated_output = relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
-        &relocation_inputs,
-        page_alignment,
-        page_alignment,
-        &imports.got_symbols,
-        &imports.plt_symbols,
-        TlsSyntheticRequests {
-            tls_gd_symbols: &imports.tls_gd_symbols,
-            tls_ld_enabled: imports.uses_tls_ld,
-            tls_desc_symbols: &imports.tls_desc_symbols,
-            external_tls_got_symbols: &tls_ie_import_symbols,
-        },
-    )
+    // First dynamic-executable RELRO slice: isolate only the ordinary GOT.
+    // TLS descriptors/GOT entries remain outside this bounded claim, while
+    // GOTPLT stays on its separate writable page so lazy JUMP_SLOT binding
+    // continues to work.
+    let dynamic_pie_got_relro = dynamic_pie
+        && !imports.got_symbols.is_empty()
+        && imports.tls_gd_symbols.is_empty()
+        && imports.tls_ie_symbols.is_empty()
+        && imports.tls_desc_symbols.is_empty()
+        && !imports.uses_tls_ld;
+    let tls_requests = TlsSyntheticRequests {
+        tls_gd_symbols: &imports.tls_gd_symbols,
+        tls_ld_enabled: imports.uses_tls_ld,
+        tls_desc_symbols: &imports.tls_desc_symbols,
+        external_tls_got_symbols: &tls_ie_import_symbols,
+    };
+    let relocated_output = if dynamic_pie_got_relro {
+        relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got(
+            &relocation_inputs,
+            page_alignment,
+            page_alignment,
+            &imports.got_symbols,
+            &imports.plt_symbols,
+            tls_requests,
+        )
+    } else {
+        relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
+            &relocation_inputs,
+            page_alignment,
+            page_alignment,
+            &imports.got_symbols,
+            &imports.plt_symbols,
+            tls_requests,
+        )
+    }
     .map_err(SharedObjectError::Relocation)?;
+    let got_relro = if dynamic_pie_got_relro {
+        relocated_output.got_region
+    } else {
+        None
+    };
     let mut relocated = relocated_output.sections;
     let got_entries = relocated_output.got_entries;
     let relative_got_entries = imports
@@ -1887,8 +1917,25 @@ fn link_loader_image(
         address: dynamic_address,
         size: metadata.dynamic_size,
     };
-    if let (Some(address), Some(path)) = (interpreter_address, interpreter) {
-        map_runtime_program_headers_with_dynamic_and_interp(
+    let relro = got_relro.map(|region| RuntimeRelroProgramHeader {
+        address: region.address,
+        size: region.size,
+    });
+    match ((interpreter_address, interpreter), relro) {
+        ((Some(address), Some(path)), Some(relro)) => {
+            map_runtime_program_headers_with_dynamic_interp_and_relros(
+                image,
+                dynamic,
+                RuntimeInterpProgramHeader {
+                    address,
+                    size: u64::try_from(path.len() + 1)
+                        .map_err(|_| SharedObjectError::MetadataTooLarge)?,
+                },
+                &[relro],
+            )
+            .map_err(SharedObjectError::Write)
+        }
+        ((Some(address), Some(path)), None) => map_runtime_program_headers_with_dynamic_and_interp(
             image,
             dynamic,
             RuntimeInterpProgramHeader {
@@ -1897,9 +1944,16 @@ fn link_loader_image(
                     .map_err(|_| SharedObjectError::MetadataTooLarge)?,
             },
         )
-        .map_err(SharedObjectError::Write)
-    } else {
-        map_runtime_program_headers_with_dynamic(image, dynamic).map_err(SharedObjectError::Write)
+        .map_err(SharedObjectError::Write),
+        ((None, None), Some(relro)) => {
+            map_runtime_program_headers_with_dynamic_and_relros(image, dynamic, &[relro])
+                .map_err(SharedObjectError::Write)
+        }
+        ((None, None), None) => {
+            map_runtime_program_headers_with_dynamic(image, dynamic)
+                .map_err(SharedObjectError::Write)
+        }
+        _ => unreachable!("interpreter payload and path are constructed together"),
     }
 }
 
