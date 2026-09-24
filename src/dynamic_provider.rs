@@ -209,8 +209,7 @@ pub fn inspect_dynamic_provider(
     let mut exports = BTreeMap::<Vec<u8>, BTreeSet<u8>>::new();
     let mut versioned_exports = BTreeMap::<(Vec<u8>, Vec<u8>), BTreeSet<u8>>::new();
     let mut export_sizes = BTreeMap::<(Vec<u8>, u8), BTreeSet<u64>>::new();
-    let mut versioned_export_sizes =
-        BTreeMap::<(Vec<u8>, Vec<u8>, u8), BTreeSet<u64>>::new();
+    let mut versioned_export_sizes = BTreeMap::<(Vec<u8>, Vec<u8>, u8), BTreeSet<u64>>::new();
     for symbol_index in 0..symbol_count {
         let relative = symbol_index
             .checked_mul(syment)
