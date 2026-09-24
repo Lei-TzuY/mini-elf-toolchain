@@ -271,12 +271,19 @@ _start:
         .arg("-L")
         .arg(&dir)
         .arg("-lprovider-gnu")
+        .arg("-Wl,--no-as-needed")
+        .arg("-lc")
         .output()
         .unwrap();
     assert!(
         gnu_link.status.success(),
         "{}",
         String::from_utf8_lossy(&gnu_link.stderr)
+    );
+    let gnu_dynamic = readelf(&gnu, &["-dW"]);
+    assert!(
+        gnu_dynamic.contains("libprovider-gnu.so") && gnu_dynamic.contains("libc.so.6"),
+        "{gnu_dynamic}"
     );
     let gnu_relocations = readelf(&gnu, &["-rW", "--use-dynamic"]);
     assert!(
