@@ -257,7 +257,10 @@ fn dynamic_pie_lifecycle_arrays_match_gnu_metadata_and_execution() {
             String::from_utf8_lossy(&inspected.stderr)
         );
         let inspected = String::from_utf8_lossy(&inspected.stdout);
-        assert!(inspected.contains("DT_PREINIT_ARRAY: address="), "{inspected}");
+        assert!(
+            inspected.contains("DT_PREINIT_ARRAY: address="),
+            "{inspected}"
+        );
         assert!(inspected.contains("DT_INIT_ARRAY: address="), "{inspected}");
         assert!(inspected.contains("DT_FINI_ARRAY: address="), "{inspected}");
         assert_eq!(inspected.matches("entries=1").count(), 3, "{inspected}");
