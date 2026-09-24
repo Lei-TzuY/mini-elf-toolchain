@@ -8,6 +8,7 @@ use crate::object_symbols::named_symbols_from_table;
 use crate::relocated_sections::RelocatedSectionImage;
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
+use crate::synthetic_ids::PIE_RUNTIME_OBJECT_INDEX;
 use crate::x86_64_relocations::R_X86_64_64;
 
 const SHT_PROGBITS: u32 = 1;
@@ -15,7 +16,6 @@ const STT_GNU_IFUNC: u8 = 10;
 const R_X86_64_RELATIVE: u32 = 8;
 const R_X86_64_IRELATIVE: u32 = 37;
 
-const PIE_RUNTIME_OBJECT_INDEX: usize = usize::MAX - 2;
 const PIE_RELA_SECTION_INDEX: u16 = 1;
 const PIE_TRAMPOLINE_SECTION_INDEX: u16 = 2;
 const PIE_DYNAMIC_SECTION_INDEX: u16 = 3;
