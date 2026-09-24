@@ -217,28 +217,28 @@ fn dynamic_pie_defined_tls_executes_across_gd_ie_and_tlsdesc() {
             let object = assemble(&dir, &label, &source_for(model, weak_definition));
             let input_relocations = readelf(&object, &["-rW"]);
             match model {
-            "tlsgd" => assert!(input_relocations.contains("R_X86_64_TLSGD")),
-            "ie" => assert!(input_relocations.contains("R_X86_64_GOTTPOFF")),
-            "tlsdesc" => {
-                assert!(input_relocations.contains("R_X86_64_GOTPC32_TLSDESC"));
-                assert!(input_relocations.contains("R_X86_64_TLSDESC_CALL"));
+                "tlsgd" => assert!(input_relocations.contains("R_X86_64_TLSGD")),
+                "ie" => assert!(input_relocations.contains("R_X86_64_GOTTPOFF")),
+                "tlsdesc" => {
+                    assert!(input_relocations.contains("R_X86_64_GOTPC32_TLSDESC"));
+                    assert!(input_relocations.contains("R_X86_64_TLSDESC_CALL"));
+                }
+                _ => unreachable!(),
             }
-            _ => unreachable!(),
-        }
 
             let ours = link_mini(
                 &dir,
                 &label,
                 &object,
-            &interpreter,
+                &interpreter,
                 (model == "tlsgd").then_some(libc.as_path()),
             );
 
             let headers = readelf(&ours, &["-lW"]);
-        assert!(
-            headers.contains("TLS"),
-            "{model}: missing PT_TLS\n{headers}"
-        );
+            assert!(
+                headers.contains("TLS"),
+                "{binding}/{model}: missing PT_TLS\n{headers}"
+            );
 
             let symbols = readelf(&ours, &["-sDW"]);
             let expected_binding = if weak_definition { " WEAK " } else { " GLOBAL " };
@@ -252,48 +252,49 @@ fn dynamic_pie_defined_tls_executes_across_gd_ie_and_tlsdesc() {
                 "{binding}/{model}: defined TLS symbol missing from dynsym\n{symbols}"
             );
 
-        let relocations = readelf(&ours, &["-rW", "--use-dynamic"]);
-        match model {
-            "tlsgd" => {
-                assert!(
-                    relocations.contains("R_X86_64_DTPMOD64")
-                        && relocations.contains("R_X86_64_DTPOFF64")
+            let relocations = readelf(&ours, &["-rW", "--use-dynamic"]);
+            match model {
+                "tlsgd" => {
+                    assert!(
+                        relocations.contains("R_X86_64_DTPMOD64")
+                            && relocations.contains("R_X86_64_DTPOFF64")
+                            && relocations.contains("local_tls"),
+                        "{relocations}"
+                    );
+                    assert!(
+                        relocations.contains("R_X86_64_JUMP_SLOT")
+                            && relocations.contains("__tls_get_addr"),
+                        "{relocations}"
+                    );
+                }
+                "ie" => assert!(
+                    relocations.contains("R_X86_64_TPOFF64")
                         && relocations.contains("local_tls"),
                     "{relocations}"
-                );
-                assert!(
-                    relocations.contains("R_X86_64_JUMP_SLOT")
-                        && relocations.contains("__tls_get_addr"),
+                ),
+                "tlsdesc" => assert!(
+                    relocations.lines().any(|line| {
+                        line.contains("R_X86_64_TLSDESC") && line.contains("local_tls")
+                    }),
                     "{relocations}"
-                );
+                ),
+                _ => unreachable!(),
             }
-            "ie" => assert!(
-                relocations.contains("R_X86_64_TPOFF64") && relocations.contains("local_tls"),
-                "{relocations}"
-            ),
-            "tlsdesc" => assert!(
-                relocations
-                    .lines()
-                    .any(|line| line.contains("R_X86_64_TLSDESC") && line.contains("local_tls")),
-                "{relocations}"
-            ),
-            _ => unreachable!(),
-        }
 
-        let status = Command::new(&ours).status().unwrap();
-        assert_eq!(
-            status.code(),
-            Some(42),
-            "mini {binding}/{model} executable should read its own TLS definition; status={status}"
-        );
+            let status = Command::new(&ours).status().unwrap();
+            assert_eq!(
+                status.code(),
+                Some(42),
+                "mini {binding}/{model} executable should read its own TLS definition; status={status}"
+            );
 
             let gnu = link_gnu(&dir, &label, &object, &interpreter, &libc);
-        let gnu_headers = readelf(&gnu, &["-lW"]);
-        assert!(
-            gnu_headers.contains("TLS"),
-            "GNU {model} reference missing PT_TLS\n{gnu_headers}"
-        );
-        let gnu_status = Command::new(&gnu).status().unwrap();
+            let gnu_headers = readelf(&gnu, &["-lW"]);
+            assert!(
+                gnu_headers.contains("TLS"),
+                "GNU {binding}/{model} reference missing PT_TLS\n{gnu_headers}"
+            );
+            let gnu_status = Command::new(&gnu).status().unwrap();
             assert_eq!(
                 gnu_status.code(),
                 Some(42),
