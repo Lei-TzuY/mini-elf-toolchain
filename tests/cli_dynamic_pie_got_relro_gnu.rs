@@ -193,12 +193,7 @@ fn link_mini(
     output
 }
 
-fn link_gnu(
-    dir: &Path,
-    name: &str,
-    object: &Path,
-    interpreter: &Path,
-) -> PathBuf {
+fn link_gnu(dir: &Path, name: &str, object: &Path, interpreter: &Path) -> PathBuf {
     let output = dir.join(name);
     let linked = Command::new("ld")
         .arg("-pie")
@@ -270,7 +265,13 @@ fn dynamic_pie_relro_keeps_lazy_plt_live_and_seals_ordinary_got() {
     let control_object = assemble(&dir, "control", &consumer_source(false));
     let probe_object = assemble(&dir, "probe", &consumer_source(true));
 
-    let mini_control = link_mini(&dir, "mini-control", &control_object, &provider, &interpreter);
+    let mini_control = link_mini(
+        &dir,
+        "mini-control",
+        &control_object,
+        &provider,
+        &interpreter,
+    );
     let mini_probe = link_mini(&dir, "mini-probe", &probe_object, &provider, &interpreter);
     assert_partial_relro_metadata(&mini_control);
     assert_partial_relro_metadata(&mini_probe);
