@@ -176,7 +176,7 @@ fn link_gnu(
     model: &str,
     object: &Path,
     interpreter: &Path,
-    libc: Option<&Path>,
+    libc: &Path,
 ) -> PathBuf {
     let output = dir.join(format!("gnu-{model}"));
     let mut command = Command::new("ld");
@@ -187,10 +187,8 @@ fn link_gnu(
         .arg("-o")
         .arg(&output)
         .arg(object)
-        .arg(interpreter);
-    if let Some(libc) = libc {
-        command.arg(libc);
-    }
+        .arg(interpreter)
+        .arg(libc);
     let linked = command.output().unwrap();
     assert!(
         linked.status.success(),
@@ -287,13 +285,7 @@ fn dynamic_pie_defined_tls_executes_across_gd_ie_and_tlsdesc() {
             "mini {model} executable should read its own TLS definition; status={status}"
         );
 
-        let gnu = link_gnu(
-            &dir,
-            model,
-            &object,
-            &interpreter,
-            (model == "tlsgd").then_some(libc.as_path()),
-        );
+        let gnu = link_gnu(&dir, model, &object, &interpreter, &libc);
         let gnu_headers = readelf(&gnu, &["-lW"]);
         assert!(
             gnu_headers.contains("TLS"),
