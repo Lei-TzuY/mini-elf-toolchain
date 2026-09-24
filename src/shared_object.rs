@@ -1840,8 +1840,7 @@ fn link_loader_image(
     };
     let metadata_address =
         align_up(metadata_floor, page_alignment).ok_or(SharedObjectError::AddressOverflow)?;
-    let metadata_relro =
-        dynamic_pie && (got_relro.is_none() || coalesced_relro_start.is_some());
+    let metadata_relro = dynamic_pie && (got_relro.is_none() || coalesced_relro_start.is_some());
     let mut metadata = build_dynamic_metadata(
         metadata_address,
         &exports,
@@ -1880,16 +1879,15 @@ fn link_loader_image(
     } else {
         unpadded_metadata_size
     };
-    let interpreter_after_metadata = if coalesced_relro_start.is_some()
-        && interpreter_payload.is_some()
-    {
-        let metadata_end = metadata_address
-            .checked_add(metadata_size)
-            .ok_or(SharedObjectError::AddressOverflow)?;
-        Some(align_up(metadata_end, page_alignment).ok_or(SharedObjectError::AddressOverflow)?)
-    } else {
-        None
-    };
+    let interpreter_after_metadata =
+        if coalesced_relro_start.is_some() && interpreter_payload.is_some() {
+            let metadata_end = metadata_address
+                .checked_add(metadata_size)
+                .ok_or(SharedObjectError::AddressOverflow)?;
+            Some(align_up(metadata_end, page_alignment).ok_or(SharedObjectError::AddressOverflow)?)
+        } else {
+            None
+        };
     let interpreter_address = interpreter_before_metadata.or(interpreter_after_metadata);
 
     let mut sections = relocated;
