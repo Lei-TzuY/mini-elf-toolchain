@@ -3,8 +3,8 @@ use crate::gnu_stack::{gnu_stack_policy, GnuStackPolicy};
 use crate::linker_input::LinkerInputObject;
 use crate::program_headers::{
     map_runtime_program_headers, map_runtime_program_headers_with_dynamic,
-    map_runtime_program_headers_with_dynamic_and_stack,
     map_runtime_program_headers_with_dynamic_and_relros,
+    map_runtime_program_headers_with_dynamic_and_stack,
     map_runtime_program_headers_with_dynamic_stack_and_relros,
     map_runtime_program_headers_with_stack, RuntimeDynamicProgramHeader, RuntimeRelroProgramHeader,
     RuntimeStackProgramHeader,
