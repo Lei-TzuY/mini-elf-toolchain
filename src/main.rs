@@ -214,8 +214,9 @@ where
             None
         };
         let raw_remaining = version_script.arguments;
-        let selected_dynamic_modes =
-            usize::from(position_independent) + usize::from(dynamic_pie) + usize::from(shared_object);
+        let selected_dynamic_modes = usize::from(position_independent)
+            + usize::from(dynamic_pie)
+            + usize::from(shared_object);
         if selected_dynamic_modes > 1 {
             return Err(CliError::Usage(
                 "--pie, --dynamic-pie, and --shared are mutually exclusive".to_owned(),
@@ -240,7 +241,11 @@ where
         if (shared_object || dynamic_pie) && !forced.symbols.is_empty() {
             return Err(CliError::Usage(format!(
                 "{} does not support forced undefined roots",
-                if shared_object { "--shared" } else { "--dynamic-pie" }
+                if shared_object {
+                    "--shared"
+                } else {
+                    "--dynamic-pie"
+                }
             )));
         }
         let image_base =
@@ -391,18 +396,14 @@ fn extract_pie_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>),
     Ok((position_independent, remaining))
 }
 
-fn extract_dynamic_pie_argument(
-    arguments: &[OsString],
-) -> Result<(bool, Vec<OsString>), CliError> {
+fn extract_dynamic_pie_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>), CliError> {
     let mut dynamic_pie = false;
     let mut remaining = Vec::with_capacity(arguments.len());
 
     for argument in arguments {
         if argument == "--dynamic-pie" {
             if dynamic_pie {
-                return Err(CliError::Usage(
-                    "duplicate --dynamic-pie option".to_owned(),
-                ));
+                return Err(CliError::Usage("duplicate --dynamic-pie option".to_owned()));
             }
             dynamic_pie = true;
         } else if argument
@@ -444,9 +445,7 @@ fn extract_dynamic_linker_argument(
                     })?
                     .to_str()
                     .ok_or_else(|| {
-                        CliError::Usage(
-                            "dynamic linker path must be valid UTF-8".to_owned(),
-                        )
+                        CliError::Usage("dynamic linker path must be valid UTF-8".to_owned())
                     })?
                     .to_owned(),
             )
