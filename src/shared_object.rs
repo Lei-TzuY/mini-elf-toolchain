@@ -321,6 +321,13 @@ pub enum SharedObjectError {
         symbol_index: u32,
         name: Vec<u8>,
     },
+    DynamicExecutableTlsModelUnsupported {
+        object_index: usize,
+        rela_section_index: u16,
+        relocation_index: usize,
+        relocation_type: u32,
+        name: Vec<u8>,
+    },
     TlsImportUnsupported {
         object_index: usize,
         symbol_index: usize,
@@ -738,6 +745,17 @@ impl fmt::Display for SharedObjectError {
                 "shared object bounded TLS slice rejects TLS relocation use in object {object_index} RELA section {rela_section_index} relocation {relocation_index} symbol {symbol_index} ({:?}); only defined-symbol TLSGD access is implemented",
                 String::from_utf8_lossy(name)
             ),
+            Self::DynamicExecutableTlsModelUnsupported {
+                object_index,
+                rela_section_index,
+                relocation_index,
+                relocation_type,
+                name,
+            } => write!(
+                f,
+                "dynamic PIE bounded TLS slice rejects relocation type {relocation_type} in object {object_index} RELA section {rela_section_index} relocation {relocation_index} for symbol {:?}; only external general-dynamic R_X86_64_TLSGD is qualified for loader-backed dynamic executables",
+                String::from_utf8_lossy(name)
+            ),
             Self::TlsImportUnsupported {
                 object_index,
                 symbol_index,
@@ -1118,10 +1136,26 @@ struct DynamicSymbolRelocationSite {
     relocation_index: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoaderTlsPolicy {
+    SharedObject,
+    DynamicPieTlsgdOnly,
+}
+
+impl LoaderTlsPolicy {
+    fn allows(self, relocation_type: u32) -> bool {
+        match self {
+            Self::SharedObject => true,
+            Self::DynamicPieTlsgdOnly => relocation_type == R_X86_64_TLSGD,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 struct InputValidationOptions {
     allow_copy_relocations: bool,
     allow_explicit_ifunc_imports: bool,
+    tls_policy: LoaderTlsPolicy,
 }
 
 #[derive(Debug)]
@@ -1174,6 +1208,7 @@ pub fn shared_import_requirements(
         InputValidationOptions {
             allow_copy_relocations: false,
             allow_explicit_ifunc_imports: false,
+            tls_policy: LoaderTlsPolicy::SharedObject,
         },
     )
 }
@@ -1186,6 +1221,7 @@ pub fn dynamic_pie_import_requirements(
         InputValidationOptions {
             allow_copy_relocations: true,
             allow_explicit_ifunc_imports: true,
+            tls_policy: LoaderTlsPolicy::DynamicPieTlsgdOnly,
         },
     )
 }
@@ -1423,6 +1459,11 @@ fn link_loader_image(
         InputValidationOptions {
             allow_copy_relocations: dynamic_pie,
             allow_explicit_ifunc_imports: dynamic_pie,
+            tls_policy: if dynamic_pie {
+                LoaderTlsPolicy::DynamicPieTlsgdOnly
+            } else {
+                LoaderTlsPolicy::SharedObject
+            },
         },
     )?;
     let copy_sizes = validate_dynamic_pie_copy_metadata(&imports.copy_symbols, copy_relocations)?;
@@ -1984,6 +2025,24 @@ fn validate_inputs(
             for (relocation_index, relocation) in table.relocations.iter().enumerate() {
                 let symbol = &symbols[relocation.symbol_index as usize];
                 let symbol_type = symbol.symbol.info & 0x0f;
+                if matches!(
+                    relocation.relocation_type,
+                    R_X86_64_GOTPC32_TLSDESC
+                        | R_X86_64_TLSDESC_CALL
+                        | R_X86_64_TLSGD
+                        | R_X86_64_GOTTPOFF
+                        | R_X86_64_TLSLD
+                        | R_X86_64_DTPOFF32
+                ) && !options.tls_policy.allows(relocation.relocation_type)
+                {
+                    return Err(SharedObjectError::DynamicExecutableTlsModelUnsupported {
+                        object_index: input.object_index,
+                        rela_section_index: table.section_index,
+                        relocation_index,
+                        relocation_type: relocation.relocation_type,
+                        name: symbol.name.to_vec(),
+                    });
+                }
                 if relocation.relocation_type == R_X86_64_GOTPC32_TLSDESC
                     || relocation.relocation_type == R_X86_64_TLSDESC_CALL
                 {
