@@ -35,6 +35,8 @@ use std::process::ExitCode;
 
 const DEFAULT_PAGE_ALIGNMENT: u64 = 0x1000;
 const DEFAULT_ENTRY_SYMBOL: &str = "_start";
+const STT_FUNC: u8 = 2;
+const STT_GNU_IFUNC: u8 = 10;
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
 const START_GROUP: &str = "--start-group";
 const END_GROUP: &str = "--end-group";
@@ -1157,15 +1159,16 @@ fn provider_matches_import(
     provider: &DynamicProviderMetadata,
     import: &SharedImportRequirement,
 ) -> bool {
+    let matches_type = |types: &std::collections::BTreeSet<u8>| {
+        types.contains(&import.symbol_type)
+            || (import.symbol_type == STT_FUNC && types.contains(&STT_GNU_IFUNC))
+    };
     match &import.version {
         Some(version) => provider
             .versioned_exports
             .get(&(import.name.clone(), version.clone()))
-            .is_some_and(|types| types.contains(&import.symbol_type)),
-        None => provider
-            .exports
-            .get(&import.name)
-            .is_some_and(|types| types.contains(&import.symbol_type)),
+            .is_some_and(matches_type),
+        None => provider.exports.get(&import.name).is_some_and(matches_type),
     }
 }
 
