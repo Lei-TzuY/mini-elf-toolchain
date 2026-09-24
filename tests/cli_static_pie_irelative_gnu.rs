@@ -136,7 +136,10 @@ fn static_pie_executes_local_ifunc_and_keeps_relative_prefix() {
     assert!(input.status.success());
     let input = String::from_utf8_lossy(&input.stdout);
     assert!(input.contains("R_X86_64_64"), "{input}");
-    assert!(input.contains("IFUNC") && input.contains("chosen"), "{input}");
+    assert!(
+        input.contains("IFUNC") && input.contains("chosen"),
+        "{input}"
+    );
 
     let mini = link_mini_pie(&dir, "ours-pie", &object);
     assert!(
