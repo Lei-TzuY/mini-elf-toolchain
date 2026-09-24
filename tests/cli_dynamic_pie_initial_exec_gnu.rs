@@ -297,40 +297,36 @@ fn dynamic_pie_initial_exec_keeps_defined_tls_fail_closed() {
         return;
     };
 
-    let dir = temp_dir("boundaries");
-    let provider = build_mini_provider(&dir);
+    let dir = temp_dir("defined-boundary");
+    let consumer = assemble(
+        &dir,
+        "defined",
+        &initial_exec_consumer_source("", true),
+    );
+    let input_relocations = readelf(&consumer, &["-rW"]);
+    assert!(
+        input_relocations.contains("R_X86_64_GOTTPOFF"),
+        "{input_relocations}"
+    );
 
-    for (label, source, needs_provider) in
-        [("defined", initial_exec_consumer_source("", true), false)]
-    {
-        let consumer = assemble(&dir, label, &source);
-        let input_relocations = readelf(&consumer, &["-rW"]);
-        assert!(
-            input_relocations.contains("R_X86_64_GOTTPOFF"),
-            "{input_relocations}"
-        );
-
-        let output = dir.join(format!("must-not-exist-{label}"));
-        let mut command = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"));
-        command
-            .args(["link", "-o"])
-            .arg(&output)
-            .arg("--dynamic-pie")
-            .arg("--dynamic-linker")
-            .arg(&interpreter);
-        if needs_provider {
-            command.arg("--needed-from").arg(&provider);
-        }
-        let linked = command.arg(&consumer).output().unwrap();
-        assert!(!linked.status.success(), "{label} unexpectedly linked");
-        assert!(linked.stdout.is_empty());
-        let stderr = String::from_utf8_lossy(&linked.stderr);
-        assert!(
-            stderr.contains("dynamic PIE") && stderr.contains("TLS"),
-            "{label}: {stderr}"
-        );
-        assert!(!output.exists());
-    }
+    let output = dir.join("must-not-exist-defined");
+    let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--dynamic-pie")
+        .arg("--dynamic-linker")
+        .arg(&interpreter)
+        .arg(&consumer)
+        .output()
+        .unwrap();
+    assert!(!linked.status.success(), "defined TLS unexpectedly linked");
+    assert!(linked.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&linked.stderr);
+    assert!(
+        stderr.contains("dynamic PIE") && stderr.contains("TLS"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
 
     let _ = fs::remove_dir_all(dir);
 }
