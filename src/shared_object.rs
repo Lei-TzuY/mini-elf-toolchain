@@ -1825,7 +1825,8 @@ fn link_loader_image(
     };
     let metadata_address =
         align_up(metadata_floor, page_alignment).ok_or(SharedObjectError::AddressOverflow)?;
-    let metadata = build_dynamic_metadata(
+    let metadata_relro = dynamic_pie && got_relro.is_none();
+    let mut metadata = build_dynamic_metadata(
         metadata_address,
         &exports,
         &dynamic_imports,
@@ -1851,8 +1852,17 @@ fn link_loader_image(
     let dynamic_address = metadata_address
         .checked_add(metadata.dynamic_offset)
         .ok_or(SharedObjectError::AddressOverflow)?;
-    let metadata_size =
+    let unpadded_metadata_size =
         u64::try_from(metadata.bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+    let metadata_size = if metadata_relro {
+        let padded = align_up(unpadded_metadata_size, page_alignment)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let padded_len = usize::try_from(padded).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        metadata.bytes.resize(padded_len, 0);
+        padded
+    } else {
+        unpadded_metadata_size
+    };
 
     let mut sections = relocated;
     if let (Some(address), Some(bytes)) = (interpreter_address, interpreter_payload) {
@@ -1929,10 +1939,11 @@ fn link_loader_image(
             address: region.address,
             size: region.size,
         });
-    } else if dynamic_pie {
+    } else if metadata_relro {
         // First non-GOT metadata RELRO slice: when no loader-bound GOT state
         // needs protection, the page-aligned synthetic loader metadata block
-        // becomes the object's single RELRO interval.
+        // is padded to a whole-page boundary and becomes the object's single
+        // RELRO interval. glibc seals only complete pages from PT_GNU_RELRO.
         relro.push(RuntimeRelroProgramHeader {
             address: metadata_address,
             size: metadata_size,
