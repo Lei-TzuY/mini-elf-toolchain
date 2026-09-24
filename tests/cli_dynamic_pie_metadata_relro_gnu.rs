@@ -89,7 +89,13 @@ provider_value:
     );
     let shared = dir.join("libprovider.so");
     let linked = Command::new("ld")
-        .args(["-shared", "--hash-style=sysv", "-soname", "libprovider.so", "-o"])
+        .args([
+            "-shared",
+            "--hash-style=sysv",
+            "-soname",
+            "libprovider.so",
+            "-o",
+        ])
         .arg(&shared)
         .arg(&object)
         .output()
