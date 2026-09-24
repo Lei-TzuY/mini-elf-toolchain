@@ -11,7 +11,9 @@ use crate::link_symbols::{resolve_validated_objects, LinkSymbolError};
 use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
 use crate::object_symbols::named_symbols_from_table;
-use crate::pie_runtime::{add_runtime_relative_relocations, PieDynamicSegment, PieRuntimeError};
+use crate::pie_runtime::{
+    add_runtime_relative_relocations, PieDynamicSegment, PieRelroSegment, PieRuntimeError,
+};
 use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
 use crate::resolve::{SHN_UNDEF, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
@@ -150,6 +152,7 @@ pub struct StaticLinkOutput {
 pub(crate) struct StaticPositionIndependentArtifact {
     pub output: StaticLinkOutput,
     pub dynamic: Option<PieDynamicSegment>,
+    pub relro: Option<PieRelroSegment>,
 }
 
 pub fn link_static_executable(
@@ -298,7 +301,7 @@ fn link_static_image_artifact(
     let layout = relocated_layout(&relocated);
     let user_entry_address =
         final_symbol_address(entry_definition, &layout).map_err(StaticLinkError::EntryAddress)?;
-    let (relocated, runtime_entry_address, dynamic) = if position_independent {
+    let (relocated, runtime_entry_address, dynamic, relro) = if position_independent {
         let runtime = add_runtime_relative_relocations(
             inputs,
             relocated,
@@ -308,9 +311,14 @@ fn link_static_image_artifact(
             page_alignment,
         )
         .map_err(StaticLinkError::PieRuntime)?;
-        (runtime.sections, runtime.entry_address, runtime.dynamic)
+        (
+            runtime.sections,
+            runtime.entry_address,
+            runtime.dynamic,
+            runtime.relro,
+        )
     } else {
-        (relocated, user_entry_address, None)
+        (relocated, user_entry_address, None, None)
     };
 
     let load_segments = build_load_segments(relocated.iter().map(|section| LoadableSectionInput {
@@ -365,6 +373,7 @@ fn link_static_image_artifact(
     Ok(StaticPositionIndependentArtifact {
         output: StaticLinkOutput { image, link_map },
         dynamic,
+        relro,
     })
 }
 
