@@ -19,7 +19,8 @@ use crate::resolve::{SHN_UNDEF, STB_LOCAL, STB_WEAK};
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
 use crate::tls::{
     inject_static_tls_program_header, relocate_allocatable_sections_with_static_tls,
-    StaticTlsProgramHeaderError, StaticTlsRelocationError,
+    relocate_allocatable_sections_with_static_tls_isolated_got, StaticTlsProgramHeaderError,
+    StaticTlsRelocationError,
 };
 use crate::x86_64_relocations::{
     is_static_pie_pc_relative_relocation_type, is_static_pie_relocation_type,
@@ -152,7 +153,7 @@ pub struct StaticLinkOutput {
 pub(crate) struct StaticPositionIndependentArtifact {
     pub output: StaticLinkOutput,
     pub dynamic: Option<PieDynamicSegment>,
-    pub relro: Option<PieRelroSegment>,
+    pub relro: Vec<PieRelroSegment>,
 }
 
 pub fn link_static_executable(
@@ -270,14 +271,22 @@ fn link_static_image_artifact(
     entry_symbol: &[u8],
     position_independent: bool,
 ) -> Result<StaticPositionIndependentArtifact, StaticLinkError> {
-    let relocated_output =
+    let relocated_output = if position_independent {
+        relocate_allocatable_sections_with_static_tls_isolated_got(
+            inputs,
+            start_address,
+            page_alignment,
+        )
+    } else {
         relocate_allocatable_sections_with_static_tls(inputs, start_address, page_alignment)
-            .map_err(|source| match source {
-                StaticTlsRelocationError::Regular(source) => StaticLinkError::Relocation(source),
-                source => StaticLinkError::TlsRelocation(source),
-            })?;
+    }
+    .map_err(|source| match source {
+        StaticTlsRelocationError::Regular(source) => StaticLinkError::Relocation(source),
+        source => StaticLinkError::TlsRelocation(source),
+    })?;
     let got_entries = relocated_output.got_entries;
     let tls_layout = relocated_output.tls_layout;
+    let got_region = relocated_output.got_region;
     let relocated = relocated_output.sections;
 
     let validated_objects = inputs
@@ -307,6 +316,10 @@ fn link_static_image_artifact(
             relocated,
             &definitions,
             &got_entries,
+            got_region.map(|region| PieRelroSegment {
+                address: region.address,
+                size: region.size,
+            }),
             user_entry_address,
             page_alignment,
         )
@@ -318,7 +331,7 @@ fn link_static_image_artifact(
             runtime.relro,
         )
     } else {
-        (relocated, user_entry_address, None, None)
+        (relocated, user_entry_address, None, Vec::new())
     };
 
     let load_segments = build_load_segments(relocated.iter().map(|section| LoadableSectionInput {
