@@ -22,6 +22,7 @@ fn command_available(program: &str) -> bool {
 
 fn have_tools() -> bool {
     command_reports("as", "GNU assembler")
+        && command_reports("ld", "GNU ld")
         && command_reports("readelf", "GNU readelf")
         && command_available("cc")
 }
@@ -172,13 +173,14 @@ fn link_mini(
 
 fn link_gnu(dir: &Path, model: &str, object: &Path, interpreter: &Path) -> PathBuf {
     let output = dir.join(format!("gnu-{model}"));
-    let linked = Command::new("cc")
-        .args(["-nostartfiles", "-fPIE", "-pie"])
-        .arg("-Wl,--dynamic-linker")
-        .arg(format!("-Wl,{}", interpreter.to_string_lossy()))
+    let linked = Command::new("ld")
+        .arg("-pie")
+        .arg("--dynamic-linker")
+        .arg(interpreter)
         .arg("-o")
         .arg(&output)
         .arg(object)
+        .arg(interpreter)
         .output()
         .unwrap();
     assert!(
