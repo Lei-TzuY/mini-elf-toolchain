@@ -1,6 +1,6 @@
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::os::unix::process::ExitStatusExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -349,7 +349,6 @@ fn dynamic_pie_initial_exec_keeps_protected_defined_tls_fail_closed() {
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 #[cfg(target_os = "linux")]
 fn dynamic_pie_initial_exec_tls_got_is_relro_after_loader_binding() {
@@ -443,7 +442,10 @@ _start:
         String::from_utf8_lossy(&gnu_link.stderr)
     );
     let gnu_program_headers = readelf(&gnu, &["-lW"]);
-    assert!(gnu_program_headers.contains("GNU_RELRO"), "{gnu_program_headers}");
+    assert!(
+        gnu_program_headers.contains("GNU_RELRO"),
+        "{gnu_program_headers}"
+    );
     let gnu_status = Command::new(&gnu).status().unwrap();
     assert_eq!(
         gnu_status.signal(),
