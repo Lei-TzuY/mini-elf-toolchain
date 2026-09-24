@@ -224,6 +224,144 @@ int main(int argc, char **argv) {
 }
 
 #[test]
+fn shared_needed_from_accepts_ifunc_provider_for_function_plt_import() {
+    if !have_tools() {
+        return;
+    }
+
+    let dir = temp_dir("ifunc-provider");
+    let provider_object = assemble(
+        &dir,
+        "ifunc-provider",
+        r#".text
+.type provider_impl,@function
+provider_impl:
+    mov $42, %eax
+    ret
+.size provider_impl, .-provider_impl
+
+.type provider_resolver,@function
+provider_resolver:
+    lea provider_impl(%rip), %rax
+    ret
+.size provider_resolver, .-provider_resolver
+
+.globl provider_function
+.type provider_function,@gnu_indirect_function
+.set provider_function,provider_resolver
+
+.section .note.GNU-stack,"",@progbits
+"#,
+    );
+    let provider = dir.join("libprovider.so");
+    let provider_link = Command::new("ld")
+        .args(["-shared", "-soname", "libprovider.so", "-o"])
+        .arg(&provider)
+        .arg(&provider_object)
+        .output()
+        .unwrap();
+    assert!(
+        provider_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&provider_link.stderr)
+    );
+
+    let provider_symbols = Command::new("readelf")
+        .args(["-sW"])
+        .arg(&provider)
+        .output()
+        .unwrap();
+    assert!(provider_symbols.status.success());
+    let provider_symbols = String::from_utf8_lossy(&provider_symbols.stdout);
+    assert!(
+        provider_symbols
+            .lines()
+            .any(|line| line.contains("IFUNC") && line.contains("provider_function")),
+        "{provider_symbols}"
+    );
+
+    let object = build_consumer_object(&dir);
+    let shared = dir.join("libifunc-consumer.so");
+    let mini = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&shared)
+        .arg("--shared")
+        .arg("--needed-from")
+        .arg(&provider)
+        .arg("--runpath")
+        .arg("$ORIGIN")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(
+        mini.status.success(),
+        "{}",
+        String::from_utf8_lossy(&mini.stderr)
+    );
+
+    let relocations = Command::new("readelf")
+        .args(["-rW", "--use-dynamic"])
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(relocations.status.success());
+    let relocations = String::from_utf8_lossy(&relocations.stdout);
+    assert!(
+        relocations.contains("R_X86_64_JUMP_SLOT")
+            && relocations.contains("provider_function"),
+        "{relocations}"
+    );
+
+    #[cfg(target_os = "linux")]
+    {
+        let source = dir.join("ifunc-runner.c");
+        let runner = dir.join("ifunc-runner");
+        fs::write(
+            &source,
+            r#"#include <dlfcn.h>
+#include <stdint.h>
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 120;
+    void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!handle) return 121;
+    uint64_t (*call_provider)(void) =
+        (uint64_t (*)(void))dlsym(handle, "call_provider");
+    if (!call_provider) return 122;
+    if (call_provider() != UINT64_C(42)) return 123;
+    return dlclose(handle) == 0 ? 0 : 124;
+}
+"#,
+        )
+        .unwrap();
+        let compile = Command::new("cc")
+            .args(["-o"])
+            .arg(&runner)
+            .arg(&source)
+            .arg("-ldl")
+            .output()
+            .unwrap();
+        assert!(
+            compile.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compile.stderr)
+        );
+
+        let status = Command::new(&runner)
+            .arg(&shared)
+            .env("LD_LIBRARY_PATH", &dir)
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "shared IFUNC provider binding returned {status}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
 fn shared_needed_order_controls_dependency_symbol_scope() {
     if !have_tools() {
         return;
