@@ -2103,6 +2103,24 @@ fn validate_inputs(
                 if relocation.relocation_type == R_X86_64_TLSGD {
                     let unresolved = symbol.symbol.section_index == SHN_UNDEF
                         && !definitions.contains_key(symbol.name);
+                    if options.tls_policy == LoaderTlsPolicy::DynamicPieTlsgdOnly {
+                        let binding = symbol.symbol.info >> 4;
+                        if !unresolved
+                            || binding != STB_GLOBAL
+                            || symbol.symbol.other != 0
+                            || symbol_type != STT_TLS
+                        {
+                            return Err(
+                                SharedObjectError::DynamicExecutableTlsModelUnsupported {
+                                    object_index: input.object_index,
+                                    rela_section_index: table.section_index,
+                                    relocation_index,
+                                    relocation_type: relocation.relocation_type,
+                                    name: symbol.name.to_vec(),
+                                },
+                            );
+                        }
+                    }
                     let definition = definitions.get(symbol.name);
                     if !is_supported_dynamic_tls_reference(
                         symbol.symbol.info,
