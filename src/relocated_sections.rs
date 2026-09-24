@@ -562,20 +562,23 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         })?;
 
     let (got_layout_size, got_layout_alignment) =
-        if got_size != 0 && isolated_got_page_alignment.is_some() {
-            let alignment = isolated_got_page_alignment.unwrap();
-            if alignment == 0 || !alignment.is_power_of_two() {
-                return Err(RelocatedSectionError::Layout(
-                    PermissionLayoutError::InvalidPageAlignment { alignment },
-                ));
+        if let (nonzero_got_size, Some(alignment)) = (got_size, isolated_got_page_alignment) {
+            if nonzero_got_size == 0 {
+                (got_size, GOT_ALIGNMENT)
+            } else {
+                if alignment == 0 || !alignment.is_power_of_two() {
+                    return Err(RelocatedSectionError::Layout(
+                        PermissionLayoutError::InvalidPageAlignment { alignment },
+                    ));
+                }
+                let mask = alignment - 1;
+                let size = got_size.checked_add(mask).map(|sum| sum & !mask).ok_or(
+                    RelocatedSectionError::GotSizeOverflow {
+                        symbol_count: got_symbol_count,
+                    },
+                )?;
+                (size, alignment)
             }
-            let mask = alignment - 1;
-            let size = got_size.checked_add(mask).map(|sum| sum & !mask).ok_or(
-                RelocatedSectionError::GotSizeOverflow {
-                    symbol_count: got_symbol_count,
-                },
-            )?;
-            (size, alignment)
         } else {
             (got_size, GOT_ALIGNMENT)
         };
