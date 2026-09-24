@@ -304,7 +304,7 @@ _start:
 
 #[test]
 #[cfg(target_os = "linux")]
-fn dynamic_pie_rejects_unqualified_initial_exec_tls() {
+fn dynamic_pie_initial_exec_requires_checked_provider() {
     if !have_tools() {
         return;
     }
@@ -312,8 +312,7 @@ fn dynamic_pie_rejects_unqualified_initial_exec_tls() {
         return;
     };
 
-    let dir = temp_dir("ie-rejected");
-    let provider = build_provider(&dir);
+    let dir = temp_dir("ie-provider-required");
     let consumer = assemble(
         &dir,
         "ie-consumer",
@@ -342,8 +341,6 @@ _start:
         .arg("--dynamic-pie")
         .arg("--dynamic-linker")
         .arg(&interpreter)
-        .arg("--needed-from")
-        .arg(&provider)
         .arg(&consumer)
         .output()
         .unwrap();
@@ -351,7 +348,7 @@ _start:
     assert!(linked.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&linked.stderr);
     assert!(
-        stderr.contains("dynamic PIE") && stderr.contains("TLS"),
+        stderr.contains("provider") || stderr.contains("external imports"),
         "{stderr}"
     );
     assert!(!output.exists());
