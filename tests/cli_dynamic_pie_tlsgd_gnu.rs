@@ -167,7 +167,9 @@ fn dynamic_pie_tlsgd_import_binds_provider_tls_through_glibc() {
 .extern __tls_get_addr
 .type __tls_get_addr,@function
 _start:
-    leaq provider_tls@tlsgd(%rip), %rdi
+    data16 leaq provider_tls@tlsgd(%rip), %rdi
+    .value 0x6666
+    rex64
     call __tls_get_addr@PLT
     mov (%rax), %edi
     mov $60, %eax
