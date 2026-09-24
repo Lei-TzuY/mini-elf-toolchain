@@ -359,7 +359,6 @@ _start:
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 #[cfg(target_os = "linux")]
 fn dynamic_pie_rejects_weak_tlsgd_until_separately_qualified() {
