@@ -298,11 +298,7 @@ fn dynamic_pie_initial_exec_keeps_defined_tls_fail_closed() {
     };
 
     let dir = temp_dir("defined-boundary");
-    let consumer = assemble(
-        &dir,
-        "defined",
-        &initial_exec_consumer_source("", true),
-    );
+    let consumer = assemble(&dir, "defined", &initial_exec_consumer_source("", true));
     let input_relocations = readelf(&consumer, &["-rW"]);
     assert!(
         input_relocations.contains("R_X86_64_GOTTPOFF"),
