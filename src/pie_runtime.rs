@@ -344,11 +344,7 @@ pub fn add_runtime_relative_relocations(
         Ok::<_, PieRuntimeError>(max_end.max(end))
     })?;
     let rela_address = align_up(max_end, page_alignment)?;
-    let dynamic = build_dynamic_table(
-        rela_address,
-        rela_bytes.len(),
-        relative_relocation_count,
-    )?;
+    let dynamic = build_dynamic_table(rela_address, rela_bytes.len(), relative_relocation_count)?;
     let dynamic_size =
         u64::try_from(dynamic.len()).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
     let trampoline_address = align_up(
