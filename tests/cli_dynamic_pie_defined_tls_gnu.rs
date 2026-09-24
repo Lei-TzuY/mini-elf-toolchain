@@ -94,7 +94,8 @@ fn readelf(path: &Path, args: &[&str]) -> String {
 
 fn source_for(model: &str) -> String {
     let access = match model {
-        "tlsgd" => r#"
+        "tlsgd" => {
+            r#"
 .extern __tls_get_addr
 .type __tls_get_addr,@function
     data16 leaq local_tls@tlsgd(%rip), %rdi
@@ -102,16 +103,21 @@ fn source_for(model: &str) -> String {
     rex64
     call __tls_get_addr@PLT
     mov (%rax), %edi
-"#,
-        "ie" => r#"
+"#
+        }
+        "ie" => {
+            r#"
     mov local_tls@gottpoff(%rip), %rax
     mov %fs:(%rax), %edi
-"#,
-        "tlsdesc" => r#"
+"#
+        }
+        "tlsdesc" => {
+            r#"
     leaq local_tls@TLSDESC(%rip), %rax
     call *local_tls@TLSCALL(%rax)
     mov %fs:(%rax), %edi
-"#,
+"#
+        }
         other => panic!("unknown TLS model {other}"),
     };
     format!(
@@ -219,7 +225,10 @@ fn dynamic_pie_defined_tls_executes_across_gd_ie_and_tlsdesc() {
         );
 
         let headers = readelf(&ours, &["-lW"]);
-        assert!(headers.contains("TLS"), "{model}: missing PT_TLS\n{headers}");
+        assert!(
+            headers.contains("TLS"),
+            "{model}: missing PT_TLS\n{headers}"
+        );
 
         let symbols = readelf(&ours, &["-sDW"]);
         assert!(
@@ -248,15 +257,13 @@ fn dynamic_pie_defined_tls_executes_across_gd_ie_and_tlsdesc() {
                 );
             }
             "ie" => assert!(
-                relocations.contains("R_X86_64_TPOFF64")
-                    && relocations.contains("local_tls"),
+                relocations.contains("R_X86_64_TPOFF64") && relocations.contains("local_tls"),
                 "{relocations}"
             ),
             "tlsdesc" => assert!(
                 relocations
                     .lines()
-                    .any(|line| line.contains("R_X86_64_TLSDESC")
-                        && line.contains("local_tls")),
+                    .any(|line| line.contains("R_X86_64_TLSDESC") && line.contains("local_tls")),
                 "{relocations}"
             ),
             _ => unreachable!(),
