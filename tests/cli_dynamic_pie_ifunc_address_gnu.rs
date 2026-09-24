@@ -182,7 +182,16 @@ _start:
         String::from_utf8_lossy(&linked.stderr)
     );
 
-    let symbols = readelf(&ours, &["-sW"]);
+    let symbols = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynsym"))
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        symbols.status.success(),
+        "{}",
+        String::from_utf8_lossy(&symbols.stderr)
+    );
+    let symbols = String::from_utf8_lossy(&symbols.stdout);
     assert!(
         symbols.lines().any(|line| {
             line.contains("IFUNC") && line.contains("UND") && line.contains("provider_value")
