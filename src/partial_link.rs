@@ -171,6 +171,13 @@ pub enum PartialLinkError {
         member_section_index: u16,
         section_type: u32,
     },
+    UnsupportedGroupedNonAllocSectionMetadata {
+        input_index: usize,
+        group_section_index: u16,
+        member_section_index: u16,
+        link: u32,
+        info: u32,
+    },
     OrphanGroupedNonAllocSection {
         input_index: usize,
         section_index: u16,
@@ -516,7 +523,17 @@ impl fmt::Display for PartialLinkError {
                 section_type,
             } => write!(
                 f,
-                "partial-link input {input_index} COMDAT group {group_section_index} contains unsupported non-allocatable member section {member_section_index} of type {section_type}"
+                "partial-link input {input_index} COMDAT group {group_section_index} contains unsupported non-allocatable member section {member_section_index} of type {section_type}; bounded preservation supports SHT_PROGBITS plus grouped SHT_RELA"
+            ),
+            Self::UnsupportedGroupedNonAllocSectionMetadata {
+                input_index,
+                group_section_index,
+                member_section_index,
+                link,
+                info,
+            } => write!(
+                f,
+                "partial-link input {input_index} COMDAT group {group_section_index} grouped non-allocatable section {member_section_index} carries unsupported sh_link={link} sh_info={info}; bounded SHT_PROGBITS preservation requires both fields to be zero"
             ),
             Self::OrphanGroupedNonAllocSection {
                 input_index,
@@ -762,6 +779,7 @@ impl PartialLinkError {
             | Self::InvalidGroupMember { input_index, .. }
             | Self::GroupMemberMissingFlag { input_index, .. }
             | Self::UnsupportedNonAllocGroupMember { input_index, .. }
+            | Self::UnsupportedGroupedNonAllocSectionMetadata { input_index, .. }
             | Self::OrphanGroupedNonAllocSection { input_index, .. }
             | Self::MissingGroupedRelaTable { input_index, .. }
             | Self::GroupedRelaSymbolTableMismatch { input_index, .. }
@@ -974,7 +992,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
                 )?
             } else {
                 let placement =
-                    push_output_alloc_section(&mut output_sections, name.clone(), section, data)?;
+                    push_output_section(&mut output_sections, name.clone(), section, data)?;
                 if is_coalescible_alloc_section(&name, section) && !grouped {
                     coalesced_canonical_sections
                         .insert(merge_key, usize::from(placement.output_section_index - 1));
@@ -1093,8 +1111,7 @@ pub fn link_relocatable_objects_with_forced_undefined(
                         section_index_u16,
                     )?
                 } else {
-                    let placement =
-                        push_output_alloc_section(&mut output_sections, name, section, data)?;
+                    let placement = push_output_section(&mut output_sections, name, section, data)?;
                     let output_slot = usize::from(placement.output_section_index - 1);
                     output_sections[output_slot].link =
                         u32::from(target_placement.output_section_index);
@@ -1102,6 +1119,45 @@ pub fn link_relocatable_objects_with_forced_undefined(
                     placement
                 };
 
+            section_maps[input_index][section_index] = Some(placement);
+        }
+    }
+
+    // Preserve bounded non-allocatable SHT_PROGBITS members from selected
+    // COMDAT groups as distinct output sections. They must not be coalesced
+    // across groups because SHT_GROUP membership is an identity boundary.
+    // Grouped RELA sections are emitted later through the existing relocation
+    // remap path once every target section has a stable output index.
+    for (input_index, input) in parsed.iter().enumerate() {
+        let names = section_names(input_index, input)?;
+
+        for (section_index, section) in input.object.sections.iter().enumerate() {
+            if section.flags & SHF_ALLOC != 0 || section.section_type == SHT_RELA {
+                continue;
+            }
+            let section_index_u16 =
+                u16::try_from(section_index).map_err(|_| PartialLinkError::TooManySections {
+                    count: input.object.sections.len(),
+                })?;
+            if !parsed_groups[input_index]
+                .member_sections
+                .contains(&section_index_u16)
+                || comdat_selection.discarded_sections[input_index].contains(&section_index_u16)
+            {
+                continue;
+            }
+
+            debug_assert_eq!(section.section_type, SHT_PROGBITS);
+            debug_assert_eq!(section.link, 0);
+            debug_assert_eq!(section.info, 0);
+            debug_assert_eq!(section.flags & SHF_LINK_ORDER, 0);
+
+            let placement = push_output_section(
+                &mut output_sections,
+                names[section_index].clone(),
+                section,
+                section_bytes(input.file, section),
+            )?;
             section_maps[input_index][section_index] = Some(placement);
         }
     }
@@ -1946,12 +2002,31 @@ fn parse_comdat_groups(
                 });
             }
             if member.flags & SHF_ALLOC == 0 && member.section_type != SHT_RELA {
-                return Err(PartialLinkError::UnsupportedNonAllocGroupMember {
-                    input_index,
-                    group_section_index,
-                    member_section_index,
-                    section_type: member.section_type,
-                });
+                if member.section_type != SHT_PROGBITS {
+                    return Err(PartialLinkError::UnsupportedNonAllocGroupMember {
+                        input_index,
+                        group_section_index,
+                        member_section_index,
+                        section_type: member.section_type,
+                    });
+                }
+                if member.flags & SHF_LINK_ORDER != 0 {
+                    return Err(PartialLinkError::UnsupportedGroupedLinkOrderSection {
+                        input_index,
+                        section_index: member_section_index,
+                    });
+                }
+                if member.link != 0 || member.info != 0 {
+                    return Err(
+                        PartialLinkError::UnsupportedGroupedNonAllocSectionMetadata {
+                            input_index,
+                            group_section_index,
+                            member_section_index,
+                            link: member.link,
+                            info: member.info,
+                        },
+                    );
+                }
             }
             if !member_sections.insert(member_section_index) {
                 return Err(PartialLinkError::DuplicateGroupMember {
@@ -2078,7 +2153,7 @@ fn append_section_contribution(
     })
 }
 
-fn push_output_alloc_section(
+fn push_output_section(
     output_sections: &mut Vec<OutputSection>,
     name: Vec<u8>,
     section: &Elf64SectionHeader,
