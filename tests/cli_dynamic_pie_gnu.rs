@@ -322,7 +322,16 @@ _start:
         relocations.contains("R_X86_64_JUMP_SLOT") && relocations.contains("provider_value"),
         "{relocations}"
     );
-    let symbols = readelf(&ours, &["-sW", "--dyn-syms"]);
+    let symbols = Command::new(env!("CARGO_BIN_EXE_mini-elf-dynsym"))
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        symbols.status.success(),
+        "{}",
+        String::from_utf8_lossy(&symbols.stderr)
+    );
+    let symbols = String::from_utf8_lossy(&symbols.stdout);
     assert!(
         symbols.lines().any(|line| line.contains("FUNC")
             && line.contains("UND")
