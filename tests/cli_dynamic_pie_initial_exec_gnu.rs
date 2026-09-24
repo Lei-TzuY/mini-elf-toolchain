@@ -127,17 +127,22 @@ fn build_gnu_provider(dir: &Path) -> PathBuf {
     provider
 }
 
-fn initial_exec_consumer_source(binding: &str, define_locally: bool) -> String {
+fn initial_exec_consumer_source(
+    binding: &str,
+    define_locally: bool,
+    definition_visibility: &str,
+) -> String {
     let declaration = if define_locally {
-        r#".section .tdata,"awT",@progbits
+        format!(
+            r#".section .tdata,"awT",@progbits
 .align 8
 .globl provider_tls
-.type provider_tls,@tls_object
+{definition_visibility}.type provider_tls,@tls_object
 provider_tls:
     .quad 42
 .size provider_tls, .-provider_tls
 "#
-        .to_owned()
+        )
     } else {
         format!(".section .text\n{binding} provider_tls\n.type provider_tls,@tls_object\n")
     };
@@ -174,7 +179,7 @@ fn dynamic_pie_initial_exec_import_matches_gnu_and_executes() {
     let consumer = assemble(
         &dir,
         "consumer",
-        &initial_exec_consumer_source(".extern", false),
+        &initial_exec_consumer_source(".extern", false, ""),
     );
 
     let input_relocations = readelf(&consumer, &["-rW"]);
@@ -289,7 +294,7 @@ fn dynamic_pie_initial_exec_import_matches_gnu_and_executes() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn dynamic_pie_initial_exec_keeps_defined_tls_fail_closed() {
+fn dynamic_pie_initial_exec_keeps_protected_defined_tls_fail_closed() {
     if !have_tools() {
         return;
     }
@@ -297,15 +302,28 @@ fn dynamic_pie_initial_exec_keeps_defined_tls_fail_closed() {
         return;
     };
 
-    let dir = temp_dir("defined-boundary");
-    let consumer = assemble(&dir, "defined", &initial_exec_consumer_source("", true));
+    let dir = temp_dir("protected-defined-boundary");
+    let consumer = assemble(
+        &dir,
+        "protected-defined",
+        &initial_exec_consumer_source("", true, ".protected provider_tls\n"),
+    );
     let input_relocations = readelf(&consumer, &["-rW"]);
     assert!(
         input_relocations.contains("R_X86_64_GOTTPOFF"),
         "{input_relocations}"
     );
+    let input_symbols = readelf(&consumer, &["-sW"]);
+    assert!(
+        input_symbols.lines().any(|line| {
+            line.contains(" TLS ")
+                && line.contains(" PROTECTED ")
+                && line.ends_with(" provider_tls")
+        }),
+        "{input_symbols}"
+    );
 
-    let output = dir.join("must-not-exist-defined");
+    let output = dir.join("must-not-exist-protected-defined");
     let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
         .arg(&output)
@@ -315,7 +333,10 @@ fn dynamic_pie_initial_exec_keeps_defined_tls_fail_closed() {
         .arg(&consumer)
         .output()
         .unwrap();
-    assert!(!linked.status.success(), "defined TLS unexpectedly linked");
+    assert!(
+        !linked.status.success(),
+        "protected defined TLS unexpectedly linked"
+    );
     assert!(linked.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&linked.stderr);
     assert!(
