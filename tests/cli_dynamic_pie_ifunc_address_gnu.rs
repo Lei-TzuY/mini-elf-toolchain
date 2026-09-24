@@ -221,6 +221,25 @@ _start:
         ours.display()
     );
 
+    let shared_output = dir.join("shared-explicit-ifunc-rejected.so");
+    let shared_link = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&shared_output)
+        .arg("--shared")
+        .arg("--needed-from")
+        .arg(&provider)
+        .arg(&consumer)
+        .output()
+        .unwrap();
+    assert!(
+        !shared_link.status.success(),
+        "shared mode must keep explicit IFUNC address imports outside this slice"
+    );
+    assert!(
+        !shared_output.exists(),
+        "shared-mode rejection must occur before output"
+    );
+
     let gnu = dir.join("gnu-app");
     let gnu_link = Command::new("ld")
         .arg("-pie")
