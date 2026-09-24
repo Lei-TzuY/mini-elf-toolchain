@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -344,6 +345,111 @@ fn dynamic_pie_initial_exec_keeps_protected_defined_tls_fail_closed() {
         "{stderr}"
     );
     assert!(!output.exists());
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dynamic_pie_initial_exec_tls_got_is_relro_after_loader_binding() {
+    if !have_tools() {
+        return;
+    }
+    let Some(interpreter) = dynamic_linker() else {
+        return;
+    };
+
+    let dir = temp_dir("tls-got-relro");
+    let provider = build_mini_provider(&dir);
+    let consumer = assemble(
+        &dir,
+        "tls-got-relro-consumer",
+        r#".section .text
+.extern provider_tls
+.type provider_tls,@tls_object
+.globl _start
+.type _start,@function
+_start:
+    mov provider_tls@gottpoff(%rip), %rax
+    mov %fs:(%rax), %edi
+    cmp $42, %edi
+    jne 1f
+    lea provider_tls@gottpoff(%rip), %rbx
+    movq $0, (%rbx)
+1:
+    mov $60, %eax
+    syscall
+.size _start, .-_start
+
+.section .note.GNU-stack,"",@progbits
+"#,
+    );
+
+    let ours = dir.join("mini-ie-relro-app");
+    let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&ours)
+        .arg("--dynamic-pie")
+        .arg("--dynamic-linker")
+        .arg(&interpreter)
+        .arg("--needed-from")
+        .arg(&provider)
+        .args(["--runpath", "$ORIGIN"])
+        .arg(&consumer)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+
+    let program_headers = readelf(&ours, &["-lW"]);
+    assert!(
+        program_headers.contains("GNU_RELRO"),
+        "TLS GOT must be covered by PT_GNU_RELRO:\n{program_headers}"
+    );
+    let relocations = readelf(&ours, &["-rW", "--use-dynamic"]);
+    assert!(
+        relocations.contains("R_X86_64_TPOFF64") && relocations.contains("provider_tls"),
+        "{relocations}"
+    );
+
+    let status = Command::new(&ours).status().unwrap();
+    assert_eq!(
+        status.signal(),
+        Some(11),
+        "post-startup write to loader-bound TLS GOT must SIGSEGV; status={status}"
+    );
+
+    let gnu = dir.join("gnu-ie-relro-app");
+    let gnu_link = Command::new("cc")
+        .args(["-nostartfiles", "-fPIE", "-pie", "-Wl,-z,relro"])
+        .arg("-Wl,--dynamic-linker")
+        .arg(format!("-Wl,{}", interpreter.to_string_lossy()))
+        .arg("-Wl,-rpath,$ORIGIN")
+        .arg("-o")
+        .arg(&gnu)
+        .arg(&consumer)
+        .arg("-L")
+        .arg(&dir)
+        .arg("-lprovider")
+        .output()
+        .unwrap();
+    assert!(
+        gnu_link.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_link.stderr)
+    );
+    let gnu_program_headers = readelf(&gnu, &["-lW"]);
+    assert!(gnu_program_headers.contains("GNU_RELRO"), "{gnu_program_headers}");
+    let gnu_status = Command::new(&gnu).status().unwrap();
+    assert_eq!(
+        gnu_status.signal(),
+        Some(11),
+        "GNU -z relro reference must also seal its TLS GOT; status={gnu_status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
