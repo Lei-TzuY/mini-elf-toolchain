@@ -36,7 +36,7 @@ impl Model {
                 r#"leaq provider_tls@TLSDESC(%rip), %rax
     call *provider_tls@TLSCALL(%rax)
     mov %fs:(%rax), %edi"#
-            },
+            }
         };
         let resolver = matches!(self, Self::TlsGd)
             .then_some(".extern __tls_get_addr\n.type __tls_get_addr,@function\n")
