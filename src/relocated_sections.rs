@@ -354,6 +354,7 @@ pub(crate) fn relocate_allocatable_sections_with_metadata_isolated_got(
             external_tls_got_symbols: &BTreeSet::new(),
         },
         Some(page_alignment),
+        false,
     )
 }
 
@@ -448,6 +449,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
         external_plt_symbols,
         tls,
         None,
+        false,
     )
 }
 
@@ -467,6 +469,7 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         external_plt_symbols,
         tls,
         Some(page_alignment),
+        true,
     )
 }
 
@@ -478,6 +481,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
     external_plt_symbols: &BTreeSet<Vec<u8>>,
     tls: TlsSyntheticRequests<'_>,
     isolated_got_page_alignment: Option<u64>,
+    isolated_got_after_plt: bool,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     let tls_gd_symbols = tls.tls_gd_symbols;
     let tls_ld_enabled = tls.tls_ld_enabled;
@@ -622,7 +626,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
             flags: SHF_ALLOC | SHF_WRITE,
         });
     }
-    if got_size != 0 {
+    if got_size != 0 && !isolated_got_after_plt {
         layout_inputs.push(PermissionLayoutInput {
             object_index: GOT_OBJECT_INDEX,
             section_index: GOT_SECTION_INDEX,
@@ -644,6 +648,15 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
             section_index: PLT_GOT_SECTION_INDEX,
             size: plt_got_size,
             alignment: PLT_GOT_ALIGNMENT,
+            flags: SHF_ALLOC | SHF_WRITE,
+        });
+    }
+    if got_size != 0 && isolated_got_after_plt {
+        layout_inputs.push(PermissionLayoutInput {
+            object_index: GOT_OBJECT_INDEX,
+            section_index: GOT_SECTION_INDEX,
+            size: got_layout_size,
+            alignment: got_layout_alignment,
             flags: SHF_ALLOC | SHF_WRITE,
         });
     }
