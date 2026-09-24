@@ -369,7 +369,7 @@ fn unresolved_weak_dynamic_pie_tls_remains_loadable_across_all_models() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn versioned_weak_dynamic_pie_tls_remains_fail_closed() {
+fn versioned_weak_dynamic_pie_tls_requires_checked_version_provider() {
     if !have_tools() {
         return;
     }
@@ -427,7 +427,10 @@ _start:
     assert!(linked.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&linked.stderr);
     assert!(
-        stderr.contains("dynamic PIE") && stderr.contains("TLS"),
+        stderr.contains("versioned shared import")
+            && stderr.contains("provider_tls")
+            && stderr.contains("VERS_1")
+            && stderr.contains("requires a checked direct/transitive provider"),
         "{stderr}"
     );
     assert!(!output.exists());

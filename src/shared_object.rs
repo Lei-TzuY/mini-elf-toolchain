@@ -1161,7 +1161,6 @@ impl LoaderTlsPolicy {
 fn dynamic_pie_external_tls_import_supported(
     symbol_info: u8,
     symbol_other: u8,
-    name: &[u8],
     unresolved: bool,
     symbol_type: u8,
 ) -> bool {
@@ -1170,7 +1169,6 @@ fn dynamic_pie_external_tls_import_supported(
         && matches!(binding, STB_GLOBAL | STB_WEAK)
         && symbol_other == 0
         && symbol_type == STT_TLS
-        && !(binding == STB_WEAK && name.contains(&b'@'))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1953,6 +1951,7 @@ fn validate_version_requirements(
     imports: &BTreeMap<Vec<u8>, ImportSymbol>,
     requirements: &[SharedVersionRequirement],
 ) -> Result<(), SharedObjectError> {
+    let mut requirement_names = BTreeSet::new();
     for requirement in requirements {
         if !checked_providers
             .iter()
@@ -1965,7 +1964,7 @@ fn validate_version_requirements(
         let valid = imports.get(&requirement.linker_name).is_some_and(|import| {
             import.version.as_deref() == Some(requirement.version.as_slice())
         });
-        if !valid {
+        if !valid || !requirement_names.insert(requirement.linker_name.as_slice()) {
             let name = imports
                 .get(&requirement.linker_name)
                 .map(|import| import.dynamic_name.clone())
@@ -1973,6 +1972,18 @@ fn validate_version_requirements(
             return Err(SharedObjectError::InvalidVersionRequirement {
                 name,
                 version: requirement.version.clone(),
+            });
+        }
+    }
+
+    for (linker_name, import) in imports {
+        let Some(version) = import.version.as_ref() else {
+            continue;
+        };
+        if !requirement_names.contains(linker_name.as_slice()) {
+            return Err(SharedObjectError::InvalidVersionRequirement {
+                name: import.dynamic_name.clone(),
+                version: version.clone(),
             });
         }
     }
@@ -2074,7 +2085,6 @@ fn validate_inputs(
                         && !dynamic_pie_external_tls_import_supported(
                             symbol.symbol.info,
                             symbol.symbol.other,
-                            symbol.name,
                             unresolved,
                             symbol_type,
                         )
@@ -2145,7 +2155,6 @@ fn validate_inputs(
                         && !dynamic_pie_external_tls_import_supported(
                             symbol.symbol.info,
                             symbol.symbol.other,
-                            symbol.name,
                             unresolved,
                             symbol_type,
                         )
@@ -2207,7 +2216,6 @@ fn validate_inputs(
                         && !dynamic_pie_external_tls_import_supported(
                             symbol.symbol.info,
                             symbol.symbol.other,
-                            symbol.name,
                             unresolved,
                             symbol_type,
                         )
