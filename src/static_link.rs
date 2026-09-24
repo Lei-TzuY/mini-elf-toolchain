@@ -68,9 +68,8 @@ pub fn link_static_executable_with_map(
         entry_symbol,
     )?;
     let stack = gnu_stack_policy(inputs).map_err(StaticLinkError::GnuStack)?;
-    output.image =
-        map_static_program_headers(output.image, None, stack, None)
-            .map_err(StaticLinkError::Write)?;
+    output.image = map_static_program_headers(output.image, None, stack, None)
+        .map_err(StaticLinkError::Write)?;
 
     synchronize_link_map_segments(&mut output);
     Ok(output)
