@@ -4677,9 +4677,7 @@ mod lifecycle_priority_tests {
             (key(b".init_array.100"), 1usize),
             (key(b".init_array.0100"), 2usize),
         ];
-        priorities.sort_by(|(left, _), (right, _)| {
-            compare_dynamic_lifecycle_priority(left, right)
-        });
+        priorities.sort_by(|(left, _), (right, _)| compare_dynamic_lifecycle_priority(left, right));
 
         assert_eq!(
             priorities
