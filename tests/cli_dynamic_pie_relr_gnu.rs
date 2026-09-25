@@ -336,7 +336,7 @@ fn dynamic_pie_default_policy_remains_rela_only() {
 fn pack_relative_relocs_rejects_unsupported_modes_and_duplicates_before_io() {
     let binary = env!("CARGO_BIN_EXE_mini-elf-toolchain");
 
-    for mode in [None] {
+    for mode in [None::<&str>] {
         let output = PathBuf::from("/tmp/mini-elf-toolchain-relr-should-not-exist");
         let mut command = Command::new(binary);
         command.args(["link", "-o"]).arg(&output);
