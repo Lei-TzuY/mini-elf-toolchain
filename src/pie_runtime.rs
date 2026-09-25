@@ -498,9 +498,7 @@ pub(crate) fn build_relr_relocation_table(
     serialize_relr_offsets(&relocations)
 }
 
-fn serialize_relr_offsets(
-    relocations: &[RuntimeRelocation],
-) -> Result<Vec<u8>, PieRuntimeError> {
+fn serialize_relr_offsets(relocations: &[RuntimeRelocation]) -> Result<Vec<u8>, PieRuntimeError> {
     let mut entries = Vec::<u64>::new();
     let mut index = 0usize;
 
