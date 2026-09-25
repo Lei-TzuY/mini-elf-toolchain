@@ -146,7 +146,6 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_interp_relros_and_gnu_pro
     )
 }
 
-
 pub(crate) fn map_runtime_program_headers_with_dynamic_relros_and_gnu_property(
     image: ExecutableImage,
     dynamic: RuntimeDynamicProgramHeader,
