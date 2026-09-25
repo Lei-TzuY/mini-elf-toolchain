@@ -51,6 +51,12 @@ pub struct TlsSyntheticRequests<'a> {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(crate) struct BindNowRelocationLayout<'a> {
+    pub tail_order: &'a [(usize, u16)],
+    pub ibt_plt: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
 struct SyntheticGotLayoutPolicy {
     page_alignment: Option<u64>,
     after_plt: bool,
@@ -578,8 +584,7 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
     external_got_symbols: &BTreeSet<Vec<u8>>,
     external_plt_symbols: &BTreeSet<Vec<u8>>,
     tls: TlsSyntheticRequests<'_>,
-    layout_tail_order: &[(usize, u16)],
-    ibt_plt: bool,
+    layout: BindNowRelocationLayout<'_>,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         inputs,
@@ -591,8 +596,8 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::isolated(page_alignment, true),
             plt_got_page_alignment: Some(page_alignment),
-            tail_order: layout_tail_order,
-            ibt_plt,
+            tail_order: layout.tail_order,
+            ibt_plt: layout.ibt_plt,
         },
     )
 }
