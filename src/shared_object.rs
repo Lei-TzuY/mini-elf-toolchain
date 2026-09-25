@@ -4093,9 +4093,9 @@ fn compare_dynamic_lifecycle_priority(
                 suffix: right_suffix,
             },
         ) => match (left_numeric, right_numeric) {
-            (Some(left), Some(right)) => left
-                .cmp(right)
-                .then_with(|| left_suffix.cmp(right_suffix)),
+            (Some(left), Some(right)) => {
+                left.cmp(right).then_with(|| left_suffix.cmp(right_suffix))
+            }
             _ => left_suffix.cmp(right_suffix),
         },
         (DynamicLifecyclePriority::Suffixed { .. }, DynamicLifecyclePriority::Base) => {
