@@ -335,7 +335,6 @@ _start:
     let _ = fs::remove_dir_all(dir);
 }
 
-
 fn link_mini_hooks(dir: &Path, object: &Path, interpreter: &Path, libc: &Path) -> PathBuf {
     let output = dir.join("mini-lifecycle-hooks");
     let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
