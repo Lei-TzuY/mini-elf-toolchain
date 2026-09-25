@@ -9,7 +9,7 @@ use crate::link_context::{
     LinkContextRelocationError, LinkSyntheticEntries,
 };
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
-use crate::linker_input::{LinkerInputError, LinkerInputObject};
+use crate::linker_input::{LinkerInputError, LinkerInputObject, LinkerInputSection};
 use crate::load_segments::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE};
 use crate::object_symbols::named_symbols_from_table;
 use crate::permission_layout::{
@@ -374,6 +374,7 @@ pub(crate) fn relocate_allocatable_sections_with_metadata_isolated_got(
             external_tls_got_symbols: &BTreeSet::new(),
         },
         SyntheticGotLayoutPolicy::isolated(page_alignment, false),
+        &[],
     )
 }
 
@@ -468,6 +469,28 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
         external_plt_symbols,
         tls,
         SyntheticGotLayoutPolicy::INLINE,
+        &[],
+    )
+}
+
+pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    external_got_symbols: &BTreeSet<Vec<u8>>,
+    external_plt_symbols: &BTreeSet<Vec<u8>>,
+    tls: TlsSyntheticRequests<'_>,
+    layout_tail_order: &[(usize, u16)],
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
+        inputs,
+        start_address,
+        page_alignment,
+        external_got_symbols,
+        external_plt_symbols,
+        tls,
+        SyntheticGotLayoutPolicy::INLINE,
+        layout_tail_order,
     )
 }
 
@@ -478,6 +501,7 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
     external_got_symbols: &BTreeSet<Vec<u8>>,
     external_plt_symbols: &BTreeSet<Vec<u8>>,
     tls: TlsSyntheticRequests<'_>,
+    layout_tail_order: &[(usize, u16)],
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         inputs,
@@ -487,7 +511,41 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         external_plt_symbols,
         tls,
         SyntheticGotLayoutPolicy::isolated(page_alignment, true),
+        layout_tail_order,
     )
+}
+
+fn move_layout_tail_sections(
+    sections: &mut [LinkerInputSection<'_>],
+    layout_tail_order: &[(usize, u16)],
+) {
+    if layout_tail_order.is_empty() {
+        return;
+    }
+
+    let mut ranks = BTreeMap::new();
+    for (rank, identity) in layout_tail_order.iter().copied().enumerate() {
+        debug_assert!(
+            ranks.insert(identity, rank).is_none(),
+            "layout tail order contains duplicate section identity"
+        );
+    }
+
+    sections.sort_by_key(|section| {
+        ranks
+            .get(&(section.object_index, section.section_index))
+            .copied()
+            .map_or((0usize, 0usize), |rank| (1usize, rank))
+    });
+
+    debug_assert_eq!(
+        sections
+            .iter()
+            .filter(|section| ranks.contains_key(&(section.object_index, section.section_index)))
+            .count(),
+        ranks.len(),
+        "layout tail order references a non-allocatable section identity"
+    );
 }
 
 fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
@@ -498,6 +556,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
     external_plt_symbols: &BTreeSet<Vec<u8>>,
     tls: TlsSyntheticRequests<'_>,
     got_layout_policy: SyntheticGotLayoutPolicy,
+    layout_tail_order: &[(usize, u16)],
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     let tls_gd_symbols = tls.tls_gd_symbols;
     let tls_ld_enabled = tls.tls_ld_enabled;
@@ -520,6 +579,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
                 .map_err(RelocatedSectionError::Input)?,
         );
     }
+    move_layout_tail_sections(&mut sections, layout_tail_order);
 
     let validated_objects = inputs
         .iter()
