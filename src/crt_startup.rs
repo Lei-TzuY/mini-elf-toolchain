@@ -109,8 +109,7 @@ pub fn build_dynamic_pie_crt_startup_object() -> Vec<u8> {
         0,
         0,
     );
-    let start_symbol_offset =
-        symtab_offset + START_SYMBOL_INDEX as usize * ELF64_SYMBOL_SIZE;
+    let start_symbol_offset = symtab_offset + START_SYMBOL_INDEX as usize * ELF64_SYMBOL_SIZE;
     write_symbol(
         &mut file[start_symbol_offset..start_symbol_offset + ELF64_SYMBOL_SIZE],
         start_name,
