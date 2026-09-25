@@ -177,13 +177,7 @@ _start:
     )
 }
 
-fn link_mini(
-    output: &Path,
-    interpreter: &Path,
-    provider: &Path,
-    consumer: &Path,
-    packed: bool,
-) {
+fn link_mini(output: &Path, interpreter: &Path, provider: &Path, consumer: &Path, packed: bool) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"));
     command
         .args(["link", "-o"])
