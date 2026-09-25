@@ -177,7 +177,6 @@ pub(crate) fn section_name<'file>(
     Ok(Some(&tail[..end]))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,7 +231,10 @@ mod tests {
     fn reads_checked_section_name() {
         let file = b"\0.init_array.100\0";
         let input = input(file, 1);
-        assert_eq!(section_name(&input, 0).unwrap(), Some(b".init_array.100".as_slice()));
+        assert_eq!(
+            section_name(&input, 0).unwrap(),
+            Some(b".init_array.100".as_slice())
+        );
     }
 
     #[test]
