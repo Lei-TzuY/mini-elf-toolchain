@@ -3319,9 +3319,9 @@ fn validate_inputs(
                     let explicit_ifunc_import =
                         options.allow_explicit_ifunc_imports && symbol_type == STT_GNU_IFUNC;
                     let normalized_plt_notype = symbol_type == STT_NOTYPE
-                        && import_symbols.get(symbol.name).is_some_and(|import| {
-                            import.info & 0x0f == STT_FUNC
-                        });
+                        && import_symbols
+                            .get(symbol.name)
+                            .is_some_and(|import| import.info & 0x0f == STT_FUNC);
                     let supported_import = import_symbols.contains_key(symbol.name)
                         && (binding == STB_GLOBAL
                             || (binding == STB_WEAK
