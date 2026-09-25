@@ -4575,7 +4575,11 @@ fn build_dynamic_metadata(
     for name in exports
         .iter()
         .map(|export| export.dynamic_name.as_slice())
-        .chain(imports.values().map(|import| import.dynamic_name.as_slice()))
+        .chain(
+            imports
+                .values()
+                .map(|import| import.dynamic_name.as_slice()),
+        )
     {
         let hash = gnu_hash(name);
         gnu_bloom |= 1u64 << (hash % 64);
