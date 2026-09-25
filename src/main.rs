@@ -169,9 +169,11 @@ where
                 "--dynamic-linker is only supported with --dynamic-pie".to_owned(),
             ));
         }
-        if !dynamic_pie && (lifecycle_hooks.init.is_some() || lifecycle_hooks.fini.is_some()) {
+        if !(dynamic_pie || shared_object)
+            && (lifecycle_hooks.init.is_some() || lifecycle_hooks.fini.is_some())
+        {
             return Err(CliError::Usage(
-                "-init/-fini are only supported with --dynamic-pie".to_owned(),
+                "-init/-fini are only supported with --dynamic-pie or --shared".to_owned(),
             ));
         }
         let (symbolic, raw_remaining) = extract_symbolic_argument(&raw_remaining)?;
@@ -1495,6 +1497,8 @@ fn link_files(
                     checked_version_providers: &needed.checked_version_providers,
                     version_script: options.version_script,
                     symbolic: options.symbolic,
+                    init_symbol: options.init_symbol,
+                    fini_symbol: options.fini_symbol,
                 },
             )
         }
