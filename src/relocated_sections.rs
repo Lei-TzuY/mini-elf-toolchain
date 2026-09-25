@@ -68,6 +68,19 @@ impl SyntheticGotLayoutPolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct RelocationLayoutPolicy<'a> {
+    got: SyntheticGotLayoutPolicy,
+    tail_order: &'a [(usize, u16)],
+}
+
+impl RelocationLayoutPolicy<'_> {
+    const INLINE: Self = Self {
+        got: SyntheticGotLayoutPolicy::INLINE,
+        tail_order: &[],
+    };
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RelocatedSectionImage {
     pub object_index: usize,
@@ -373,8 +386,10 @@ pub(crate) fn relocate_allocatable_sections_with_metadata_isolated_got(
             tls_desc_symbols: &BTreeSet::new(),
             external_tls_got_symbols: &BTreeSet::new(),
         },
-        SyntheticGotLayoutPolicy::isolated(page_alignment, false),
-        &[],
+        RelocationLayoutPolicy {
+            got: SyntheticGotLayoutPolicy::isolated(page_alignment, false),
+            tail_order: &[],
+        },
     )
 }
 
@@ -468,8 +483,7 @@ pub fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
         external_got_symbols,
         external_plt_symbols,
         tls,
-        SyntheticGotLayoutPolicy::INLINE,
-        &[],
+        RelocationLayoutPolicy::INLINE,
     )
 }
 
@@ -489,8 +503,10 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         external_got_symbols,
         external_plt_symbols,
         tls,
-        SyntheticGotLayoutPolicy::INLINE,
-        layout_tail_order,
+        RelocationLayoutPolicy {
+            got: SyntheticGotLayoutPolicy::INLINE,
+            tail_order: layout_tail_order,
+        },
     )
 }
 
@@ -510,8 +526,10 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         external_got_symbols,
         external_plt_symbols,
         tls,
-        SyntheticGotLayoutPolicy::isolated(page_alignment, true),
-        layout_tail_order,
+        RelocationLayoutPolicy {
+            got: SyntheticGotLayoutPolicy::isolated(page_alignment, true),
+            tail_order: layout_tail_order,
+        },
     )
 }
 
@@ -555,9 +573,10 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
     external_got_symbols: &BTreeSet<Vec<u8>>,
     external_plt_symbols: &BTreeSet<Vec<u8>>,
     tls: TlsSyntheticRequests<'_>,
-    got_layout_policy: SyntheticGotLayoutPolicy,
-    layout_tail_order: &[(usize, u16)],
+    layout_policy: RelocationLayoutPolicy<'_>,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    let got_layout_policy = layout_policy.got;
+    let layout_tail_order = layout_policy.tail_order;
     let tls_gd_symbols = tls.tls_gd_symbols;
     let tls_ld_enabled = tls.tls_ld_enabled;
     let tls_desc_symbols = tls.tls_desc_symbols;
