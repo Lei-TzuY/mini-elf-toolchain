@@ -60,6 +60,14 @@ pub struct PieRuntimeOutput {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PieRuntimeOptions {
+    pub got_relro: Option<PieRelroSegment>,
+    pub user_entry_address: u64,
+    pub page_alignment: u64,
+    pub pack_relative_relocs: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RuntimeRelocation {
     offset: u64,
     addend: i64,
@@ -336,10 +344,12 @@ pub fn add_runtime_relative_relocations(
         sections,
         definitions,
         got_entries,
-        got_relro,
-        user_entry_address,
-        page_alignment,
-        false,
+        PieRuntimeOptions {
+            got_relro,
+            user_entry_address,
+            page_alignment,
+            pack_relative_relocs: false,
+        },
     )
 }
 
@@ -348,11 +358,14 @@ pub fn add_runtime_relative_relocations_with_options(
     mut sections: Vec<RelocatedSectionImage>,
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
     got_entries: &BTreeMap<Vec<u8>, u64>,
-    got_relro: Option<PieRelroSegment>,
-    user_entry_address: u64,
-    page_alignment: u64,
-    pack_relative_relocs: bool,
+    options: PieRuntimeOptions,
 ) -> Result<PieRuntimeOutput, PieRuntimeError> {
+    let PieRuntimeOptions {
+        got_relro,
+        user_entry_address,
+        page_alignment,
+        pack_relative_relocs,
+    } = options;
     if page_alignment == 0 || !page_alignment.is_power_of_two() {
         return Err(PieRuntimeError::InvalidPageAlignment {
             alignment: page_alignment,
