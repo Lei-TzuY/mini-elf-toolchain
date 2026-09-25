@@ -89,33 +89,33 @@ local_value:
 .size local_value,8
 
 .align 8
+.globl local_ptr0
 .type local_ptr0,@object
 local_ptr0:
     .quad local_value
+.size local_ptr0,8
+.globl local_ptr1
 .type local_ptr1,@object
 local_ptr1:
     .quad local_value
+.size local_ptr1,8
+.globl local_ptr2
 .type local_ptr2,@object
 local_ptr2:
     .quad local_value
+.size local_ptr2,8
 
 .globl host_value
 .type host_value,@object
 
 .text
-.globl mixed_value
-.type mixed_value,@function
-mixed_value:
-    mov local_ptr0(%rip), %rax
+.globl read_host
+.type read_host,@function
+read_host:
+    mov host_value@GOTPCREL(%rip), %rax
     mov (%rax), %rax
-    mov local_ptr1(%rip), %rcx
-    add (%rcx), %rax
-    mov local_ptr2(%rip), %rcx
-    add (%rcx), %rax
-    mov host_value@GOTPCREL(%rip), %rcx
-    add (%rcx), %rax
     ret
-.size mixed_value, .-mixed_value
+.size read_host, .-read_host
 
 .section .note.GNU-stack,"",@progbits
 "#,
@@ -136,12 +136,17 @@ int main(int argc, char **argv) {
     if (argc != 2) return 70;
     void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     if (!handle) return 71;
-    uint64_t (*mixed_value)(void) =
-        (uint64_t (*)(void))dlsym(handle, "mixed_value");
-    if (!mixed_value) return 72;
-    uint64_t value = mixed_value();
-    if (dlclose(handle) != 0) return 73;
-    return value == 42 ? 0 : 74;
+    uint64_t **ptr0 = (uint64_t **)dlsym(handle, "local_ptr0");
+    uint64_t **ptr1 = (uint64_t **)dlsym(handle, "local_ptr1");
+    uint64_t **ptr2 = (uint64_t **)dlsym(handle, "local_ptr2");
+    uint64_t (*read_host)(void) =
+        (uint64_t (*)(void))dlsym(handle, "read_host");
+    if (!ptr0 || !ptr1 || !ptr2 || !read_host) return 72;
+    if (*ptr0 != *ptr1 || *ptr0 != *ptr2) return 73;
+    if (**ptr0 != 13 || **ptr1 != 13 || **ptr2 != 13) return 74;
+    if (read_host() != 3) return 75;
+    if (dlclose(handle) != 0) return 76;
+    return 0;
 }
 "#,
     )
@@ -233,7 +238,7 @@ fn shared_pack_relative_relocs_splits_relr_from_symbol_rela_and_dlopen_executes(
     assert_eq!(
         status.code(),
         Some(0),
-        "mini shared object must execute through both RELR and GLOB_DAT; status={status}"
+        "mini shared object must expose relocated pointer objects and execute GLOB_DAT binding; status={status}"
     );
 
     assert!(
