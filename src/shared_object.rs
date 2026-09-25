@@ -16,10 +16,13 @@ use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
 use crate::permission_layout::SHF_TLS;
 use crate::pie_runtime::{build_relative_relocation_table, PieRuntimeError};
 use crate::program_headers::{
-    map_runtime_program_headers_with_dynamic, map_runtime_program_headers_with_dynamic_and_interp,
+    map_runtime_program_headers_with_dynamic,
+    map_runtime_program_headers_with_dynamic_and_gnu_property,
+    map_runtime_program_headers_with_dynamic_and_interp,
     map_runtime_program_headers_with_dynamic_and_relros,
-    map_runtime_program_headers_with_dynamic_interp_and_relros, RuntimeDynamicProgramHeader,
-    RuntimeInterpProgramHeader, RuntimeRelroProgramHeader,
+    map_runtime_program_headers_with_dynamic_interp_and_relros,
+    map_runtime_program_headers_with_dynamic_relros_and_gnu_property, RuntimeDynamicProgramHeader,
+    RuntimeGnuPropertyProgramHeader, RuntimeInterpProgramHeader, RuntimeRelroProgramHeader,
 };
 use crate::relocated_sections::{
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests,
@@ -32,7 +35,8 @@ use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEA
 use crate::section_names::section_name;
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
 use crate::synthetic_ids::{
-    DYNAMIC_COPY_OBJECT_INDEX, DYNAMIC_INTERP_OBJECT_INDEX, SHARED_METADATA_OBJECT_INDEX,
+    DYNAMIC_COPY_OBJECT_INDEX, DYNAMIC_INTERP_OBJECT_INDEX, GNU_PROPERTY_OBJECT_INDEX,
+    SHARED_METADATA_OBJECT_INDEX,
 };
 use crate::tls::{
     compute_static_tls_layout, inject_static_tls_program_header, StaticTlsLayout,
@@ -47,6 +51,7 @@ use crate::x86_64_relocations::{
 };
 
 const SHT_PROGBITS: u32 = 1;
+const SHT_NOTE: u32 = 7;
 const SHT_NOBITS: u32 = 8;
 const SHT_INIT_ARRAY: u32 = 14;
 const SHT_FINI_ARRAY: u32 = 15;
@@ -55,6 +60,8 @@ const SHARED_METADATA_SECTION_INDEX: u16 = 1;
 const DYNAMIC_INTERP_SECTION_INDEX: u16 = 1;
 const DYNAMIC_COPY_SECTION_INDEX: u16 = 1;
 const DYNAMIC_COPY_ALIGNMENT: u64 = 16;
+const GNU_PROPERTY_SECTION_INDEX: u16 = 1;
+const GNU_PROPERTY_NOTE_SIZE: u64 = 32;
 const ELF64_SYMBOL_SIZE: usize = 24;
 const ELF64_DYNAMIC_SIZE: usize = 16;
 const ELF64_RELA_SIZE: usize = 24;
@@ -1537,6 +1544,7 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
             version_script: None,
             symbolic: false,
             ibt_plt: false,
+            gnu_property_ibt: false,
             init_symbol: None,
             fini_symbol: None,
         },
@@ -1553,6 +1561,7 @@ pub struct SharedObjectLinkOptions<'a> {
     pub version_script: Option<&'a VersionScript>,
     pub symbolic: bool,
     pub ibt_plt: bool,
+    pub gnu_property_ibt: bool,
     pub init_symbol: Option<&'a [u8]>,
     pub fini_symbol: Option<&'a [u8]>,
 }
@@ -1607,6 +1616,7 @@ pub fn link_dynamic_pie_with_checked_providers(
                 version_script: None,
                 symbolic: false,
                 ibt_plt: false,
+                gnu_property_ibt: false,
                 init_symbol: None,
                 fini_symbol: None,
             },
@@ -1651,9 +1661,11 @@ fn link_loader_image(
         version_script,
         symbolic,
         ibt_plt,
+        gnu_property_ibt,
         init_symbol: _,
         fini_symbol: _,
     } = shared;
+    let ibt_plt = ibt_plt || gnu_property_ibt;
     validate_needed_names(needed)?;
     validate_needed_names(checked_version_providers)?;
     validate_soname(soname)?;
@@ -2141,6 +2153,25 @@ fn link_loader_image(
             None
         };
     let interpreter_address = interpreter_before_metadata.or(interpreter_after_metadata);
+    let gnu_property_payload = gnu_property_ibt.then(build_ibt_gnu_property_note);
+    let gnu_property_address = if let Some(payload) = gnu_property_payload.as_ref() {
+        let metadata_end = metadata_address
+            .checked_add(metadata_size)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let mut floor = metadata_end;
+        if let (Some(address), Some(bytes)) = (interpreter_address, interpreter_payload.as_ref()) {
+            let interpreter_end = address
+                .checked_add(
+                    u64::try_from(bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?,
+                )
+                .ok_or(SharedObjectError::AddressOverflow)?;
+            floor = floor.max(interpreter_end);
+        }
+        let _ = payload;
+        Some(align_up(floor, page_alignment).ok_or(SharedObjectError::AddressOverflow)?)
+    } else {
+        None
+    };
 
     let mut sections = relocated;
     if coalesced_relro_start.is_some() {
@@ -2190,6 +2221,18 @@ fn link_loader_image(
             size: metadata_size,
             alignment: 8,
             bytes: metadata.bytes,
+        });
+    }
+    if let (Some(address), Some(bytes)) = (gnu_property_address, gnu_property_payload) {
+        sections.push(RelocatedSectionImage {
+            object_index: GNU_PROPERTY_OBJECT_INDEX,
+            section_index: GNU_PROPERTY_SECTION_INDEX,
+            section_type: SHT_NOTE,
+            flags: SHF_ALLOC,
+            address,
+            size: GNU_PROPERTY_NOTE_SIZE,
+            alignment: 8,
+            bytes,
         });
     }
 
@@ -2262,6 +2305,23 @@ fn link_loader_image(
             address: metadata_address,
             size: metadata_size,
         });
+    }
+
+    if let Some(address) = gnu_property_address {
+        debug_assert!(interpreter_address.is_none() && interpreter.is_none());
+        let property = RuntimeGnuPropertyProgramHeader {
+            address,
+            size: GNU_PROPERTY_NOTE_SIZE,
+        };
+        return if relro.is_empty() {
+            map_runtime_program_headers_with_dynamic_and_gnu_property(image, dynamic, property)
+                .map_err(SharedObjectError::Write)
+        } else {
+            map_runtime_program_headers_with_dynamic_relros_and_gnu_property(
+                image, dynamic, &relro, property,
+            )
+            .map_err(SharedObjectError::Write)
+        };
     }
 
     match (interpreter_address, interpreter) {
@@ -4680,6 +4740,24 @@ fn checked_metadata_address(base_address: u64, offset: usize) -> Result<u64, Sha
     base_address
         .checked_add(u64::try_from(offset).map_err(|_| SharedObjectError::MetadataTooLarge)?)
         .ok_or(SharedObjectError::AddressOverflow)
+}
+
+fn build_ibt_gnu_property_note() -> Vec<u8> {
+    const NT_GNU_PROPERTY_TYPE_0: u32 = 5;
+    const GNU_PROPERTY_X86_FEATURE_1_AND: u32 = 0xc000_0002;
+    const GNU_PROPERTY_X86_FEATURE_1_IBT: u32 = 1;
+
+    let mut bytes = Vec::with_capacity(GNU_PROPERTY_NOTE_SIZE as usize);
+    bytes.extend_from_slice(&4u32.to_le_bytes());
+    bytes.extend_from_slice(&16u32.to_le_bytes());
+    bytes.extend_from_slice(&NT_GNU_PROPERTY_TYPE_0.to_le_bytes());
+    bytes.extend_from_slice(b"GNU\0");
+    bytes.extend_from_slice(&GNU_PROPERTY_X86_FEATURE_1_AND.to_le_bytes());
+    bytes.extend_from_slice(&4u32.to_le_bytes());
+    bytes.extend_from_slice(&GNU_PROPERTY_X86_FEATURE_1_IBT.to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    debug_assert_eq!(bytes.len(), GNU_PROPERTY_NOTE_SIZE as usize);
+    bytes
 }
 
 fn align_up(value: u64, alignment: u64) -> Option<u64> {
