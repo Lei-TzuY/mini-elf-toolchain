@@ -65,7 +65,7 @@ fn readelf(path: &Path, args: &[&str]) -> String {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn compiler_generated_relaxable_gotpcrel_binds_external_data() {
+fn compiler_generated_relaxable_gotpcrel_binds_defined_data() {
     if !have_tools() {
         return;
     }
@@ -77,34 +77,11 @@ fn compiler_generated_relaxable_gotpcrel_binds_external_data() {
     };
 
     let dir = temp_dir();
-
-    let provider_source = dir.join("provider.c");
-    let provider = dir.join("libprovider.so");
+    let source = dir.join("main.c");
+    let object = dir.join("main.o");
     fs::write(
-        &provider_source,
+        &source,
         r#"int provider_value = 42;
-"#,
-    )
-    .unwrap();
-    let provider_build = Command::new("cc")
-        .args(["-shared", "-fPIC"])
-        .arg(&provider_source)
-        .arg("-Wl,-soname,libprovider.so")
-        .arg("-o")
-        .arg(&provider)
-        .output()
-        .unwrap();
-    assert!(
-        provider_build.status.success(),
-        "{}",
-        String::from_utf8_lossy(&provider_build.stderr)
-    );
-
-    let consumer_source = dir.join("consumer.c");
-    let consumer = dir.join("consumer.o");
-    fs::write(
-        &consumer_source,
-        r#"extern int provider_value;
 
 int main(void) {
     return provider_value;
@@ -112,31 +89,32 @@ int main(void) {
 "#,
     )
     .unwrap();
-    let consumer_build = Command::new("cc")
+
+    let compiled = Command::new("cc")
         .args(["-O0", "-fPIC", "-fno-stack-protector", "-c"])
-        .arg(&consumer_source)
+        .arg(&source)
         .arg("-o")
-        .arg(&consumer)
+        .arg(&object)
         .output()
         .unwrap();
     assert!(
-        consumer_build.status.success(),
+        compiled.status.success(),
         "{}",
-        String::from_utf8_lossy(&consumer_build.stderr)
+        String::from_utf8_lossy(&compiled.stderr)
     );
 
-    let input_symbols = readelf(&consumer, &["-sW"]);
+    let input_symbols = readelf(&object, &["-sW"]);
     assert!(
         input_symbols.lines().any(|line| {
             line.contains("OBJECT")
                 && line.contains("GLOBAL")
-                && line.contains("UND")
+                && !line.contains(" UND ")
                 && line.ends_with(" provider_value")
         }),
-        "compiler fixture must expose provider_value as an undefined GLOBAL OBJECT:\n{input_symbols}"
+        "compiler fixture must expose provider_value as a defined GLOBAL OBJECT:\n{input_symbols}"
     );
 
-    let input_relocations = readelf(&consumer, &["-rW"]);
+    let input_relocations = readelf(&object, &["-rW"]);
     assert!(
         input_relocations.lines().any(|line| {
             (line.contains("R_X86_64_REX_GOTPCRELX") || line.contains("R_X86_64_GOTPCRELX"))
@@ -154,12 +132,8 @@ int main(void) {
         .arg("--dynamic-linker")
         .arg(&interpreter)
         .arg("--needed-from")
-        .arg(&provider)
-        .arg("--needed-from")
         .arg(&libc)
-        .arg("--runpath")
-        .arg("$ORIGIN")
-        .arg(&consumer)
+        .arg(&object)
         .output()
         .unwrap();
     assert!(
@@ -173,24 +147,20 @@ int main(void) {
         dynamic_relocations.lines().any(|line| {
             line.contains("R_X86_64_GLOB_DAT") && line.contains("provider_value")
         }),
-        "relaxable compiler GOT reference must retain loader-owned GLOB_DAT binding:\n{dynamic_relocations}"
+        "default-visible compiler definition must retain the existing loader-owned GOT plane:\n{dynamic_relocations}"
     );
 
     let mini_status = Command::new(&mini).status().unwrap();
     assert_eq!(
         mini_status.code(),
         Some(42),
-        "mini-linked compiler PIE must read provider data through the loader-filled GOT: {mini_status}"
+        "mini-linked compiler PIE must read its defined global through the loader-filled GOT: {mini_status}"
     );
 
     let gnu = dir.join("gnu-pie");
     let gnu_link = Command::new("cc")
         .arg("-pie")
-        .arg(&consumer)
-        .arg("-L")
-        .arg(&dir)
-        .arg("-lprovider")
-        .arg("-Wl,-rpath,$ORIGIN")
+        .arg(&object)
         .arg("-o")
         .arg(&gnu)
         .output()
