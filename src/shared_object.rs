@@ -2102,8 +2102,7 @@ fn link_loader_image(
                 .checked_add(region.size)
                 .ok_or(SharedObjectError::AddressOverflow)?;
             protected_start = Some(
-                protected_start
-                    .map_or(region.address, |start: u64| start.min(region.address)),
+                protected_start.map_or(region.address, |start: u64| start.min(region.address)),
             );
             protected_end = Some(protected_end.map_or(end, |current: u64| current.max(end)));
         }
