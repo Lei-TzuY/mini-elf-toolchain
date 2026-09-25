@@ -51,8 +51,9 @@ use crate::version_script::{VersionScript, VersionScriptMatchError};
 use crate::x86_64_relocations::{
     apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_COPY, R_X86_64_DTPMOD64,
     R_X86_64_DTPOFF32, R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPC32_TLSDESC,
-    R_X86_64_GOTPCREL, R_X86_64_GOTTPOFF, R_X86_64_JUMP_SLOT, R_X86_64_PC32, R_X86_64_PLT32,
-    R_X86_64_TLSDESC, R_X86_64_TLSDESC_CALL, R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
+    R_X86_64_GOTPCREL, R_X86_64_GOTPCRELX, R_X86_64_GOTTPOFF, R_X86_64_JUMP_SLOT, R_X86_64_PC32,
+    R_X86_64_PLT32, R_X86_64_REX_GOTPCRELX, R_X86_64_TLSDESC, R_X86_64_TLSDESC_CALL,
+    R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
 };
 
 const SHT_PROGBITS: u32 = 1;
@@ -1348,6 +1349,13 @@ impl LoaderTlsPolicy {
 fn dynamic_pie_tls_reference_supported(symbol_info: u8, symbol_other: u8, symbol_type: u8) -> bool {
     let binding = symbol_info >> 4;
     matches!(binding, STB_GLOBAL | STB_WEAK) && symbol_other == 0 && symbol_type == STT_TLS
+}
+
+fn is_loader_gotpcrel_type(relocation_type: u32) -> bool {
+    matches!(
+        relocation_type,
+        R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2909,10 +2917,9 @@ fn validate_inputs(
             }
 
             if table.relocations.iter().any(|relocation| {
-                !matches!(
+                let supported = matches!(
                     relocation.relocation_type,
                     R_X86_64_64
-                        | R_X86_64_GOTPCREL
                         | R_X86_64_PLT32
                         | R_X86_64_TLSGD
                         | R_X86_64_GOTPC32_TLSDESC
@@ -2920,8 +2927,10 @@ fn validate_inputs(
                         | R_X86_64_GOTTPOFF
                         | R_X86_64_TLSLD
                         | R_X86_64_DTPOFF32
-                ) && !(options.allow_copy_relocations
-                    && relocation.relocation_type == R_X86_64_PC32)
+                ) || is_loader_gotpcrel_type(relocation.relocation_type);
+                !supported
+                    && !(options.allow_copy_relocations
+                        && relocation.relocation_type == R_X86_64_PC32)
             }) {
                 return Err(SharedObjectError::RelocationUnsupported {
                     object_index: input.object_index,
@@ -2934,7 +2943,7 @@ fn validate_inputs(
                 let symbol = &symbols[relocation.symbol_index as usize];
                 let binding = symbol.symbol.info >> 4;
                 let symbol_type = symbol.symbol.info & 0x0f;
-                let is_got_import = relocation.relocation_type == R_X86_64_GOTPCREL;
+                let is_got_import = is_loader_gotpcrel_type(relocation.relocation_type);
                 let is_plt_import = relocation.relocation_type == R_X86_64_PLT32;
                 let is_copy_import =
                     options.allow_copy_relocations && relocation.relocation_type == R_X86_64_PC32;
