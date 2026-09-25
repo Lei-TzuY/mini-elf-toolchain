@@ -4632,3 +4632,42 @@ fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
 fn put_i64(bytes: &mut [u8], offset: usize, value: i64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
+
+
+#[cfg(test)]
+mod lifecycle_priority_tests {
+    use super::*;
+
+    fn key(name: &[u8]) -> DynamicLifecyclePriority {
+        dynamic_lifecycle_priority(Some(name), b".init_array")
+    }
+
+    #[test]
+    fn lifecycle_priority_orders_numeric_named_and_base() {
+        let mut priorities = vec![
+            key(b".init_array"),
+            key(b".init_array.zed"),
+            key(b".init_array.99999"),
+            key(b".init_array.100"),
+            key(b".init_array.bar"),
+        ];
+        priorities.sort_by(compare_dynamic_lifecycle_priority);
+
+        assert_eq!(
+            priorities,
+            vec![
+                DynamicLifecyclePriority::Numeric(b"100".to_vec()),
+                DynamicLifecyclePriority::Numeric(b"99999".to_vec()),
+                DynamicLifecyclePriority::Named(b"bar".to_vec()),
+                DynamicLifecyclePriority::Named(b"zed".to_vec()),
+                DynamicLifecyclePriority::Base,
+            ]
+        );
+    }
+
+    #[test]
+    fn lifecycle_priority_canonicalizes_leading_zeroes() {
+        assert_eq!(key(b".init_array.000100"), key(b".init_array.100"));
+        assert_eq!(key(b".init_array.000"), key(b".init_array.0"));
+    }
+}
