@@ -183,15 +183,15 @@ where
             ));
         }
         let (ibt_plt, raw_remaining) = extract_ibt_plt_argument(&raw_remaining)?;
-        if ibt_plt && !shared_object {
+        if ibt_plt && !(shared_object || dynamic_pie) {
             return Err(CliError::Usage(
-                "-z ibtplt is only supported with --shared".to_owned(),
+                "-z ibtplt is only supported with --shared or --dynamic-pie".to_owned(),
             ));
         }
         let (ibt, raw_remaining) = extract_ibt_argument(&raw_remaining)?;
-        if ibt && !shared_object {
+        if ibt && !(shared_object || dynamic_pie) {
             return Err(CliError::Usage(
-                "-z ibt is only supported with --shared".to_owned(),
+                "-z ibt is only supported with --shared or --dynamic-pie".to_owned(),
             ));
         }
         let (bind_now, raw_remaining) = extract_bind_now_argument(&raw_remaining)?;
@@ -1581,6 +1581,8 @@ fn link_files(
                     interpreter,
                     init_symbol: options.init_symbol,
                     fini_symbol: options.fini_symbol,
+                    ibt_plt: options.ibt_plt,
+                    gnu_property_ibt: options.ibt,
                     bind_now: options.bind_now,
                     copy_relocations: &needed.copy_relocations,
                 },

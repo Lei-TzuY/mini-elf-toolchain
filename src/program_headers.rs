@@ -113,6 +113,39 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_gnu_property(
     map_runtime_program_headers_impl(image, Some(dynamic), None, None, &[], Some(property))
 }
 
+pub(crate) fn map_runtime_program_headers_with_dynamic_interp_and_gnu_property(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+    interp: RuntimeInterpProgramHeader,
+    property: RuntimeGnuPropertyProgramHeader,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(
+        image,
+        Some(dynamic),
+        Some(interp),
+        None,
+        &[],
+        Some(property),
+    )
+}
+
+pub(crate) fn map_runtime_program_headers_with_dynamic_interp_relros_and_gnu_property(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+    interp: RuntimeInterpProgramHeader,
+    relro: &[RuntimeRelroProgramHeader],
+    property: RuntimeGnuPropertyProgramHeader,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(
+        image,
+        Some(dynamic),
+        Some(interp),
+        None,
+        relro,
+        Some(property),
+    )
+}
+
 pub(crate) fn map_runtime_program_headers_with_dynamic_relros_and_gnu_property(
     image: ExecutableImage,
     dynamic: RuntimeDynamicProgramHeader,
