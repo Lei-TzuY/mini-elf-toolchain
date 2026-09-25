@@ -602,3 +602,203 @@ _start:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+
+fn lifecycle_priority_fixture() -> &'static str {
+    r#".data
+.align 8
+state:
+    .quad 0
+
+.text
+.type fail_now,@function
+fail_now:
+    mov $231, %rax
+    mov $99, %rdi
+    syscall
+.size fail_now, .-fail_now
+
+.type preinit_100,@function
+preinit_100:
+    cmpq $0, state(%rip)
+    jne fail_now
+    movq $1, state(%rip)
+    ret
+.size preinit_100, .-preinit_100
+
+.type preinit_300,@function
+preinit_300:
+    cmpq $1, state(%rip)
+    jne fail_now
+    movq $2, state(%rip)
+    ret
+.size preinit_300, .-preinit_300
+
+.type preinit_default,@function
+preinit_default:
+    cmpq $2, state(%rip)
+    jne fail_now
+    movq $3, state(%rip)
+    ret
+.size preinit_default, .-preinit_default
+
+.type init_100,@function
+init_100:
+    cmpq $3, state(%rip)
+    jne fail_now
+    movq $4, state(%rip)
+    ret
+.size init_100, .-init_100
+
+.type init_300,@function
+init_300:
+    cmpq $4, state(%rip)
+    jne fail_now
+    movq $5, state(%rip)
+    ret
+.size init_300, .-init_300
+
+.type init_default,@function
+init_default:
+    cmpq $5, state(%rip)
+    jne fail_now
+    movq $6, state(%rip)
+    ret
+.size init_default, .-init_default
+
+.type fini_default,@function
+fini_default:
+    cmpq $6, state(%rip)
+    jne fail_now
+    movq $7, state(%rip)
+    ret
+.size fini_default, .-fini_default
+
+.type fini_300,@function
+fini_300:
+    cmpq $7, state(%rip)
+    jne fail_now
+    movq $8, state(%rip)
+    ret
+.size fini_300, .-fini_300
+
+.type fini_100,@function
+fini_100:
+    cmpq $8, state(%rip)
+    jne fail_now
+    mov $231, %rax
+    mov $61, %rdi
+    syscall
+.size fini_100, .-fini_100
+
+.type main,@function
+main:
+    cmpq $6, state(%rip)
+    jne fail_now
+    mov $42, %eax
+    ret
+.size main, .-main
+
+.globl __libc_start_main
+.type __libc_start_main,@function
+.globl _start
+.type _start,@function
+_start:
+    xor %ebp, %ebp
+    mov %rdx, %r9
+    pop %rsi
+    mov %rsp, %rdx
+    and $-16, %rsp
+    push %rax
+    push %rsp
+    xor %r8d, %r8d
+    xor %ecx, %ecx
+    lea main(%rip), %rdi
+    call __libc_start_main@PLT
+    hlt
+.size _start, .-_start
+
+# Deliberately emit each lifecycle family out of GNU priority order.
+.section .preinit_array.300,"aw",@preinit_array
+.quad preinit_300
+.section .preinit_array,"aw",@preinit_array
+.quad preinit_default
+.section .preinit_array.100,"aw",@preinit_array
+.quad preinit_100
+
+.section .init_array.300,"aw",@init_array
+.quad init_300
+.section .init_array,"aw",@init_array
+.quad init_default
+.section .init_array.100,"aw",@init_array
+.quad init_100
+
+.section .fini_array.100,"aw",@fini_array
+.quad fini_100
+.section .fini_array,"aw",@fini_array
+.quad fini_default
+.section .fini_array.300,"aw",@fini_array
+.quad fini_300
+
+.section .note.GNU-stack,"",@progbits
+"#
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dynamic_pie_lifecycle_priority_matches_gnu_execution_order() {
+    if !have_tools() {
+        return;
+    }
+    let Some(interpreter) = dynamic_linker() else {
+        return;
+    };
+    let Some(libc) = libc_path() else {
+        return;
+    };
+
+    let dir = temp_dir("priority");
+    let object = assemble(&dir, "priority", lifecycle_priority_fixture());
+    let ours = link_mini(&dir, &object, &interpreter, &libc);
+    let gnu = link_gnu(&dir, &object, &interpreter, &libc);
+
+    for image in [&ours, &gnu] {
+        let dynamic = readelf(image, &["-dW"]);
+        for fact in [
+            "PREINIT_ARRAY",
+            "PREINIT_ARRAYSZ",
+            "INIT_ARRAY",
+            "INIT_ARRAYSZ",
+            "FINI_ARRAY",
+            "FINI_ARRAYSZ",
+        ] {
+            assert!(
+                dynamic.contains(fact),
+                "{} missing {fact}:\n{dynamic}",
+                image.display()
+            );
+        }
+
+        let inspected = Command::new(env!("CARGO_BIN_EXE_mini-elf-dyninit"))
+            .arg(image)
+            .output()
+            .unwrap();
+        assert!(
+            inspected.status.success(),
+            "{}",
+            String::from_utf8_lossy(&inspected.stderr)
+        );
+        let inspected = String::from_utf8_lossy(&inspected.stdout);
+        assert_eq!(inspected.matches("entries=3").count(), 3, "{inspected}");
+
+        let status = Command::new(image).status().unwrap();
+        assert_eq!(
+            status.code(),
+            Some(61),
+            "{} must honor GNU lifecycle priority order; status={status}",
+            image.display()
+        );
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
