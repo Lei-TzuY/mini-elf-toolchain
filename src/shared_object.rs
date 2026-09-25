@@ -383,6 +383,10 @@ pub enum SharedObjectError {
         previous_end: u64,
         next_address: u64,
     },
+    SharedPreinitUnsupported {
+        object_index: usize,
+        section_index: u16,
+    },
     DynamicLifecycleHookMissing {
         hook: &'static str,
         name: Vec<u8>,
@@ -846,7 +850,7 @@ impl fmt::Display for SharedObjectError {
                 reason,
             } => write!(
                 f,
-                "dynamic PIE lifecycle section name at object {object_index} section {section_index} is malformed: {reason}"
+                "loader lifecycle section name at object {object_index} section {section_index} is malformed: {reason}"
             ),
             Self::DynamicLifecycleSectionFlags {
                 object_index,
@@ -855,7 +859,7 @@ impl fmt::Display for SharedObjectError {
                 flags,
             } => write!(
                 f,
-                "dynamic PIE lifecycle section type {section_type} at object {object_index} section {section_index} has flags {flags:#x}; bounded lifecycle arrays require SHF_ALLOC|SHF_WRITE"
+                "loader lifecycle section type {section_type} at object {object_index} section {section_index} has flags {flags:#x}; bounded lifecycle arrays require SHF_ALLOC|SHF_WRITE"
             ),
             Self::DynamicLifecycleSectionSize {
                 object_index,
@@ -864,7 +868,7 @@ impl fmt::Display for SharedObjectError {
                 size,
             } => write!(
                 f,
-                "dynamic PIE lifecycle section type {section_type} at object {object_index} section {section_index} has size {size}; lifecycle arrays must contain whole 8-byte function pointers"
+                "loader lifecycle section type {section_type} at object {object_index} section {section_index} has size {size}; lifecycle arrays must contain whole 8-byte function pointers"
             ),
             Self::DynamicLifecycleMissingRelocatedSection {
                 object_index,
@@ -872,7 +876,7 @@ impl fmt::Display for SharedObjectError {
                 section_type,
             } => write!(
                 f,
-                "dynamic PIE lifecycle section type {section_type} at object {object_index} section {section_index} has no relocated output section"
+                "loader lifecycle section type {section_type} at object {object_index} section {section_index} has no relocated output section"
             ),
             Self::DynamicLifecycleNonContiguous {
                 section_type,
@@ -880,7 +884,14 @@ impl fmt::Display for SharedObjectError {
                 next_address,
             } => write!(
                 f,
-                "dynamic PIE lifecycle section type {section_type} is split into non-contiguous output ranges ending at {previous_end:#x} and restarting at {next_address:#x}; bounded DT_*ARRAY emission requires one exact contiguous range"
+                "loader lifecycle section type {section_type} is split into non-contiguous output ranges ending at {previous_end:#x} and restarting at {next_address:#x}; bounded DT_*ARRAY emission requires one exact contiguous range"
+            ),
+            Self::SharedPreinitUnsupported {
+                object_index,
+                section_index,
+            } => write!(
+                f,
+                "shared object PREINIT_ARRAY at object {object_index} section {section_index} is unsupported; SHT_PREINIT_ARRAY is executable-only lifecycle metadata"
             ),
             Self::DynamicLifecycleHookMissing { hook, name } => write!(
                 f,
@@ -1072,6 +1083,7 @@ impl std::error::Error for SharedObjectError {
             | Self::DynamicLifecycleSectionSize { .. }
             | Self::DynamicLifecycleMissingRelocatedSection { .. }
             | Self::DynamicLifecycleNonContiguous { .. }
+            | Self::SharedPreinitUnsupported { .. }
             | Self::DynamicLifecycleHookMissing { .. }
             | Self::DynamicLifecycleHookType { .. }
             | Self::DynamicLifecycleHookNotImageBacked { .. }
@@ -1374,7 +1386,7 @@ struct DynamicLifecycle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum DynamicLifecyclePriority {
+enum LifecyclePriority {
     Suffixed {
         numeric: Option<u32>,
         suffix: Vec<u8>,
@@ -1682,11 +1694,10 @@ fn link_loader_image(
     masked_sites.extend(imports.tls_ld_dtpoff_sites.iter().copied());
     masked_sites.extend(imports.tls_desc_call_sites.iter().copied());
     let relocation_inputs = mask_deferred_relocations(inputs, &masked_sites);
-    let lifecycle_layout_tail_order = if dynamic_pie {
-        dynamic_pie_lifecycle_layout_tail_order(inputs)?
-    } else {
-        Vec::new()
-    };
+    if !dynamic_pie {
+        reject_shared_preinit_arrays(inputs)?;
+    }
+    let lifecycle_layout_tail_order = loader_lifecycle_layout_tail_order(inputs)?;
 
     // Dynamic-executable partial RELRO: isolate the synthetic GOT whenever
     // it carries ordinary or TLS loader state. The loader applies GLOB_DAT,
@@ -1715,7 +1726,7 @@ fn link_loader_image(
             tls_requests,
             &lifecycle_layout_tail_order,
         )
-    } else if dynamic_pie {
+    } else if dynamic_pie || !lifecycle_layout_tail_order.is_empty() {
         relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order(
             &relocation_inputs,
             page_alignment,
@@ -1822,7 +1833,7 @@ fn link_loader_image(
         )?;
         collect_dynamic_pie_lifecycle(inputs, &relocated, init_hook, fini_hook)?
     } else {
-        DynamicLifecycle::default()
+        collect_shared_object_lifecycle(inputs, &relocated)?
     };
 
     let mut matched_script_symbols = BTreeSet::new();
@@ -4004,7 +4015,26 @@ fn build_version_metadata(
     })
 }
 
-fn dynamic_pie_lifecycle_layout_tail_order(
+fn reject_shared_preinit_arrays(
+    inputs: &[LinkerInputObject<'_>],
+) -> Result<(), SharedObjectError> {
+    for input in inputs {
+        for (section_index, section) in input.object.sections.iter().enumerate() {
+            if section.section_type != SHT_PREINIT_ARRAY {
+                continue;
+            }
+            let section_index =
+                u16::try_from(section_index).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+            return Err(SharedObjectError::SharedPreinitUnsupported {
+                object_index: input.object_index,
+                section_index,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn loader_lifecycle_layout_tail_order(
     inputs: &[LinkerInputObject<'_>],
 ) -> Result<Vec<(usize, u16)>, SharedObjectError> {
     let mut order = Vec::new();
@@ -4029,39 +4059,39 @@ fn dynamic_pie_lifecycle_layout_tail_order(
                     }
                 })?;
                 entries.push((
-                    dynamic_lifecycle_priority(name, prefix),
+                    lifecycle_priority(name, prefix),
                     (input.object_index, section_index),
                 ));
             }
         }
-        entries.sort_by(|(left, _), (right, _)| compare_dynamic_lifecycle_priority(left, right));
+        entries.sort_by(|(left, _), (right, _)| compare_lifecycle_priority(left, right));
         order.extend(entries.into_iter().map(|(_, identity)| identity));
     }
 
     Ok(order)
 }
 
-fn dynamic_lifecycle_priority(name: Option<&[u8]>, prefix: &[u8]) -> DynamicLifecyclePriority {
+fn lifecycle_priority(name: Option<&[u8]>, prefix: &[u8]) -> LifecyclePriority {
     let Some(name) = name else {
-        return DynamicLifecyclePriority::Base;
+        return LifecyclePriority::Base;
     };
     if name == prefix {
-        return DynamicLifecyclePriority::Base;
+        return LifecyclePriority::Base;
     }
     let Some(suffix) = name
         .strip_prefix(prefix)
         .and_then(|rest| rest.strip_prefix(b"."))
     else {
-        return DynamicLifecyclePriority::Base;
+        return LifecyclePriority::Base;
     };
 
-    DynamicLifecyclePriority::Suffixed {
-        numeric: parse_dynamic_lifecycle_numeric_priority(suffix),
+    LifecyclePriority::Suffixed {
+        numeric: parse_lifecycle_numeric_priority(suffix),
         suffix: suffix.to_vec(),
     }
 }
 
-fn parse_dynamic_lifecycle_numeric_priority(suffix: &[u8]) -> Option<u32> {
+fn parse_lifecycle_numeric_priority(suffix: &[u8]) -> Option<u32> {
     if suffix.is_empty() || !suffix.iter().all(u8::is_ascii_digit) {
         return None;
     }
@@ -4078,17 +4108,17 @@ fn parse_dynamic_lifecycle_numeric_priority(suffix: &[u8]) -> Option<u32> {
     Some(value as u32)
 }
 
-fn compare_dynamic_lifecycle_priority(
-    left: &DynamicLifecyclePriority,
-    right: &DynamicLifecyclePriority,
+fn compare_lifecycle_priority(
+    left: &LifecyclePriority,
+    right: &LifecyclePriority,
 ) -> Ordering {
     match (left, right) {
         (
-            DynamicLifecyclePriority::Suffixed {
+            LifecyclePriority::Suffixed {
                 numeric: left_numeric,
                 suffix: left_suffix,
             },
-            DynamicLifecyclePriority::Suffixed {
+            LifecyclePriority::Suffixed {
                 numeric: right_numeric,
                 suffix: right_suffix,
             },
@@ -4098,14 +4128,29 @@ fn compare_dynamic_lifecycle_priority(
             }
             _ => left_suffix.cmp(right_suffix),
         },
-        (DynamicLifecyclePriority::Suffixed { .. }, DynamicLifecyclePriority::Base) => {
+        (LifecyclePriority::Suffixed { .. }, LifecyclePriority::Base) => {
             Ordering::Less
         }
-        (DynamicLifecyclePriority::Base, DynamicLifecyclePriority::Suffixed { .. }) => {
+        (LifecyclePriority::Base, LifecyclePriority::Suffixed { .. }) => {
             Ordering::Greater
         }
-        (DynamicLifecyclePriority::Base, DynamicLifecyclePriority::Base) => Ordering::Equal,
+        (LifecyclePriority::Base, LifecyclePriority::Base) => Ordering::Equal,
     }
+}
+
+fn collect_shared_object_lifecycle(
+    inputs: &[LinkerInputObject<'_>],
+    relocated: &[RelocatedSectionImage],
+) -> Result<DynamicLifecycle, SharedObjectError> {
+    let init = collect_lifecycle_kind(inputs, relocated, SHT_INIT_ARRAY)?;
+    let fini = collect_lifecycle_kind(inputs, relocated, SHT_FINI_ARRAY)?;
+    Ok(DynamicLifecycle {
+        preinit: None,
+        init,
+        fini,
+        init_hook: None,
+        fini_hook: None,
+    })
 }
 
 fn collect_dynamic_pie_lifecycle(
@@ -4114,9 +4159,9 @@ fn collect_dynamic_pie_lifecycle(
     init_hook: Option<u64>,
     fini_hook: Option<u64>,
 ) -> Result<DynamicLifecycle, SharedObjectError> {
-    let preinit = collect_dynamic_pie_lifecycle_kind(inputs, relocated, SHT_PREINIT_ARRAY)?;
-    let init = collect_dynamic_pie_lifecycle_kind(inputs, relocated, SHT_INIT_ARRAY)?;
-    let fini = collect_dynamic_pie_lifecycle_kind(inputs, relocated, SHT_FINI_ARRAY)?;
+    let preinit = collect_lifecycle_kind(inputs, relocated, SHT_PREINIT_ARRAY)?;
+    let init = collect_lifecycle_kind(inputs, relocated, SHT_INIT_ARRAY)?;
+    let fini = collect_lifecycle_kind(inputs, relocated, SHT_FINI_ARRAY)?;
     Ok(DynamicLifecycle {
         preinit,
         init,
@@ -4185,7 +4230,7 @@ fn resolve_dynamic_lifecycle_hook(
     Ok(Some(address))
 }
 
-fn collect_dynamic_pie_lifecycle_kind(
+fn collect_lifecycle_kind(
     inputs: &[LinkerInputObject<'_>],
     relocated: &[RelocatedSectionImage],
     section_type: u32,
@@ -4657,8 +4702,8 @@ fn put_i64(bytes: &mut [u8], offset: usize, value: i64) {
 mod lifecycle_priority_tests {
     use super::*;
 
-    fn key(name: &[u8]) -> DynamicLifecyclePriority {
-        dynamic_lifecycle_priority(Some(name), b".init_array")
+    fn key(name: &[u8]) -> LifecyclePriority {
+        lifecycle_priority(Some(name), b".init_array")
     }
 
     fn sorted_names(names: &[&[u8]]) -> Vec<Vec<u8>> {
@@ -4666,7 +4711,7 @@ mod lifecycle_priority_tests {
             .iter()
             .map(|name| (key(name), name.to_vec()))
             .collect::<Vec<_>>();
-        entries.sort_by(|(left, _), (right, _)| compare_dynamic_lifecycle_priority(left, right));
+        entries.sort_by(|(left, _), (right, _)| compare_lifecycle_priority(left, right));
         entries.into_iter().map(|(_, name)| name).collect()
     }
 
@@ -4715,7 +4760,7 @@ mod lifecycle_priority_tests {
             (key(b".init_array.100"), 1usize),
             (key(b".init_array.100"), 2usize),
         ];
-        priorities.sort_by(|(left, _), (right, _)| compare_dynamic_lifecycle_priority(left, right));
+        priorities.sort_by(|(left, _), (right, _)| compare_lifecycle_priority(left, right));
 
         assert_eq!(
             priorities
@@ -4729,15 +4774,15 @@ mod lifecycle_priority_tests {
     #[test]
     fn lifecycle_priority_rejects_numeric_values_above_gnu_int_range() {
         assert_eq!(
-            parse_dynamic_lifecycle_numeric_priority(b"2147483647"),
+            parse_lifecycle_numeric_priority(b"2147483647"),
             Some(2_147_483_647)
         );
         assert_eq!(
-            parse_dynamic_lifecycle_numeric_priority(b"2147483648"),
+            parse_lifecycle_numeric_priority(b"2147483648"),
             None
         );
         assert_eq!(
-            parse_dynamic_lifecycle_numeric_priority(b"999999999999999999999999999999"),
+            parse_lifecycle_numeric_priority(b"999999999999999999999999999999"),
             None
         );
     }
