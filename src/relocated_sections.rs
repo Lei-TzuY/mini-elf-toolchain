@@ -866,13 +866,11 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         None
     };
     let plt_got_region = if plt_got_size != 0 && plt_got_page_alignment.is_some() {
-        let plt_got_layout =
-            matching_layout(&layout, PLT_GOT_OBJECT_INDEX, PLT_GOT_SECTION_INDEX).ok_or(
-                RelocatedSectionError::MissingLayout {
-                    object_index: PLT_GOT_OBJECT_INDEX,
-                    section_index: PLT_GOT_SECTION_INDEX,
-                },
-            )?;
+        let plt_got_layout = matching_layout(&layout, PLT_GOT_OBJECT_INDEX, PLT_GOT_SECTION_INDEX)
+            .ok_or(RelocatedSectionError::MissingLayout {
+                object_index: PLT_GOT_OBJECT_INDEX,
+                section_index: PLT_GOT_SECTION_INDEX,
+            })?;
         Some(SyntheticGotRegion {
             address: plt_got_layout.address,
             size: plt_got_layout.size,
