@@ -1112,11 +1112,7 @@ fn build_trampoline(
         patch_rel8(&mut bytes, bitmap_loop_disp, bitmap_loop)?;
 
         let relr_advance = bytes.len();
-        patch_rel8(
-            &mut bytes,
-            relr_advance_from_direct_disp,
-            relr_advance,
-        )?;
+        patch_rel8(&mut bytes, relr_advance_from_direct_disp, relr_advance)?;
         bytes.extend_from_slice(&[0x48, 0x83, 0xc6, 0x08]);
         bytes.extend_from_slice(&[0x48, 0xff, 0xc9]);
         bytes.push(0xeb);
