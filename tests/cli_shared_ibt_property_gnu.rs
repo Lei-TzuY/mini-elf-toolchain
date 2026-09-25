@@ -3,6 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+const PT_LOAD: u32 = 1;
+const ENDBR64: [u8; 4] = [0xf3, 0x0f, 0x1e, 0xfa];
+
 fn command_reports(program: &str, marker: &str) -> bool {
     let Ok(output) = Command::new(program).arg("--version").output() else {
         return false;
@@ -73,6 +76,101 @@ call_host_direct:
         String::from_utf8_lossy(&output.stderr)
     );
     object
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn read_u64(bytes: &[u8], offset: usize) -> u64 {
+    u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap())
+}
+
+fn vaddr_to_file_offset(bytes: &[u8], address: u64) -> usize {
+    let phoff = read_u64(bytes, 32) as usize;
+    let phentsize = read_u16(bytes, 54) as usize;
+    let phnum = read_u16(bytes, 56) as usize;
+
+    for index in 0..phnum {
+        let ph = phoff + index * phentsize;
+        if read_u32(bytes, ph) != PT_LOAD {
+            continue;
+        }
+        let offset = read_u64(bytes, ph + 8);
+        let vaddr = read_u64(bytes, ph + 16);
+        let filesz = read_u64(bytes, ph + 32);
+        let Some(end) = vaddr.checked_add(filesz) else {
+            continue;
+        };
+        if address >= vaddr && address < end {
+            return usize::try_from(offset + (address - vaddr)).unwrap();
+        }
+    }
+    panic!("virtual address {address:#x} is not file-backed by PT_LOAD");
+}
+
+fn dynamic_symbol_value(path: &Path, symbol: &str) -> u64 {
+    let output = Command::new("readelf")
+        .arg("-sDW")
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let text = String::from_utf8_lossy(&output.stdout);
+    text.lines()
+        .find(|line| line.split_whitespace().last() == Some(symbol))
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|value| u64::from_str_radix(value, 16).ok())
+        .unwrap_or_else(|| panic!("missing dynamic symbol {symbol}: {text}"))
+}
+
+fn assert_mini_ibt_plt(path: &Path) {
+    let bytes = fs::read(path).unwrap();
+    let function = dynamic_symbol_value(path, "call_host_direct");
+    let function_offset = vaddr_to_file_offset(&bytes, function);
+    let body = &bytes[function_offset..function_offset + 32];
+    let call_offset = body
+        .iter()
+        .position(|byte| *byte == 0xe8)
+        .expect("call_host_direct should contain a direct CALL rel32");
+    let displacement =
+        i32::from_le_bytes(body[call_offset + 1..call_offset + 5].try_into().unwrap());
+    let call_next = function + u64::try_from(call_offset + 5).unwrap();
+    let secure_address = i128::from(call_next) + i128::from(displacement);
+    let secure_address = u64::try_from(secure_address).unwrap();
+    let secure_offset = vaddr_to_file_offset(&bytes, secure_address);
+    let secure = &bytes[secure_offset..secure_offset + 16];
+
+    assert_eq!(
+        &secure[..4],
+        &ENDBR64,
+        "public PLT entry must begin ENDBR64"
+    );
+    assert_eq!(
+        &secure[4..6],
+        &[0xff, 0x25],
+        "secure PLT must jump through GOT"
+    );
+
+    let got_disp = i32::from_le_bytes(secure[6..10].try_into().unwrap());
+    let got_address =
+        u64::try_from(i128::from(secure_address + 10) + i128::from(got_disp)).unwrap();
+    let got_offset = vaddr_to_file_offset(&bytes, got_address);
+    let lazy_address = read_u64(&bytes, got_offset);
+    let lazy_offset = vaddr_to_file_offset(&bytes, lazy_address);
+    let lazy = &bytes[lazy_offset..lazy_offset + 16];
+
+    assert_eq!(
+        &lazy[..4],
+        &ENDBR64,
+        "initial GOT indirect target must begin ENDBR64"
+    );
+    assert_eq!(lazy[4], 0x68, "lazy PLT entry must push relocation index");
+    assert_eq!(lazy[9], 0xe9, "lazy PLT entry must jump directly to PLT0");
 }
 
 fn inspect_property(path: &Path) -> String {
@@ -147,17 +245,25 @@ fn shared_z_ibt_matches_gnu_property_and_preserves_lazy_execution() {
         assert!(headers.status.success());
         let headers = String::from_utf8_lossy(&headers.stdout);
         assert!(headers.contains("GNU_PROPERTY"), "{headers}");
-
-        let disassembly = Command::new("objdump")
-            .arg("-d")
-            .arg(shared)
-            .output()
-            .unwrap();
-        assert!(disassembly.status.success());
-        let disassembly = String::from_utf8_lossy(&disassembly.stdout);
-        assert!(disassembly.contains("host_function@plt"), "{disassembly}");
-        assert!(disassembly.contains("endbr64"), "{disassembly}");
     }
+
+    // Mini intentionally omits section headers, so objdump cannot discover its
+    // code sections. Verify the actual direct-call target and lazy GOT target
+    // through mapped ELF addresses instead of weakening the PLT evidence.
+    assert_mini_ibt_plt(&mini);
+
+    let gnu_disassembly = Command::new("objdump")
+        .arg("-d")
+        .arg(&gnu)
+        .output()
+        .unwrap();
+    assert!(gnu_disassembly.status.success());
+    let gnu_disassembly = String::from_utf8_lossy(&gnu_disassembly.stdout);
+    assert!(
+        gnu_disassembly.contains("host_function@plt"),
+        "{gnu_disassembly}"
+    );
+    assert!(gnu_disassembly.contains("endbr64"), "{gnu_disassembly}");
 
     #[cfg(target_os = "linux")]
     {
