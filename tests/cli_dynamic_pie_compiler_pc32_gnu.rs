@@ -154,7 +154,9 @@ int main(int argc, char **argv) {
         "external compiler call must remain loader-bound through JUMP_SLOT:\n{dynamic_relocations}"
     );
     assert!(
-        !dynamic_relocations.lines().any(|line| line.contains("counter")),
+        !dynamic_relocations
+            .lines()
+            .any(|line| line.contains("counter")),
         "same-executable PC32 data reference must be resolved at link time:\n{dynamic_relocations}"
     );
 
