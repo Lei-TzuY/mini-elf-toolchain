@@ -19,14 +19,19 @@ const R_X86_64_IRELATIVE: u32 = 37;
 const PIE_RELA_SECTION_INDEX: u16 = 1;
 const PIE_TRAMPOLINE_SECTION_INDEX: u16 = 2;
 const PIE_DYNAMIC_SECTION_INDEX: u16 = 3;
+const PIE_RELR_SECTION_INDEX: u16 = 4;
 
 const ELF64_RELA_SIZE: u64 = 24;
+const ELF64_RELR_SIZE: u64 = 8;
 const ELF64_DYN_SIZE: u64 = 16;
 
 const DT_NULL: i64 = 0;
 const DT_RELA: i64 = 7;
 const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
+const DT_RELRSZ: i64 = 35;
+const DT_RELR: i64 = 36;
+const DT_RELRENT: i64 = 37;
 const DT_RELACOUNT: i64 = 0x6fff_fff9;
 
 const SYS_MPROTECT: u64 = 10;
@@ -319,12 +324,34 @@ impl std::error::Error for PieRuntimeError {
 
 pub fn add_runtime_relative_relocations(
     inputs: &[LinkerInputObject<'_>],
+    sections: Vec<RelocatedSectionImage>,
+    definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
+    got_entries: &BTreeMap<Vec<u8>, u64>,
+    got_relro: Option<PieRelroSegment>,
+    user_entry_address: u64,
+    page_alignment: u64,
+) -> Result<PieRuntimeOutput, PieRuntimeError> {
+    add_runtime_relative_relocations_with_options(
+        inputs,
+        sections,
+        definitions,
+        got_entries,
+        got_relro,
+        user_entry_address,
+        page_alignment,
+        false,
+    )
+}
+
+pub fn add_runtime_relative_relocations_with_options(
+    inputs: &[LinkerInputObject<'_>],
     mut sections: Vec<RelocatedSectionImage>,
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
     got_entries: &BTreeMap<Vec<u8>, u64>,
     got_relro: Option<PieRelroSegment>,
     user_entry_address: u64,
     page_alignment: u64,
+    pack_relative_relocs: bool,
 ) -> Result<PieRuntimeOutput, PieRuntimeError> {
     if page_alignment == 0 || !page_alignment.is_power_of_two() {
         return Err(PieRuntimeError::InvalidPageAlignment {
@@ -332,9 +359,15 @@ pub fn add_runtime_relative_relocations(
         });
     }
 
-    let (rela_bytes, relocation_count, relative_relocation_count) =
-        build_pie_runtime_relocation_table(inputs, &sections, definitions, got_entries)?;
-    if relocation_count == 0 {
+    let (rela_bytes, relocation_count, relative_relocation_count, relr_bytes) =
+        build_pie_runtime_relocation_tables(
+            inputs,
+            &mut sections,
+            definitions,
+            got_entries,
+            pack_relative_relocs,
+        )?;
+    if relocation_count == 0 && relr_bytes.is_empty() {
         return Ok(PieRuntimeOutput {
             sections,
             entry_address: user_entry_address,
@@ -342,6 +375,7 @@ pub fn add_runtime_relative_relocations(
             relro: Vec::new(),
         });
     }
+
     let max_end = sections.iter().try_fold(0_u64, |max_end, section| {
         let end = section
             .address
@@ -349,19 +383,31 @@ pub fn add_runtime_relative_relocations(
             .ok_or(PieRuntimeError::SectionEndOverflow)?;
         Ok::<_, PieRuntimeError>(max_end.max(end))
     })?;
-    let rela_address = align_up(max_end, page_alignment)?;
-    let dynamic = build_dynamic_table(rela_address, rela_bytes.len(), relative_relocation_count)?;
+    let tables_address = align_up(max_end, page_alignment)?;
+    let relr_address = tables_address;
+    let relr_end = relr_address
+        .checked_add(relr_bytes.len() as u64)
+        .ok_or(PieRuntimeError::RuntimeAddressOverflow)?;
+    let rela_address = if relr_bytes.is_empty() {
+        tables_address
+    } else {
+        align_up(relr_end, 8)?
+    };
+    let tables_end = rela_address
+        .checked_add(rela_bytes.len() as u64)
+        .ok_or(PieRuntimeError::RuntimeAddressOverflow)?;
+
+    let dynamic = build_dynamic_table(
+        rela_address,
+        rela_bytes.len(),
+        relative_relocation_count,
+        relr_address,
+        relr_bytes.len(),
+    )?;
     let dynamic_size =
         u64::try_from(dynamic.len()).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
-    let trampoline_address = align_up(
-        rela_address
-            .checked_add(rela_bytes.len() as u64)
-            .ok_or(PieRuntimeError::RuntimeAddressOverflow)?,
-        page_alignment,
-    )?;
-    // The trampoline size depends on how many independently protected RELRO
-    // ranges exist. Build once with a placeholder .dynamic address but its
-    // actual dynamic-table size, then rebuild with the checked concrete ranges.
+    let trampoline_address = align_up(tables_end, page_alignment)?;
+
     let mut prototype_relro = Vec::new();
     if let Some(got_relro) = got_relro {
         prototype_relro.push(got_relro);
@@ -370,8 +416,11 @@ pub fn add_runtime_relative_relocations(
         address: 0,
         size: dynamic_size,
     });
+    let relr_entry_count = relr_bytes.len() / ELF64_RELR_SIZE as usize;
     let trampoline_prototype = build_trampoline(
         trampoline_address,
+        relr_address,
+        relr_entry_count,
         rela_address,
         relocation_count,
         user_entry_address,
@@ -397,6 +446,8 @@ pub fn add_runtime_relative_relocations(
     }
     let trampoline = build_trampoline(
         trampoline_address,
+        relr_address,
+        relr_entry_count,
         rela_address,
         relocation_count,
         user_entry_address,
@@ -404,13 +455,24 @@ pub fn add_runtime_relative_relocations(
     )?;
     debug_assert_eq!(trampoline.len(), trampoline_prototype.len());
 
-    sections.push(runtime_section(
-        PIE_RELA_SECTION_INDEX,
-        SHF_ALLOC,
-        rela_address,
-        8,
-        rela_bytes,
-    )?);
+    if !relr_bytes.is_empty() {
+        sections.push(runtime_section(
+            PIE_RELR_SECTION_INDEX,
+            SHF_ALLOC,
+            relr_address,
+            8,
+            relr_bytes,
+        )?);
+    }
+    if !rela_bytes.is_empty() {
+        sections.push(runtime_section(
+            PIE_RELA_SECTION_INDEX,
+            SHF_ALLOC,
+            rela_address,
+            8,
+            rela_bytes,
+        )?);
+    }
     sections.push(runtime_section(
         PIE_TRAMPOLINE_SECTION_INDEX,
         SHF_ALLOC | SHF_EXECINSTR,
@@ -456,9 +518,17 @@ pub(crate) fn build_relr_relocation_table(
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
     got_entries: &BTreeMap<Vec<u8>, u64>,
 ) -> Result<Vec<u8>, PieRuntimeError> {
-    let (mut relocations, relative_count) =
+    let (relocations, relative_count) =
         collect_runtime_relocations(inputs, sections, definitions, got_entries, false)?;
     debug_assert_eq!(relative_count, relocations.len());
+    materialize_relr_relocations(&relocations, sections)
+}
+
+fn materialize_relr_relocations(
+    relocations: &[RuntimeRelocation],
+    sections: &mut [RelocatedSectionImage],
+) -> Result<Vec<u8>, PieRuntimeError> {
+    let mut relocations = relocations.to_vec();
     debug_assert!(relocations
         .iter()
         .all(|relocation| relocation.kind == R_X86_64_RELATIVE));
@@ -496,6 +566,35 @@ pub(crate) fn build_relr_relocation_table(
     }
 
     serialize_relr_offsets(&relocations)
+}
+
+fn build_pie_runtime_relocation_tables(
+    inputs: &[LinkerInputObject<'_>],
+    sections: &mut [RelocatedSectionImage],
+    definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
+    got_entries: &BTreeMap<Vec<u8>, u64>,
+    pack_relative_relocs: bool,
+) -> Result<(Vec<u8>, usize, usize, Vec<u8>), PieRuntimeError> {
+    let (relocations, relative_count) =
+        collect_runtime_relocations(inputs, sections, definitions, got_entries, true)?;
+    if !pack_relative_relocs {
+        let total_count = relocations.len();
+        return Ok((
+            serialize_runtime_relocations(&relocations)?,
+            total_count,
+            relative_count,
+            Vec::new(),
+        ));
+    }
+
+    let relr_bytes = materialize_relr_relocations(&relocations[..relative_count], sections)?;
+    let remaining = &relocations[relative_count..];
+    Ok((
+        serialize_runtime_relocations(remaining)?,
+        remaining.len(),
+        0,
+        relr_bytes,
+    ))
 }
 
 fn serialize_relr_offsets(relocations: &[RuntimeRelocation]) -> Result<Vec<u8>, PieRuntimeError> {
@@ -559,19 +658,6 @@ fn serialize_relr_offsets(relocations: &[RuntimeRelocation]) -> Result<Vec<u8>, 
         bytes.extend_from_slice(&entry.to_le_bytes());
     }
     Ok(bytes)
-}
-
-fn build_pie_runtime_relocation_table(
-    inputs: &[LinkerInputObject<'_>],
-    sections: &[RelocatedSectionImage],
-    definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
-    got_entries: &BTreeMap<Vec<u8>, u64>,
-) -> Result<(Vec<u8>, usize, usize), PieRuntimeError> {
-    let (relocations, relative_count) =
-        collect_runtime_relocations(inputs, sections, definitions, got_entries, true)?;
-    let total_count = relocations.len();
-    let bytes = serialize_runtime_relocations(&relocations)?;
-    Ok((bytes, total_count, relative_count))
 }
 
 fn collect_runtime_relocations(
@@ -907,18 +993,31 @@ fn build_dynamic_table(
     rela_address: u64,
     rela_size: usize,
     relative_relocation_count: usize,
+    relr_address: u64,
+    relr_size: usize,
 ) -> Result<Vec<u8>, PieRuntimeError> {
     let rela_size =
         u64::try_from(rela_size).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
+    let relr_size =
+        u64::try_from(relr_size).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
     let relative_count = u64::try_from(relative_relocation_count)
         .map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
-    let entry_count = 4usize + usize::from(relative_count != 0);
+    let entry_count = usize::from(rela_size != 0) * (3 + usize::from(relative_count != 0))
+        + usize::from(relr_size != 0) * 3
+        + 1;
     let mut bytes = Vec::with_capacity(entry_count * ELF64_DYN_SIZE as usize);
-    push_dynamic(&mut bytes, DT_RELA, rela_address);
-    push_dynamic(&mut bytes, DT_RELASZ, rela_size);
-    push_dynamic(&mut bytes, DT_RELAENT, ELF64_RELA_SIZE);
-    if relative_count != 0 {
-        push_dynamic(&mut bytes, DT_RELACOUNT, relative_count);
+    if rela_size != 0 {
+        push_dynamic(&mut bytes, DT_RELA, rela_address);
+        push_dynamic(&mut bytes, DT_RELASZ, rela_size);
+        push_dynamic(&mut bytes, DT_RELAENT, ELF64_RELA_SIZE);
+        if relative_count != 0 {
+            push_dynamic(&mut bytes, DT_RELACOUNT, relative_count);
+        }
+    }
+    if relr_size != 0 {
+        push_dynamic(&mut bytes, DT_RELR, relr_address);
+        push_dynamic(&mut bytes, DT_RELRSZ, relr_size);
+        push_dynamic(&mut bytes, DT_RELRENT, ELF64_RELR_SIZE);
     }
     push_dynamic(&mut bytes, DT_NULL, 0);
     Ok(bytes)
@@ -945,11 +1044,15 @@ fn validate_relro_segment(
 
 fn build_trampoline(
     trampoline_address: u64,
+    relr_address: u64,
+    relr_entry_count: usize,
     rela_address: u64,
     relocation_count: usize,
     user_entry_address: u64,
     relro: &[PieRelroSegment],
 ) -> Result<Vec<u8>, PieRuntimeError> {
+    let relr_entry_count =
+        u64::try_from(relr_entry_count).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
     let relocation_count =
         u64::try_from(relocation_count).map_err(|_| PieRuntimeError::RuntimeSectionTooLarge)?;
     let mut bytes = Vec::new();
@@ -960,6 +1063,70 @@ fn build_trampoline(
         .ok_or(PieRuntimeError::RuntimeAddressOverflow)?;
     push_movabs(&mut bytes, 0xb8, runtime_pc_link_address);
     bytes.extend_from_slice(&[0x48, 0x29, 0xc3]);
+
+    if relr_entry_count != 0 {
+        push_movabs(&mut bytes, 0xbe, relr_address);
+        bytes.extend_from_slice(&[0x48, 0x01, 0xde]);
+        push_movabs(&mut bytes, 0xb9, relr_entry_count);
+
+        let relr_loop = bytes.len();
+        bytes.extend_from_slice(&[0x48, 0x85, 0xc9]);
+        bytes.push(0x74);
+        let relr_done_disp = bytes.len();
+        bytes.push(0);
+
+        bytes.extend_from_slice(&[0x48, 0x8b, 0x06]);
+        bytes.extend_from_slice(&[0xa8, 0x01]);
+        bytes.push(0x75);
+        let relr_bitmap_disp = bytes.len();
+        bytes.push(0);
+
+        bytes.extend_from_slice(&[0x48, 0x89, 0xc7]);
+        bytes.extend_from_slice(&[0x48, 0x01, 0xdf]);
+        bytes.extend_from_slice(&[0x48, 0x01, 0x1f]);
+        bytes.extend_from_slice(&[0x48, 0x83, 0xc7, 0x08]);
+        bytes.push(0xeb);
+        let relr_advance_from_direct_disp = bytes.len();
+        bytes.push(0);
+
+        let relr_bitmap = bytes.len();
+        patch_rel8(&mut bytes, relr_bitmap_disp, relr_bitmap)?;
+        bytes.extend_from_slice(&[0x48, 0x89, 0xc2]);
+        bytes.extend_from_slice(&[0x48, 0xd1, 0xea]);
+        bytes.extend_from_slice(&[0x41, 0xb8, 0x3f, 0, 0, 0]);
+
+        let bitmap_loop = bytes.len();
+        bytes.extend_from_slice(&[0xf6, 0xc2, 0x01]);
+        bytes.push(0x74);
+        let bitmap_skip_disp = bytes.len();
+        bytes.push(0);
+        bytes.extend_from_slice(&[0x48, 0x01, 0x1f]);
+        let bitmap_skip = bytes.len();
+        patch_rel8(&mut bytes, bitmap_skip_disp, bitmap_skip)?;
+        bytes.extend_from_slice(&[0x48, 0x83, 0xc7, 0x08]);
+        bytes.extend_from_slice(&[0x48, 0xd1, 0xea]);
+        bytes.extend_from_slice(&[0x49, 0xff, 0xc8]);
+        bytes.push(0x75);
+        let bitmap_loop_disp = bytes.len();
+        bytes.push(0);
+        patch_rel8(&mut bytes, bitmap_loop_disp, bitmap_loop)?;
+
+        let relr_advance = bytes.len();
+        patch_rel8(
+            &mut bytes,
+            relr_advance_from_direct_disp,
+            relr_advance,
+        )?;
+        bytes.extend_from_slice(&[0x48, 0x83, 0xc6, 0x08]);
+        bytes.extend_from_slice(&[0x48, 0xff, 0xc9]);
+        bytes.push(0xeb);
+        let relr_loop_disp = bytes.len();
+        bytes.push(0);
+        patch_rel8(&mut bytes, relr_loop_disp, relr_loop)?;
+
+        let relr_done = bytes.len();
+        patch_rel8(&mut bytes, relr_done_disp, relr_done)?;
+    }
 
     push_movabs(&mut bytes, 0xbe, rela_address);
     bytes.extend_from_slice(&[0x48, 0x01, 0xde]);
