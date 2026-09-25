@@ -195,9 +195,9 @@ where
             ));
         }
         let (bind_now, raw_remaining) = extract_bind_now_argument(&raw_remaining)?;
-        if bind_now && !shared_object {
+        if bind_now && !(shared_object || dynamic_pie) {
             return Err(CliError::Usage(
-                "-z now is only supported with --shared".to_owned(),
+                "-z now is only supported with --shared or --dynamic-pie".to_owned(),
             ));
         }
         let soname = extract_soname_argument(&raw_remaining)?;
@@ -1581,6 +1581,7 @@ fn link_files(
                     interpreter,
                     init_symbol: options.init_symbol,
                     fini_symbol: options.fini_symbol,
+                    bind_now: options.bind_now,
                     copy_relocations: &needed.copy_relocations,
                 },
             )

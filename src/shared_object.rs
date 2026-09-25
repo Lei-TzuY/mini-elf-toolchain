@@ -1599,6 +1599,7 @@ pub struct DynamicPieLinkOptions<'a> {
     pub interpreter: &'a [u8],
     pub init_symbol: Option<&'a [u8]>,
     pub fini_symbol: Option<&'a [u8]>,
+    pub bind_now: bool,
     pub copy_relocations: &'a [DynamicPieCopyRelocation],
 }
 
@@ -1621,7 +1622,7 @@ pub fn link_dynamic_pie_with_checked_providers(
                 symbolic: false,
                 ibt_plt: false,
                 gnu_property_ibt: false,
-                bind_now: false,
+                bind_now: options.bind_now,
                 init_symbol: None,
                 fini_symbol: None,
             },
@@ -2092,12 +2093,37 @@ fn link_loader_image(
         .into_iter()
         .max()
         .unwrap_or(0);
-    let coalesced_relro_start = got_relro.and_then(|region| {
-        region
-            .address
-            .checked_add(region.size)
-            .filter(|end| dynamic_pie && *end == relocated_end)
-            .map(|_| region.address)
+    let bind_now_relro_tail_start = if dynamic_pie && bind_now {
+        let mut protected_start = None;
+        let mut protected_end = None;
+        for region in [plt_got_relro, got_relro].into_iter().flatten() {
+            let end = region
+                .address
+                .checked_add(region.size)
+                .ok_or(SharedObjectError::AddressOverflow)?;
+            protected_start = Some(
+                protected_start.map_or(region.address, |start: u64| start.min(region.address)),
+            );
+            protected_end = Some(protected_end.map_or(end, |current: u64| current.max(end)));
+        }
+        match (protected_start, protected_end) {
+            (Some(start), Some(end)) if end == relocated_end => Some(start),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let coalesced_relro_start = bind_now_relro_tail_start.or_else(|| {
+        if bind_now {
+            return None;
+        }
+        got_relro.and_then(|region| {
+            region
+                .address
+                .checked_add(region.size)
+                .filter(|end| dynamic_pie && *end == relocated_end)
+                .map(|_| region.address)
+        })
     });
     let interpreter_payload = interpreter.map(|path| {
         let mut bytes = path.to_vec();
@@ -2105,11 +2131,10 @@ fn link_loader_image(
         bytes
     });
 
-    // With a tail-isolated dynamic-PIE GOT, place loader metadata directly
-    // after the GOT so both regions occupy one contiguous RW PT_LOAD. Keep
-    // PT_INTERP after that protected RW interval. When the GOT is not the
-    // relocated image tail (for example, trailing TLS image state), preserve
-    // the existing interpreter-before-metadata layout and GOT-only RELRO.
+    // Keep loader-mutated dynamic-PIE state contiguous before protection.
+    // Partial RELRO coalesces a tail-isolated ordinary/TLS GOT with metadata.
+    // Bind-now also admits a GOTPLT-only tail or the ordered GOTPLT+GOT tail,
+    // keeping PT_INTERP after the protected RW interval.
     let interpreter_before_metadata = if coalesced_relro_start.is_none()
         && interpreter_payload.is_some()
     {

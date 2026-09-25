@@ -308,7 +308,7 @@ int main(int argc, char **argv) {
 }
 
 #[test]
-fn z_now_is_rejected_outside_shared_mode_before_input_io() {
+fn z_now_is_rejected_outside_loader_image_modes_before_input_io() {
     let dir = temp_dir("usage");
     let output = dir.join("must-not-exist");
 
@@ -324,7 +324,7 @@ fn z_now_is_rejected_outside_shared_mode_before_input_io() {
     assert!(result.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(
-        stderr.contains("-z now is only supported with --shared"),
+        stderr.contains("-z now is only supported with --shared or --dynamic-pie"),
         "{stderr}"
     );
     assert!(!output.exists());
