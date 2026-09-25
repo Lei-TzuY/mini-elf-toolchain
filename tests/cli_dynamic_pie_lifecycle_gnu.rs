@@ -625,49 +625,57 @@ preinit_default:
     ret
 .size preinit_default, .-preinit_default
 
-.type init_100,@function
-init_100:
+.type init_fallback_name,@function
+init_fallback_name:
     cmpq $1, state(%rip)
     jne fail_now
     movq $2, state(%rip)
+    ret
+.size init_fallback_name, .-init_fallback_name
+
+.type init_100,@function
+init_100:
+    cmpq $2, state(%rip)
+    jne fail_now
+    movq $3, state(%rip)
     ret
 .size init_100, .-init_100
 
 .type init_300,@function
 init_300:
-    cmpq $2, state(%rip)
+    cmpq $3, state(%rip)
     jne fail_now
-    movq $3, state(%rip)
+    movq $4, state(%rip)
     ret
 .size init_300, .-init_300
 
 .type init_default,@function
 init_default:
-    cmpq $3, state(%rip)
+    cmpq $4, state(%rip)
     jne fail_now
-    movq $4, state(%rip)
+    movq $5, state(%rip)
     ret
 .size init_default, .-init_default
 
 .type fini_default,@function
 fini_default:
-    cmpq $4, state(%rip)
+    cmpq $5, state(%rip)
     jne fail_now
-    movq $5, state(%rip)
+    movq $6, state(%rip)
     ret
 .size fini_default, .-fini_default
 
 .type fini_300,@function
 fini_300:
-    cmpq $5, state(%rip)
+    cmpq $6, state(%rip)
     jne fail_now
-    movq $6, state(%rip)
+    movq $7, state(%rip)
     ret
 .size fini_300, .-fini_300
 
 .type fini_100,@function
 fini_100:
-    cmpq $6, state(%rip)
+    cmpq $7, state(%rip)
     jne fail_now
     mov $231, %rax
     mov $61, %rdi
@@ -676,7 +684,7 @@ fini_100:
 
 .type main,@function
 main:
-    cmpq $4, state(%rip)
+    cmpq $5, state(%rip)
     jne fail_now
     mov $42, %eax
     ret
@@ -706,12 +714,16 @@ _start:
 .quad preinit_default
 
 # Deliberately emit INIT/FINI fragments out of GNU priority order.
+# The 099foo suffix is not a valid numeric init priority. GNU ld falls
+# back to section-name ordering when comparing it, so it sorts before 100.
 .section .init_array.300,"aw",@init_array
 .quad init_300
 .section .init_array,"aw",@init_array
 .quad init_default
 .section .init_array.100,"aw",@init_array
 .quad init_100
+.section .init_array.099foo,"aw",@init_array
+.quad init_fallback_name
 
 .section .fini_array.100,"aw",@fini_array
 .quad fini_100
@@ -773,7 +785,8 @@ fn dynamic_pie_lifecycle_priority_matches_gnu_execution_order() {
             inspected.contains("DT_PREINIT_ARRAY: address=") && inspected.contains("entries=1"),
             "{inspected}"
         );
-        assert_eq!(inspected.matches("entries=3").count(), 2, "{inspected}");
+        assert_eq!(inspected.matches("entries=4").count(), 1, "{inspected}");
+        assert_eq!(inspected.matches("entries=3").count(), 1, "{inspected}");
 
         let status = Command::new(image).status().unwrap();
         assert_eq!(
