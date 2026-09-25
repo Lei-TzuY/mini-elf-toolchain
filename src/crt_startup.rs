@@ -41,9 +41,9 @@ pub fn build_dynamic_pie_crt_startup_object() -> Vec<u8> {
     // and $-16,%rsp; push %rax; push %rsp; xor %r8d,%r8d; xor %ecx,%ecx;
     // mov main@GOTPCREL(%rip),%rdi; call __libc_start_main@PLT; hlt
     let text: [u8; 37] = [
-        0xf3, 0x0f, 0x1e, 0xfa, 0x31, 0xed, 0x49, 0x89, 0xd1, 0x5e, 0x48, 0x89, 0xe2, 0x48,
-        0x83, 0xe4, 0xf0, 0x50, 0x54, 0x45, 0x31, 0xc0, 0x31, 0xc9, 0x48, 0x8b, 0x3d, 0x00,
-        0x00, 0x00, 0x00, 0xe8, 0x00, 0x00, 0x00, 0x00, 0xf4,
+        0xf3, 0x0f, 0x1e, 0xfa, 0x31, 0xed, 0x49, 0x89, 0xd1, 0x5e, 0x48, 0x89, 0xe2, 0x48, 0x83,
+        0xe4, 0xf0, 0x50, 0x54, 0x45, 0x31, 0xc0, 0x31, 0xc9, 0x48, 0x8b, 0x3d, 0x00, 0x00, 0x00,
+        0x00, 0xe8, 0x00, 0x00, 0x00, 0x00, 0xf4,
     ];
 
     let mut strtab = vec![0];
@@ -68,8 +68,7 @@ pub fn build_dynamic_pie_crt_startup_object() -> Vec<u8> {
     let shstrtab_offset = strtab_offset + strtab.len();
     let gnu_stack_offset = shstrtab_offset + shstrtab.len();
     let section_header_offset = align_up(gnu_stack_offset, 8);
-    let file_size =
-        section_header_offset + usize::from(SECTION_COUNT) * ELF64_SECTION_HEADER_SIZE;
+    let file_size = section_header_offset + usize::from(SECTION_COUNT) * ELF64_SECTION_HEADER_SIZE;
     let mut file = vec![0_u8; file_size];
 
     file[0..4].copy_from_slice(b"\x7fELF");
@@ -312,7 +311,13 @@ mod tests {
         let symbols = &object.symbol_tables[0];
         assert_eq!(symbols.symbols.len(), 4);
         assert_eq!(
-            symbol_name(&file, &object.sections, symbols, START_SYMBOL_INDEX as usize).unwrap(),
+            symbol_name(
+                &file,
+                &object.sections,
+                symbols,
+                START_SYMBOL_INDEX as usize
+            )
+            .unwrap(),
             b"_start"
         );
         assert_eq!(
