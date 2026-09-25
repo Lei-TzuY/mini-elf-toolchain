@@ -356,7 +356,7 @@ fn ibtplt_alone_does_not_claim_ibt_property() {
 }
 
 #[test]
-fn z_ibt_is_rejected_outside_shared_mode_before_input_io() {
+fn z_ibt_is_rejected_outside_loader_image_modes_before_input_io() {
     let dir = temp_dir("usage");
     let output = dir.join("must-not-exist");
 
@@ -372,7 +372,7 @@ fn z_ibt_is_rejected_outside_shared_mode_before_input_io() {
     assert!(result.stdout.is_empty());
     let stderr = String::from_utf8_lossy(&result.stderr);
     assert!(
-        stderr.contains("-z ibt is only supported with --shared"),
+        stderr.contains("-z ibt is only supported with --shared or --dynamic-pie"),
         "{stderr}"
     );
     assert!(!output.exists());
