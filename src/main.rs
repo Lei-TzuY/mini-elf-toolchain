@@ -7,12 +7,12 @@ use mini_elf_toolchain::forced_undefined::{
 };
 use mini_elf_toolchain::image_base::{extract_image_base_argument, ImageBaseArgumentError};
 use mini_elf_toolchain::input_object::RelocatableObject;
-use mini_elf_toolchain::link_symbols::resolve_validated_objects;
-use mini_elf_toolchain::linker_input::LinkerInputObject;
-use mini_elf_toolchain::load_segments::SHF_EXECINSTR;
 use mini_elf_toolchain::library_search::{
     resolve_shared_library_arguments, resolve_static_library_arguments, LibrarySearchError,
 };
+use mini_elf_toolchain::link_symbols::resolve_validated_objects;
+use mini_elf_toolchain::linker_input::LinkerInputObject;
+use mini_elf_toolchain::load_segments::SHF_EXECINSTR;
 use mini_elf_toolchain::ordered_inputs::{
     prepare_ordered_link_inputs_with_forced_undefined, LinkObjectOrigin, OrderedLinkInput,
     OrderedLinkInputError,
@@ -488,9 +488,7 @@ fn extract_crt_startup_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsS
     for argument in arguments {
         if argument == "--crt-startup" {
             if crt_startup {
-                return Err(CliError::Usage(
-                    "duplicate --crt-startup option".to_owned(),
-                ));
+                return Err(CliError::Usage("duplicate --crt-startup option".to_owned()));
             }
             crt_startup = true;
         } else if argument
