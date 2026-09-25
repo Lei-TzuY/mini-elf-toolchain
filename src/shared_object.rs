@@ -26,6 +26,7 @@ use crate::program_headers::{
 };
 use crate::relocated_sections::{
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests,
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_bind_now,
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got,
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order,
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order_and_ibt_plt,
@@ -117,6 +118,7 @@ const ELF64_VERDAUX_SIZE: usize = 8;
 const ELF64_VERNEED_SIZE: usize = 16;
 const ELF64_VERNAUX_SIZE: usize = 16;
 const DF_SYMBOLIC: u64 = 0x2;
+const DF_BIND_NOW: u64 = 0x8;
 const DF_STATIC_TLS: u64 = 0x10;
 
 #[derive(Debug)]
@@ -1545,6 +1547,7 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
             symbolic: false,
             ibt_plt: false,
             gnu_property_ibt: false,
+            bind_now: false,
             init_symbol: None,
             fini_symbol: None,
         },
@@ -1562,6 +1565,7 @@ pub struct SharedObjectLinkOptions<'a> {
     pub symbolic: bool,
     pub ibt_plt: bool,
     pub gnu_property_ibt: bool,
+    pub bind_now: bool,
     pub init_symbol: Option<&'a [u8]>,
     pub fini_symbol: Option<&'a [u8]>,
 }
@@ -1662,6 +1666,7 @@ fn link_loader_image(
         symbolic,
         ibt_plt,
         gnu_property_ibt,
+        bind_now,
         init_symbol: _,
         fini_symbol: _,
     } = shared;
@@ -1741,7 +1746,18 @@ fn link_loader_image(
         tls_desc_symbols: &imports.tls_desc_symbols,
         external_tls_got_symbols: &tls_ie_import_symbols,
     };
-    let relocated_output = if dynamic_pie_got_relro {
+    let relocated_output = if bind_now {
+        relocate_allocatable_sections_with_external_got_plt_and_tls_requests_bind_now(
+            &relocation_inputs,
+            page_alignment,
+            page_alignment,
+            &imports.got_symbols,
+            &imports.plt_symbols,
+            tls_requests,
+            &lifecycle_layout_tail_order,
+            ibt_plt,
+        )
+    } else if dynamic_pie_got_relro {
         relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got(
             &relocation_inputs,
             page_alignment,
@@ -1782,8 +1798,13 @@ fn link_loader_image(
         )
     }
     .map_err(SharedObjectError::Relocation)?;
-    let got_relro = if dynamic_pie_got_relro {
+    let got_relro = if dynamic_pie_got_relro || bind_now {
         relocated_output.got_region
+    } else {
+        None
+    };
+    let plt_got_relro = if bind_now {
+        relocated_output.plt_got_region
     } else {
         None
     };
@@ -2103,7 +2124,8 @@ fn link_loader_image(
     };
     let metadata_address =
         align_up(metadata_floor, page_alignment).ok_or(SharedObjectError::AddressOverflow)?;
-    let metadata_relro = dynamic_pie && (got_relro.is_none() || coalesced_relro_start.is_some());
+    let metadata_relro =
+        bind_now || (dynamic_pie && (got_relro.is_none() || coalesced_relro_start.is_some()));
     let mut metadata = build_dynamic_metadata(
         metadata_address,
         &exports,
@@ -2124,7 +2146,8 @@ fn link_loader_image(
                 DF_STATIC_TLS
             } else {
                 0
-            }) | if symbolic { DF_SYMBOLIC } else { 0 },
+            }) | if symbolic { DF_SYMBOLIC } else { 0 }
+                | if bind_now { DF_BIND_NOW } else { 0 },
         },
         lifecycle,
     )?;
@@ -2278,7 +2301,28 @@ fn link_loader_image(
         size: metadata.dynamic_size,
     };
     let mut relro = Vec::new();
-    if let Some(address) = coalesced_relro_start {
+    if bind_now {
+        // Full shared-object RELRO keeps every loader-mutated table page
+        // independently sealable. The dynamic loader resolves GLOB_DAT/TLS
+        // state and every JUMP_SLOT first because DF_BIND_NOW is present, then
+        // seals the isolated GOT, GOTPLT, and loader-metadata pages.
+        if let Some(region) = got_relro {
+            relro.push(RuntimeRelroProgramHeader {
+                address: region.address,
+                size: region.size,
+            });
+        }
+        if let Some(region) = plt_got_relro {
+            relro.push(RuntimeRelroProgramHeader {
+                address: region.address,
+                size: region.size,
+            });
+        }
+        relro.push(RuntimeRelroProgramHeader {
+            address: metadata_address,
+            size: metadata_size,
+        });
+    } else if let Some(address) = coalesced_relro_start {
         let metadata_end = metadata_address
             .checked_add(metadata_size)
             .ok_or(SharedObjectError::AddressOverflow)?;
