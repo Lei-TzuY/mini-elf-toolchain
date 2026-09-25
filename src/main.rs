@@ -691,9 +691,7 @@ fn extract_ibt_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>),
     Ok((ibt, remaining))
 }
 
-fn extract_bind_now_argument(
-    arguments: &[OsString],
-) -> Result<(bool, Vec<OsString>), CliError> {
+fn extract_bind_now_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>), CliError> {
     let mut bind_now = false;
     let mut remaining = Vec::with_capacity(arguments.len());
     let mut index = 0usize;
