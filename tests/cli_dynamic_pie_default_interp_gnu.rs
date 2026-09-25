@@ -39,7 +39,7 @@ fn assemble(dir: &Path, stem: &str, exit_code: u32) -> PathBuf {
     fs::write(
         &asm,
         format!(
-            ".text\n.globl _start\n.type _start,@function\n_start:\n    mov $60, %eax\n    mov $${exit_code}, %edi\n    syscall\n.size _start, .-_start\n.section .note.GNU-stack,\"\",@progbits\n"
+            ".text\n.globl _start\n.type _start,@function\n_start:\n    mov $60, %eax\n    mov ${exit_code}, %edi\n    syscall\n.size _start, .-_start\n.section .note.GNU-stack,\"\",@progbits\n"
         ),
     )
     .unwrap();
@@ -125,7 +125,11 @@ fn dynamic_pie_uses_gnu_linux_x86_64_default_interpreter_and_executes() {
         "GNU x86-64 Linux default interpreter drifted:\n{gnu_headers}"
     );
     let gnu_status = Command::new(&gnu).status().unwrap();
-    assert_eq!(gnu_status.code(), Some(23), "GNU reference status={gnu_status}");
+    assert_eq!(
+        gnu_status.code(),
+        Some(23),
+        "GNU reference status={gnu_status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
@@ -179,9 +183,7 @@ fn explicit_dynamic_linker_stays_fail_closed_outside_dynamic_pie_before_io() {
 
     assert_eq!(result.status.code(), Some(2));
     assert!(result.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&result.stderr)
-            .contains("--dynamic-linker is only supported with --dynamic-pie")
-    );
+    assert!(String::from_utf8_lossy(&result.stderr)
+        .contains("--dynamic-linker is only supported with --dynamic-pie"));
     assert!(!output.exists());
 }
