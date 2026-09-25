@@ -152,22 +152,28 @@ fn assert_mini_ibt_plt(path: &Path) {
         .iter()
         .position(|byte| *byte == 0xe8)
         .expect("call_host_direct should contain a direct CALL rel32");
-    let displacement = i32::from_le_bytes(
-        body[call_offset + 1..call_offset + 5]
-            .try_into()
-            .unwrap(),
-    );
+    let displacement =
+        i32::from_le_bytes(body[call_offset + 1..call_offset + 5].try_into().unwrap());
     let call_next = function + u64::try_from(call_offset + 5).unwrap();
     let secure_address = i128::from(call_next) + i128::from(displacement);
     let secure_address = u64::try_from(secure_address).unwrap();
     let secure_offset = vaddr_to_file_offset(&bytes, secure_address);
     let secure = &bytes[secure_offset..secure_offset + 16];
 
-    assert_eq!(&secure[..4], &ENDBR64, "public PLT entry must begin ENDBR64");
-    assert_eq!(&secure[4..6], &[0xff, 0x25], "secure PLT must jump through GOT");
+    assert_eq!(
+        &secure[..4],
+        &ENDBR64,
+        "public PLT entry must begin ENDBR64"
+    );
+    assert_eq!(
+        &secure[4..6],
+        &[0xff, 0x25],
+        "secure PLT must jump through GOT"
+    );
 
     let got_disp = i32::from_le_bytes(secure[6..10].try_into().unwrap());
-    let got_address = u64::try_from(i128::from(secure_address + 10) + i128::from(got_disp)).unwrap();
+    let got_address =
+        u64::try_from(i128::from(secure_address + 10) + i128::from(got_disp)).unwrap();
     let got_offset = vaddr_to_file_offset(&bytes, got_address);
     let lazy_address = read_u64(&bytes, got_offset);
     let lazy_offset = vaddr_to_file_offset(&bytes, lazy_address);
@@ -234,7 +240,10 @@ fn shared_ibt_plt_matches_gnu_and_preserves_lazy_binding() {
         .unwrap();
     assert!(gnu_disassembly.status.success());
     let gnu_disassembly = String::from_utf8_lossy(&gnu_disassembly.stdout);
-    assert!(gnu_disassembly.contains("host_function@plt"), "{gnu_disassembly}");
+    assert!(
+        gnu_disassembly.contains("host_function@plt"),
+        "{gnu_disassembly}"
+    );
     assert!(gnu_disassembly.contains("endbr64"), "{gnu_disassembly}");
 
     #[cfg(target_os = "linux")]
