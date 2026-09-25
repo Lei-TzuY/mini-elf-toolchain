@@ -2043,26 +2043,25 @@ fn link_loader_image(
         dynamic_imports.remove(name);
     }
     let import_dynamic_indices = import_dynamic_symbol_indices(exports.len(), &dynamic_imports)?;
-    let (mut rela_bytes, relative_relocation_count, relr_bytes) =
-        if pack_relative_relocs {
-            let relr = build_relr_relocation_table(
-                &relocation_inputs,
-                &mut relocated,
-                &resolved.definitions,
-                &relative_got_entries,
-            )
-            .map_err(SharedObjectError::RuntimeRelative)?;
-            (Vec::new(), 0, relr)
-        } else {
-            let (rela, relative_count) = build_relative_relocation_table(
-                &relocation_inputs,
-                &relocated,
-                &resolved.definitions,
-                &relative_got_entries,
-            )
-            .map_err(SharedObjectError::RuntimeRelative)?;
-            (rela, relative_count, Vec::new())
-        };
+    let (mut rela_bytes, relative_relocation_count, relr_bytes) = if pack_relative_relocs {
+        let relr = build_relr_relocation_table(
+            &relocation_inputs,
+            &mut relocated,
+            &resolved.definitions,
+            &relative_got_entries,
+        )
+        .map_err(SharedObjectError::RuntimeRelative)?;
+        (Vec::new(), 0, relr)
+    } else {
+        let (rela, relative_count) = build_relative_relocation_table(
+            &relocation_inputs,
+            &relocated,
+            &resolved.definitions,
+            &relative_got_entries,
+        )
+        .map_err(SharedObjectError::RuntimeRelative)?;
+        (rela, relative_count, Vec::new())
+    };
     let copy_rela_bytes = build_copy_relocation_table(
         &imports.copy_symbols,
         &copy_addresses,
