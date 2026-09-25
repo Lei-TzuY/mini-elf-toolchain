@@ -1,4 +1,5 @@
 use mini_elf_toolchain::archive::{Archive, ArchiveMemberKind};
+use mini_elf_toolchain::crt_startup::build_dynamic_pie_crt_startup_object;
 use mini_elf_toolchain::dynamic_provider::{inspect_dynamic_provider, DynamicProviderMetadata};
 use mini_elf_toolchain::elf64::Elf64Header;
 use mini_elf_toolchain::forced_undefined::{
@@ -47,7 +48,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--dynamic-pie|--shared] [-Bsymbolic] [-z ibtplt|-z ibt|-z now|-z pack-relative-relocs] [--dynamic-linker <path>|--dynamic-linker=<path>] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [-init <symbol>|-init=<symbol>] [-fini <symbol>|-fini=<symbol>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--dynamic-pie|--shared] [--crt-startup] [-Bsymbolic] [-z ibtplt|-z ibt|-z now|-z pack-relative-relocs] [--dynamic-linker <path>|--dynamic-linker=<path>] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [-init <symbol>|-init=<symbol>] [-fini <symbol>|-fini=<symbol>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -157,7 +158,13 @@ where
         let raw_remaining: Vec<_> = args.collect();
         let (position_independent, raw_remaining) = extract_pie_argument(&raw_remaining)?;
         let (dynamic_pie, raw_remaining) = extract_dynamic_pie_argument(&raw_remaining)?;
+        let (crt_startup, raw_remaining) = extract_crt_startup_argument(&raw_remaining)?;
         let (shared_object, raw_remaining) = extract_shared_argument(&raw_remaining)?;
+        if crt_startup && !dynamic_pie {
+            return Err(CliError::Usage(
+                "--crt-startup is only supported with --dynamic-pie".to_owned(),
+            ));
+        }
         let dynamic_linker = extract_dynamic_linker_argument(&raw_remaining)?;
         let lifecycle_hooks = extract_dynamic_lifecycle_hook_arguments(&dynamic_linker.arguments)?;
         let raw_remaining = lifecycle_hooks.arguments;
@@ -349,6 +356,11 @@ where
                 "--shared does not support --entry".to_owned(),
             ));
         }
+        if crt_startup && entry_seen {
+            return Err(CliError::Usage(
+                "--crt-startup cannot be combined with --entry".to_owned(),
+            ));
+        }
 
         let mut provider_search_paths = Vec::new();
         let remaining = if shared_object || dynamic_pie {
@@ -374,6 +386,7 @@ where
             image_base: image_base.image_base,
             position_independent,
             dynamic_pie,
+            crt_startup,
             dynamic_linker: dynamic_linker.path.as_deref(),
             init_symbol: lifecycle_hooks.init.as_deref(),
             fini_symbol: lifecycle_hooks.fini.as_deref(),
@@ -462,6 +475,33 @@ fn extract_dynamic_pie_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsS
     }
 
     Ok((dynamic_pie, remaining))
+}
+
+fn extract_crt_startup_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>), CliError> {
+    let mut crt_startup = false;
+    let mut remaining = Vec::with_capacity(arguments.len());
+
+    for argument in arguments {
+        if argument == "--crt-startup" {
+            if crt_startup {
+                return Err(CliError::Usage(
+                    "duplicate --crt-startup option".to_owned(),
+                ));
+            }
+            crt_startup = true;
+        } else if argument
+            .to_str()
+            .is_some_and(|argument| argument.starts_with("--crt-startup="))
+        {
+            return Err(CliError::Usage(
+                "--crt-startup does not accept a value".to_owned(),
+            ));
+        } else {
+            remaining.push(argument.clone());
+        }
+    }
+
+    Ok((crt_startup, remaining))
 }
 
 struct DynamicLinkerArguments {
@@ -1125,27 +1165,33 @@ fn partial_files(
     }
 
     let loaded = load_link_input_sequence(paths)?;
-    let ordered_inputs = loaded
-        .sequence
-        .iter()
-        .map(|input| {
-            let file = &loaded.files[input.file_index];
-            if file.starts_with(ARCHIVE_MAGIC) {
-                if input.whole_archive {
-                    OrderedLinkInput::WholeArchive(file)
-                } else {
-                    OrderedLinkInput::Archive(file)
-                }
+    let crt_startup_file = options
+        .crt_startup
+        .then(build_dynamic_pie_crt_startup_object);
+    let mut ordered_inputs = Vec::new();
+    let mut expanded_paths = Vec::new();
+    if let Some(file) = crt_startup_file.as_deref() {
+        ordered_inputs.push(OrderedLinkInput::Object(file));
+        expanded_paths.push(OsString::from("<synthetic-crt-startup>"));
+    }
+    ordered_inputs.extend(loaded.sequence.iter().map(|input| {
+        let file = &loaded.files[input.file_index];
+        if file.starts_with(ARCHIVE_MAGIC) {
+            if input.whole_archive {
+                OrderedLinkInput::WholeArchive(file)
             } else {
-                OrderedLinkInput::Object(file)
+                OrderedLinkInput::Archive(file)
             }
-        })
-        .collect::<Vec<_>>();
-    let expanded_paths = loaded
-        .sequence
-        .iter()
-        .map(|input| loaded.paths[input.file_index].clone())
-        .collect::<Vec<_>>();
+        } else {
+            OrderedLinkInput::Object(file)
+        }
+    }));
+    expanded_paths.extend(
+        loaded
+            .sequence
+            .iter()
+            .map(|input| loaded.paths[input.file_index].clone()),
+    );
     let prepared =
         prepare_ordered_link_inputs_with_forced_undefined(&ordered_inputs, forced_undefined)
             .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
@@ -1215,6 +1261,7 @@ struct LinkFilesOptions<'a> {
     image_base: u64,
     position_independent: bool,
     dynamic_pie: bool,
+    crt_startup: bool,
     dynamic_linker: Option<&'a [u8]>,
     init_symbol: Option<&'a [u8]>,
     fini_symbol: Option<&'a [u8]>,
