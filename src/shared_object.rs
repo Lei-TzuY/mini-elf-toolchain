@@ -1599,6 +1599,7 @@ pub struct DynamicPieLinkOptions<'a> {
     pub interpreter: &'a [u8],
     pub init_symbol: Option<&'a [u8]>,
     pub fini_symbol: Option<&'a [u8]>,
+    pub bind_now: bool,
     pub copy_relocations: &'a [DynamicPieCopyRelocation],
 }
 
@@ -1621,7 +1622,7 @@ pub fn link_dynamic_pie_with_checked_providers(
                 symbolic: false,
                 ibt_plt: false,
                 gnu_property_ibt: false,
-                bind_now: false,
+                bind_now: options.bind_now,
                 init_symbol: None,
                 fini_symbol: None,
             },
