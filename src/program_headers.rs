@@ -119,14 +119,7 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_relros_and_gnu_property(
     relro: &[RuntimeRelroProgramHeader],
     property: RuntimeGnuPropertyProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(
-        image,
-        Some(dynamic),
-        None,
-        None,
-        relro,
-        Some(property),
-    )
+    map_runtime_program_headers_impl(image, Some(dynamic), None, None, relro, Some(property))
 }
 
 fn map_runtime_program_headers_impl(
