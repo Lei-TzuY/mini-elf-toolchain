@@ -148,13 +148,7 @@ fn link_mini(
     output
 }
 
-fn link_gnu(
-    dir: &Path,
-    stem: &str,
-    mode: &str,
-    object: &Path,
-    interpreter: &Path,
-) -> PathBuf {
+fn link_gnu(dir: &Path, stem: &str, mode: &str, object: &Path, interpreter: &Path) -> PathBuf {
     let output = dir.join(stem);
     let linked = Command::new("ld")
         .arg("-pie")
@@ -262,7 +256,10 @@ fn inspect_property(path: &Path) -> String {
 fn assert_runs(path: &Path) {
     #[cfg(target_os = "linux")]
     {
-        let status = Command::new(path).env_remove("LD_BIND_NOW").status().unwrap();
+        let status = Command::new(path)
+            .env_remove("LD_BIND_NOW")
+            .status()
+            .unwrap();
         assert!(
             status.success(),
             "dynamic PIE IBT runtime returned {status} for {}",
@@ -284,7 +281,14 @@ fn dynamic_pie_ibtplt_matches_gnu_without_claiming_ibt_property() {
     let provider = build_provider(&dir);
     let object = assemble(&dir, "consumer", consumer_source());
 
-    let mini = link_mini(&dir, "mini-ibtplt", "ibtplt", &object, &provider, &interpreter);
+    let mini = link_mini(
+        &dir,
+        "mini-ibtplt",
+        "ibtplt",
+        &object,
+        &provider,
+        &interpreter,
+    );
     let gnu = link_gnu(&dir, "gnu-ibtplt", "ibtplt", &object, &interpreter);
 
     assert_ibt_plt(&mini);
