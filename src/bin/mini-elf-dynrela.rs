@@ -135,8 +135,8 @@ fn format_dynamic_relocations(header: Elf64Header, file: &[u8]) -> Result<String
         rela_size,
         "DT_RELA table",
     )?;
-    let symbols = dynamic_symbols(&program_headers, &entries, file)?;
     let count = rela_size / rela_entry_size;
+    let mut symbols = None;
     let mut output = format!("DT_RELA contains {count} entries:\n");
     output.push_str(
         "  Offset             Info               Type                 Sym  Addend Name\n",
@@ -158,7 +158,15 @@ fn format_dynamic_relocations(header: Elf64Header, file: &[u8]) -> Result<String
         let symbol_name = if symbol == 0 {
             "-".to_owned()
         } else {
-            dynamic_symbol_name(file, symbols, symbol)?
+            let dynamic_symbols = match symbols {
+                Some(symbols) => symbols,
+                None => {
+                    let parsed = dynamic_symbols(&program_headers, &entries, file)?;
+                    symbols = Some(parsed);
+                    parsed
+                }
+            };
+            dynamic_symbol_name(file, dynamic_symbols, symbol)?
         };
         output.push_str(&format!(
             "  {relocation_offset:#018x} {info:#018x} {:<20} {symbol:>4}  {addend:<6} {symbol_name}\n",
@@ -590,6 +598,7 @@ fn relocation_type_name(relocation_type: u32) -> String {
         8 => "R_X86_64_RELATIVE".to_owned(),
         10 => "R_X86_64_32".to_owned(),
         11 => "R_X86_64_32S".to_owned(),
+        37 => "R_X86_64_IRELATIVE".to_owned(),
         value => format!("R_X86_64_{value}"),
     }
 }
