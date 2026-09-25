@@ -603,7 +603,6 @@ _start:
     let _ = fs::remove_dir_all(dir);
 }
 
-
 fn lifecycle_priority_fixture() -> &'static str {
     r#".data
 .align 8
