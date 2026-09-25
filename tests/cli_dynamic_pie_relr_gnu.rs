@@ -364,8 +364,6 @@ fn pack_relative_relocs_rejects_unsupported_modes_and_duplicates_before_io() {
         .unwrap();
     assert_eq!(duplicate.status.code(), Some(2));
     assert!(duplicate.stdout.is_empty());
-    assert!(
-        String::from_utf8_lossy(&duplicate.stderr)
-            .contains("duplicate -z pack-relative-relocs option")
-    );
+    assert!(String::from_utf8_lossy(&duplicate.stderr)
+        .contains("duplicate -z pack-relative-relocs option"));
 }
