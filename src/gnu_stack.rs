@@ -188,4 +188,3 @@ pub(crate) fn gnu_stack_policy(
 
     Ok(saw_stack_note.then_some(GnuStackPolicy { executable }))
 }
-
