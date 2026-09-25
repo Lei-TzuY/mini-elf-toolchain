@@ -241,7 +241,10 @@ main:
     );
 
     let header = readelf(&image, &["-hW"]);
-    assert!(!header.contains("Entry point address:               0x0"), "{header}");
+    assert!(
+        !header.contains("Entry point address:               0x0"),
+        "{header}"
+    );
 
     let status = Command::new(&image).status().unwrap();
     assert_eq!(
