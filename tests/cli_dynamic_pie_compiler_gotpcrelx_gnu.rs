@@ -139,8 +139,7 @@ int main(void) {
     let input_relocations = readelf(&consumer, &["-rW"]);
     assert!(
         input_relocations.lines().any(|line| {
-            (line.contains("R_X86_64_REX_GOTPCRELX")
-                || line.contains("R_X86_64_GOTPCRELX"))
+            (line.contains("R_X86_64_REX_GOTPCRELX") || line.contains("R_X86_64_GOTPCRELX"))
                 && line.contains("provider_value")
         }),
         "compiler fixture must exercise a relaxable GOTPCREL relocation:\n{input_relocations}"
