@@ -20,7 +20,9 @@ use crate::program_headers::{
     map_runtime_program_headers_with_dynamic_and_gnu_property,
     map_runtime_program_headers_with_dynamic_and_interp,
     map_runtime_program_headers_with_dynamic_and_relros,
+    map_runtime_program_headers_with_dynamic_interp_and_gnu_property,
     map_runtime_program_headers_with_dynamic_interp_and_relros,
+    map_runtime_program_headers_with_dynamic_interp_relros_and_gnu_property,
     map_runtime_program_headers_with_dynamic_relros_and_gnu_property, RuntimeDynamicProgramHeader,
     RuntimeGnuPropertyProgramHeader, RuntimeInterpProgramHeader, RuntimeRelroProgramHeader,
 };
@@ -1599,6 +1601,8 @@ pub struct DynamicPieLinkOptions<'a> {
     pub interpreter: &'a [u8],
     pub init_symbol: Option<&'a [u8]>,
     pub fini_symbol: Option<&'a [u8]>,
+    pub ibt_plt: bool,
+    pub gnu_property_ibt: bool,
     pub bind_now: bool,
     pub copy_relocations: &'a [DynamicPieCopyRelocation],
 }
@@ -1620,8 +1624,8 @@ pub fn link_dynamic_pie_with_checked_providers(
                 checked_version_providers: options.checked_version_providers,
                 version_script: None,
                 symbolic: false,
-                ibt_plt: false,
-                gnu_property_ibt: false,
+                ibt_plt: options.ibt_plt,
+                gnu_property_ibt: options.gnu_property_ibt,
                 bind_now: options.bind_now,
                 init_symbol: None,
                 fini_symbol: None,
@@ -2382,19 +2386,47 @@ fn link_loader_image(
     }
 
     if let Some(address) = gnu_property_address {
-        debug_assert!(interpreter_address.is_none() && interpreter.is_none());
         let property = RuntimeGnuPropertyProgramHeader {
             address,
             size: GNU_PROPERTY_NOTE_SIZE,
         };
-        return if relro.is_empty() {
-            map_runtime_program_headers_with_dynamic_and_gnu_property(image, dynamic, property)
+        return match (interpreter_address, interpreter) {
+            (Some(interp_address), Some(path)) if !relro.is_empty() => {
+                map_runtime_program_headers_with_dynamic_interp_relros_and_gnu_property(
+                    image,
+                    dynamic,
+                    RuntimeInterpProgramHeader {
+                        address: interp_address,
+                        size: u64::try_from(path.len() + 1)
+                            .map_err(|_| SharedObjectError::MetadataTooLarge)?,
+                    },
+                    &relro,
+                    property,
+                )
                 .map_err(SharedObjectError::Write)
-        } else {
-            map_runtime_program_headers_with_dynamic_relros_and_gnu_property(
+            }
+            (Some(interp_address), Some(path)) => {
+                map_runtime_program_headers_with_dynamic_interp_and_gnu_property(
+                    image,
+                    dynamic,
+                    RuntimeInterpProgramHeader {
+                        address: interp_address,
+                        size: u64::try_from(path.len() + 1)
+                            .map_err(|_| SharedObjectError::MetadataTooLarge)?,
+                    },
+                    property,
+                )
+                .map_err(SharedObjectError::Write)
+            }
+            (None, None) if relro.is_empty() => {
+                map_runtime_program_headers_with_dynamic_and_gnu_property(image, dynamic, property)
+                    .map_err(SharedObjectError::Write)
+            }
+            (None, None) => map_runtime_program_headers_with_dynamic_relros_and_gnu_property(
                 image, dynamic, &relro, property,
             )
-            .map_err(SharedObjectError::Write)
+            .map_err(SharedObjectError::Write),
+            _ => unreachable!("interpreter payload and path are constructed together"),
         };
     }
 
