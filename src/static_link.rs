@@ -13,6 +13,11 @@ use crate::program_headers::{
 pub use crate::gnu_stack::GnuStackPolicyError;
 pub use crate::static_link_core::{StaticLinkError, StaticLinkOutput};
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct StaticPieLinkOptions {
+    pub pack_relative_relocs: bool,
+}
+
 pub fn link_static_executable(
     inputs: &[LinkerInputObject<'_>],
     start_address: u64,
@@ -34,11 +39,27 @@ pub fn link_static_position_independent_executable_with_map(
     page_alignment: u64,
     entry_symbol: &[u8],
 ) -> Result<StaticLinkOutput, StaticLinkError> {
-    let artifact = crate::static_link_core::link_static_position_independent_artifact_with_map(
+    link_static_position_independent_executable_with_map_and_options(
         inputs,
         page_alignment,
         entry_symbol,
-    )?;
+        StaticPieLinkOptions::default(),
+    )
+}
+
+pub fn link_static_position_independent_executable_with_map_and_options(
+    inputs: &[LinkerInputObject<'_>],
+    page_alignment: u64,
+    entry_symbol: &[u8],
+    options: StaticPieLinkOptions,
+) -> Result<StaticLinkOutput, StaticLinkError> {
+    let artifact =
+        crate::static_link_core::link_static_position_independent_artifact_with_map_and_options(
+            inputs,
+            page_alignment,
+            entry_symbol,
+            options.pack_relative_relocs,
+        )?;
     let mut output = artifact.output;
     let stack = gnu_stack_policy(inputs).map_err(StaticLinkError::GnuStack)?;
     let dynamic = artifact.dynamic.map(|dynamic| RuntimeDynamicProgramHeader {
