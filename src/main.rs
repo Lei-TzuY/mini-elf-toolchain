@@ -627,9 +627,7 @@ fn extract_symbolic_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsStri
     Ok((symbolic, remaining))
 }
 
-fn extract_ibt_plt_argument(
-    arguments: &[OsString],
-) -> Result<(bool, Vec<OsString>), CliError> {
+fn extract_ibt_plt_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>), CliError> {
     let mut ibt_plt = false;
     let mut remaining = Vec::with_capacity(arguments.len());
     let mut index = 0usize;
