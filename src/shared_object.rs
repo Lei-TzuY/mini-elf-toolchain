@@ -1375,8 +1375,10 @@ struct DynamicLifecycle {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum DynamicLifecyclePriority {
-    Numeric(Vec<u8>),
-    Named(Vec<u8>),
+    Suffixed {
+        numeric: Option<u32>,
+        suffix: Vec<u8>,
+    },
     Base,
 }
 
@@ -4053,20 +4055,27 @@ fn dynamic_lifecycle_priority(name: Option<&[u8]>, prefix: &[u8]) -> DynamicLife
         return DynamicLifecyclePriority::Base;
     };
 
-    if !suffix.is_empty() && suffix.iter().all(u8::is_ascii_digit) {
-        let canonical = suffix
-            .iter()
-            .skip_while(|byte| **byte == b'0')
-            .copied()
-            .collect::<Vec<_>>();
-        DynamicLifecyclePriority::Numeric(if canonical.is_empty() {
-            vec![b'0']
-        } else {
-            canonical
-        })
-    } else {
-        DynamicLifecyclePriority::Named(suffix.to_vec())
+    DynamicLifecyclePriority::Suffixed {
+        numeric: parse_dynamic_lifecycle_numeric_priority(suffix),
+        suffix: suffix.to_vec(),
     }
+}
+
+fn parse_dynamic_lifecycle_numeric_priority(suffix: &[u8]) -> Option<u32> {
+    if suffix.is_empty() || !suffix.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+
+    let mut value = 0u64;
+    for byte in suffix {
+        value = value
+            .checked_mul(10)?
+            .checked_add(u64::from(*byte - b'0'))?;
+        if value > i32::MAX as u64 {
+            return None;
+        }
+    }
+    Some(value as u32)
 }
 
 fn compare_dynamic_lifecycle_priority(
@@ -4074,16 +4083,27 @@ fn compare_dynamic_lifecycle_priority(
     right: &DynamicLifecyclePriority,
 ) -> Ordering {
     match (left, right) {
-        (DynamicLifecyclePriority::Numeric(left), DynamicLifecyclePriority::Numeric(right)) => {
-            left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+        (
+            DynamicLifecyclePriority::Suffixed {
+                numeric: left_numeric,
+                suffix: left_suffix,
+            },
+            DynamicLifecyclePriority::Suffixed {
+                numeric: right_numeric,
+                suffix: right_suffix,
+            },
+        ) => match (left_numeric, right_numeric) {
+            (Some(left), Some(right)) => left
+                .cmp(right)
+                .then_with(|| left_suffix.cmp(right_suffix)),
+            _ => left_suffix.cmp(right_suffix),
+        },
+        (DynamicLifecyclePriority::Suffixed { .. }, DynamicLifecyclePriority::Base) => {
+            Ordering::Less
         }
-        (DynamicLifecyclePriority::Numeric(_), _) => Ordering::Less,
-        (_, DynamicLifecyclePriority::Numeric(_)) => Ordering::Greater,
-        (DynamicLifecyclePriority::Named(left), DynamicLifecyclePriority::Named(right)) => {
-            left.cmp(right)
+        (DynamicLifecyclePriority::Base, DynamicLifecyclePriority::Suffixed { .. }) => {
+            Ordering::Greater
         }
-        (DynamicLifecyclePriority::Named(_), DynamicLifecyclePriority::Base) => Ordering::Less,
-        (DynamicLifecyclePriority::Base, DynamicLifecyclePriority::Named(_)) => Ordering::Greater,
         (DynamicLifecyclePriority::Base, DynamicLifecyclePriority::Base) => Ordering::Equal,
     }
 }
@@ -4641,41 +4661,59 @@ mod lifecycle_priority_tests {
         dynamic_lifecycle_priority(Some(name), b".init_array")
     }
 
-    #[test]
-    fn lifecycle_priority_orders_numeric_named_and_base() {
-        let mut priorities = vec![
-            key(b".init_array"),
-            key(b".init_array.zed"),
-            key(b".init_array.99999"),
-            key(b".init_array.100"),
-            key(b".init_array.bar"),
-        ];
-        priorities.sort_by(compare_dynamic_lifecycle_priority);
+    fn sorted_names(names: &[&[u8]]) -> Vec<Vec<u8>> {
+        let mut entries = names
+            .iter()
+            .map(|name| (key(name), name.to_vec()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|(left, _), (right, _)| compare_dynamic_lifecycle_priority(left, right));
+        entries.into_iter().map(|(_, name)| name).collect()
+    }
 
+    #[test]
+    fn lifecycle_priority_matches_gnu_numeric_and_name_fallback_order() {
         assert_eq!(
-            priorities,
+            sorted_names(&[
+                b".init_array",
+                b".init_array.zed",
+                b".init_array.99999",
+                b".init_array.100",
+                b".init_array.bar",
+                b".init_array.099foo",
+            ]),
             vec![
-                DynamicLifecyclePriority::Numeric(b"100".to_vec()),
-                DynamicLifecyclePriority::Numeric(b"99999".to_vec()),
-                DynamicLifecyclePriority::Named(b"bar".to_vec()),
-                DynamicLifecyclePriority::Named(b"zed".to_vec()),
-                DynamicLifecyclePriority::Base,
+                b".init_array.099foo".to_vec(),
+                b".init_array.100".to_vec(),
+                b".init_array.99999".to_vec(),
+                b".init_array.bar".to_vec(),
+                b".init_array.zed".to_vec(),
+                b".init_array".to_vec(),
             ]
         );
     }
 
     #[test]
-    fn lifecycle_priority_canonicalizes_leading_zeroes() {
-        assert_eq!(key(b".init_array.000100"), key(b".init_array.100"));
-        assert_eq!(key(b".init_array.000"), key(b".init_array.0"));
+    fn lifecycle_priority_equal_numeric_values_fall_back_to_section_name() {
+        assert_eq!(
+            sorted_names(&[
+                b".init_array.100",
+                b".init_array.0100",
+                b".init_array.000100",
+            ]),
+            vec![
+                b".init_array.000100".to_vec(),
+                b".init_array.0100".to_vec(),
+                b".init_array.100".to_vec(),
+            ]
+        );
     }
 
     #[test]
-    fn lifecycle_priority_stable_sort_preserves_link_order_for_equal_keys() {
+    fn lifecycle_priority_identical_names_preserve_link_order() {
         let mut priorities = vec![
-            (key(b".init_array.000100"), 0usize),
+            (key(b".init_array.100"), 0usize),
             (key(b".init_array.100"), 1usize),
-            (key(b".init_array.0100"), 2usize),
+            (key(b".init_array.100"), 2usize),
         ];
         priorities.sort_by(|(left, _), (right, _)| compare_dynamic_lifecycle_priority(left, right));
 
@@ -4685,6 +4723,22 @@ mod lifecycle_priority_tests {
                 .map(|(_, link_order)| link_order)
                 .collect::<Vec<_>>(),
             vec![0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn lifecycle_priority_rejects_numeric_values_above_gnu_int_range() {
+        assert_eq!(
+            parse_dynamic_lifecycle_numeric_priority(b"2147483647"),
+            Some(2_147_483_647)
+        );
+        assert_eq!(
+            parse_dynamic_lifecycle_numeric_priority(b"2147483648"),
+            None
+        );
+        assert_eq!(
+            parse_dynamic_lifecycle_numeric_priority(b"999999999999999999999999999999"),
+            None
         );
     }
 }
