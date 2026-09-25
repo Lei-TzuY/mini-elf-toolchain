@@ -227,7 +227,11 @@ fn static_pie_pack_relative_relocs_decodes_relr_then_runs_irelative() {
         .arg(&object)
         .output()
         .unwrap();
-    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
     assert!(readelf(&gnu, &["-dW"]).contains("RELR"));
     let status = Command::new(&gnu).status().unwrap();
     assert_eq!(
@@ -265,11 +269,7 @@ fn static_pie_default_policy_remains_rela_only() {
     assert!(rela.contains("R_X86_64_IRELATIVE"), "{rela}");
 
     let status = Command::new(&ours).status().unwrap();
-    assert_eq!(
-        status.code(),
-        Some(0),
-        "default static PIE status={status}"
-    );
+    assert_eq!(status.code(), Some(0), "default static PIE status={status}");
 
     let _ = fs::remove_dir_all(dir);
 }
