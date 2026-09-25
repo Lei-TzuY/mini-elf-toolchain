@@ -1355,6 +1355,7 @@ struct InputValidationOptions {
     allow_copy_relocations: bool,
     allow_explicit_ifunc_imports: bool,
     allow_defined_pc32: bool,
+    allow_plt_notype_function_imports: bool,
     tls_policy: LoaderTlsPolicy,
 }
 
@@ -1434,6 +1435,7 @@ pub fn shared_import_requirements(
             allow_copy_relocations: false,
             allow_explicit_ifunc_imports: false,
             allow_defined_pc32: false,
+            allow_plt_notype_function_imports: false,
             tls_policy: LoaderTlsPolicy::SharedObject,
         },
     )
@@ -1448,6 +1450,7 @@ pub fn dynamic_pie_import_requirements(
             allow_copy_relocations: true,
             allow_explicit_ifunc_imports: true,
             allow_defined_pc32: true,
+            allow_plt_notype_function_imports: true,
             tls_policy: LoaderTlsPolicy::DynamicPieGdIeDescLd,
         },
     )
@@ -1726,6 +1729,7 @@ fn link_loader_image(
             allow_copy_relocations: dynamic_pie,
             allow_explicit_ifunc_imports: dynamic_pie,
             allow_defined_pc32: dynamic_pie,
+            allow_plt_notype_function_imports: dynamic_pie,
             tls_policy: if dynamic_pie {
                 LoaderTlsPolicy::DynamicPieGdIeDescLd
             } else {
@@ -3145,7 +3149,14 @@ fn validate_inputs(
 
                 let tls_get_addr_notype =
                     is_plt_import && symbol.name == b"__tls_get_addr" && symbol_type == STT_NOTYPE;
-                if is_plt_import && symbol_type != STT_FUNC && !tls_get_addr_notype {
+                let plt_notype_function = is_plt_import
+                    && options.allow_plt_notype_function_imports
+                    && symbol_type == STT_NOTYPE;
+                if is_plt_import
+                    && symbol_type != STT_FUNC
+                    && !tls_get_addr_notype
+                    && !plt_notype_function
+                {
                     return Err(SharedObjectError::ExternalPltUnsupportedType {
                         object_index: input.object_index,
                         rela_section_index: table.section_index,
@@ -3181,10 +3192,15 @@ fn validate_inputs(
                     });
                 }
                 noncopy_import_symbols.insert(symbol.name.to_vec());
+                let import_info = if plt_notype_function {
+                    (binding << 4) | STT_FUNC
+                } else {
+                    symbol.symbol.info
+                };
                 record_import_symbol(
                     &mut import_symbols,
                     symbol.name,
-                    symbol.symbol.info,
+                    import_info,
                     symbol.symbol.size,
                 )?;
 
@@ -3302,13 +3318,19 @@ fn validate_inputs(
                         symbol.name == b"__tls_get_addr" && symbol_type == STT_NOTYPE;
                     let explicit_ifunc_import =
                         options.allow_explicit_ifunc_imports && symbol_type == STT_GNU_IFUNC;
+                    let normalized_plt_notype = symbol_type == STT_NOTYPE
+                        && import_symbols.get(symbol.name).is_some_and(|import| {
+                            import.info & 0x0f == STT_FUNC
+                        });
                     let supported_import = import_symbols.contains_key(symbol.name)
                         && (binding == STB_GLOBAL
                             || (binding == STB_WEAK
-                                && matches!(symbol_type, STT_OBJECT | STT_FUNC)))
+                                && (matches!(symbol_type, STT_OBJECT | STT_FUNC)
+                                    || normalized_plt_notype)))
                         && (matches!(symbol_type, STT_OBJECT | STT_FUNC)
                             || explicit_ifunc_import
-                            || tls_get_addr_notype);
+                            || tls_get_addr_notype
+                            || normalized_plt_notype);
                     if !supported_import {
                         return Err(SharedObjectError::UndefinedNonlocal {
                             object_index: input.object_index,
