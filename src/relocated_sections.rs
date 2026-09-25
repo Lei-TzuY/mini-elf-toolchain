@@ -1071,22 +1071,22 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
                 )?;
                 plt_bytes.extend_from_slice(&[0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00]);
 
-                let lazy_address = stub_address
-                    .checked_add(PLT_ENTRY_SIZE)
-                    .ok_or(RelocatedSectionError::PltSizeOverflow {
+                let lazy_address = stub_address.checked_add(PLT_ENTRY_SIZE).ok_or(
+                    RelocatedSectionError::PltSizeOverflow {
                         symbol_count: external_plt_symbols.len(),
-                    })?;
+                    },
+                )?;
                 plt_bytes.extend_from_slice(&ENDBR64);
                 plt_bytes.push(0x68);
                 plt_bytes.extend_from_slice(&relocation_index.to_le_bytes());
 
-                let jump_next_ip = lazy_address
-                    .checked_add(14)
-                    .ok_or(RelocatedSectionError::PltDisplacementOutOfRange {
+                let jump_next_ip = lazy_address.checked_add(14).ok_or(
+                    RelocatedSectionError::PltDisplacementOutOfRange {
                         name: name.clone(),
                         stub_address: lazy_address,
                         slot_address: plt_layout.address,
-                    })?;
+                    },
+                )?;
                 let displacement = i128::from(plt_layout.address) - i128::from(jump_next_ip);
                 let displacement = i32::try_from(displacement).map_err(|_| {
                     RelocatedSectionError::PltDisplacementOutOfRange {
