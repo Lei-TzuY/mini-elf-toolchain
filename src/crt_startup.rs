@@ -13,7 +13,7 @@ const SHF_ALLOC: u64 = 0x2;
 const SHF_EXECINSTR: u64 = 0x4;
 const STB_GLOBAL: u8 = 1;
 const STT_FUNC: u8 = 2;
-const R_X86_64_PC32: u32 = 2;
+const R_X86_64_GOTPCREL: u32 = 9;
 const R_X86_64_PLT32: u32 = 4;
 
 const TEXT_SECTION_INDEX: u16 = 1;
@@ -31,18 +31,18 @@ const LIBC_START_MAIN_SYMBOL_INDEX: u32 = 3;
 /// Build the bounded GNU/Linux x86-64 startup object used by the dynamic-PIE
 /// CRT synthesis slice.
 ///
-/// The generated ET_REL object defines _start, references main with a
-/// PC-relative address relocation, and calls __libc_start_main through a
+/// The generated ET_REL object defines _start, loads main through the ordinary
+/// GOTPCREL/GLOB_DAT plane, and calls __libc_start_main through a
 /// PLT32 relocation. Feeding this object through the ordinary linker pipeline
 /// deliberately reuses normal symbol resolution, provider checking, PLT/GOTPLT
 /// generation, dynamic-symbol emission, and GNU-stack policy.
 pub fn build_dynamic_pie_crt_startup_object() -> Vec<u8> {
     // endbr64; xor %ebp,%ebp; mov %rdx,%r9; pop %rsi; mov %rsp,%rdx;
     // and $-16,%rsp; push %rax; push %rsp; xor %r8d,%r8d; xor %ecx,%ecx;
-    // lea main(%rip),%rdi; call __libc_start_main@PLT; hlt
+    // mov main@GOTPCREL(%rip),%rdi; call __libc_start_main@PLT; hlt
     let text: [u8; 37] = [
         0xf3, 0x0f, 0x1e, 0xfa, 0x31, 0xed, 0x49, 0x89, 0xd1, 0x5e, 0x48, 0x89, 0xe2, 0x48,
-        0x83, 0xe4, 0xf0, 0x50, 0x54, 0x45, 0x31, 0xc0, 0x31, 0xc9, 0x48, 0x8d, 0x3d, 0x00,
+        0x83, 0xe4, 0xf0, 0x50, 0x54, 0x45, 0x31, 0xc0, 0x31, 0xc9, 0x48, 0x8b, 0x3d, 0x00,
         0x00, 0x00, 0x00, 0xe8, 0x00, 0x00, 0x00, 0x00, 0xf4,
     ];
 
@@ -91,7 +91,7 @@ pub fn build_dynamic_pie_crt_startup_object() -> Vec<u8> {
         &mut file[rela_offset..rela_offset + ELF64_RELA_SIZE],
         27,
         MAIN_SYMBOL_INDEX,
-        R_X86_64_PC32,
+        R_X86_64_GOTPCREL,
         -4,
     );
     write_rela(
@@ -346,7 +346,7 @@ mod tests {
         assert_eq!(rela.relocations.len(), 2);
         assert_eq!(rela.relocations[0].offset, 27);
         assert_eq!(rela.relocations[0].symbol_index, MAIN_SYMBOL_INDEX);
-        assert_eq!(rela.relocations[0].relocation_type, R_X86_64_PC32);
+        assert_eq!(rela.relocations[0].relocation_type, R_X86_64_GOTPCREL);
         assert_eq!(rela.relocations[0].addend, -4);
         assert_eq!(rela.relocations[1].offset, 32);
         assert_eq!(
