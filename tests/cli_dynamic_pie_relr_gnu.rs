@@ -265,30 +265,32 @@ fn dynamic_pie_pack_relative_relocs_splits_relr_from_remaining_rela_and_executes
         ours.display()
     );
 
-    if gnu_ld_supports_pack_relative_relocs() {
-        let gnu = dir.join("gnu-packed");
-        let linked = Command::new("ld")
-            .arg("-pie")
-            .arg("--dynamic-linker")
-            .arg(&interpreter)
-            .args(["-z", "pack-relative-relocs", "-rpath", "$ORIGIN", "-o"])
-            .arg(&gnu)
-            .arg(&consumer)
-            .arg("-L")
-            .arg(&dir)
-            .arg("-lprovider")
-            .output()
-            .unwrap();
-        assert!(
-            linked.status.success(),
-            "{}",
-            String::from_utf8_lossy(&linked.stderr)
-        );
-        let gnu_dynamic = readelf(&gnu, &["-dW"]);
-        assert!(gnu_dynamic.contains("RELR"), "{gnu_dynamic}");
-        let status = Command::new(&gnu).status().unwrap();
-        assert_eq!(status.code(), Some(0), "GNU reference status={status}");
-    }
+    assert!(
+        gnu_ld_supports_pack_relative_relocs(),
+        "GNU ld fixture must support -z pack-relative-relocs"
+    );
+    let gnu = dir.join("gnu-packed");
+    let linked = Command::new("ld")
+        .arg("-pie")
+        .arg("--dynamic-linker")
+        .arg(&interpreter)
+        .args(["-z", "pack-relative-relocs", "-rpath", "$ORIGIN", "-o"])
+        .arg(&gnu)
+        .arg(&consumer)
+        .arg("-L")
+        .arg(&dir)
+        .arg("-lprovider")
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    let gnu_dynamic = readelf(&gnu, &["-dW"]);
+    assert!(gnu_dynamic.contains("RELR"), "{gnu_dynamic}");
+    let status = Command::new(&gnu).status().unwrap();
+    assert_eq!(status.code(), Some(0), "GNU reference status={status}");
 
     let _ = fs::remove_dir_all(dir);
 }
