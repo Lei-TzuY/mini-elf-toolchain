@@ -92,6 +92,7 @@ const DT_SONAME: i64 = 14;
 const DT_SYMBOLIC: i64 = 16;
 const DT_RELA: i64 = 7;
 const DT_PLTREL: i64 = 20;
+const DT_DEBUG: i64 = 21;
 const DT_JMPREL: i64 = 23;
 const DT_INIT_ARRAY: i64 = 25;
 const DT_FINI_ARRAY: i64 = 26;
@@ -101,6 +102,7 @@ const DT_RUNPATH: i64 = 29;
 const DT_PREINIT_ARRAY: i64 = 32;
 const DT_PREINIT_ARRAYSZ: i64 = 33;
 const DT_FLAGS: i64 = 30;
+const DT_FLAGS_1: i64 = 0x6fff_fffb;
 const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
 const DT_VERSYM: i64 = 0x6fff_fff0;
@@ -122,6 +124,7 @@ const ELF64_VERNAUX_SIZE: usize = 16;
 const DF_SYMBOLIC: u64 = 0x2;
 const DF_BIND_NOW: u64 = 0x8;
 const DF_STATIC_TLS: u64 = 0x10;
+const DF_1_PIE: u64 = 0x0800_0000;
 
 #[derive(Debug)]
 pub enum SharedObjectError {
@@ -2182,6 +2185,7 @@ fn link_loader_image(
                 | if bind_now { DF_BIND_NOW } else { 0 },
         },
         lifecycle,
+        dynamic_pie,
     )?;
     let dynamic_address = metadata_address
         .checked_add(metadata.dynamic_offset)
@@ -4495,6 +4499,7 @@ fn build_dynamic_metadata(
     names: DynamicNames<'_>,
     relocations: DynamicRelocations<'_>,
     lifecycle: DynamicLifecycle,
+    dynamic_executable: bool,
 ) -> Result<DynamicMetadata, SharedObjectError> {
     let rela_bytes = relocations.rela;
     let relative_relocation_count = relocations.relative_count;
@@ -4652,6 +4657,7 @@ fn build_dynamic_metadata(
         })
         .and_then(|count| count.checked_add(usize::from(symbolic)))
         .and_then(|count| count.checked_add(usize::from(dynamic_flags != 0)))
+        .and_then(|count| count.checked_add(2 * usize::from(dynamic_executable)))
         .and_then(|count| count.checked_add(usize::from(lifecycle.init_hook.is_some())))
         .and_then(|count| count.checked_add(usize::from(lifecycle.fini_hook.is_some())))
         .and_then(|count| count.checked_add(2 * usize::from(lifecycle.preinit.is_some())))
@@ -4776,6 +4782,13 @@ fn build_dynamic_metadata(
     }
     if dynamic_flags != 0 {
         entries.push((DT_FLAGS, dynamic_flags));
+    }
+    if dynamic_executable {
+        // GNU-compatible dynamic executables advertise their main-program
+        // identity through DF_1_PIE and reserve DT_DEBUG for the runtime
+        // loader to populate with the r_debug rendezvous pointer.
+        entries.push((DT_DEBUG, 0));
+        entries.push((DT_FLAGS_1, DF_1_PIE));
     }
     if has_plt_relocations {
         let jmprel_address = checked_metadata_address(base_address, jmprel_offset)?;
