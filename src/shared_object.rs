@@ -2305,25 +2305,27 @@ fn link_loader_image(
     };
     let mut relro = Vec::new();
     if bind_now {
-        // Full shared-object RELRO keeps every loader-mutated table page
-        // independently sealable. The dynamic loader resolves GLOB_DAT/TLS
-        // state and every JUMP_SLOT first because DF_BIND_NOW is present, then
-        // seals the isolated GOT, GOTPLT, and loader-metadata pages.
-        if let Some(region) = got_relro {
-            relro.push(RuntimeRelroProgramHeader {
-                address: region.address,
-                size: region.size,
-            });
-        }
-        if let Some(region) = plt_got_relro {
-            relro.push(RuntimeRelroProgramHeader {
-                address: region.address,
-                size: region.size,
-            });
-        }
+        let protected_start = match (plt_got_relro, got_relro) {
+            (Some(plt_got), Some(got)) => plt_got.address.min(got.address),
+            (Some(plt_got), None) => plt_got.address,
+            (None, Some(got)) => got.address,
+            (None, None) => metadata_address,
+        };
+        let metadata_end = metadata_address
+            .checked_add(metadata_size)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+        let protected_size = metadata_end
+            .checked_sub(protected_start)
+            .ok_or(SharedObjectError::AddressOverflow)?;
+
+        // GNU/Linux exposes one effective RELRO interval per loaded object.
+        // Bind-now therefore places the page-isolated GOTPLT/GOT after TLS and
+        // immediately before the padded loader metadata, so one contiguous
+        // PT_GNU_RELRO covers every table the loader finishes mutating before
+        // control reaches user code.
         relro.push(RuntimeRelroProgramHeader {
-            address: metadata_address,
-            size: metadata_size,
+            address: protected_start,
+            size: protected_size,
         });
     } else if let Some(address) = coalesced_relro_start {
         let metadata_end = metadata_address
