@@ -230,7 +230,7 @@ main:
     );
     let image = link_mini(&dir, &object, &interpreter, &libc);
 
-    let relocations = readelf(&image, &["-rW"]);
+    let relocations = readelf(&image, &["-rW", "--use-dynamic"]);
     assert!(
         relocations.contains("JUMP_SLOT") && relocations.contains("__libc_start_main"),
         "{relocations}"
