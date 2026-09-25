@@ -5,9 +5,11 @@ const ELF64_PHDR_SIZE: usize = 56;
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
 const PT_INTERP: u32 = 3;
+const PT_NOTE: u32 = 4;
 const PT_PHDR: u32 = 6;
 const PT_GNU_STACK: u32 = 0x6474_e551;
 const PT_GNU_RELRO: u32 = 0x6474_e552;
+const PT_GNU_PROPERTY: u32 = 0x6474_e553;
 const PF_X: u32 = 1;
 const PF_W: u32 = 2;
 const PF_R: u32 = 4;
@@ -35,24 +37,30 @@ pub(crate) struct RuntimeRelroProgramHeader {
     pub size: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RuntimeGnuPropertyProgramHeader {
+    pub address: u64,
+    pub size: u64,
+}
+
 pub(crate) fn map_runtime_program_headers(
     image: ExecutableImage,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, None, None, None, &[])
+    map_runtime_program_headers_impl(image, None, None, None, &[], None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_stack(
     image: ExecutableImage,
     stack: RuntimeStackProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, None, None, Some(stack), &[])
+    map_runtime_program_headers_impl(image, None, None, Some(stack), &[], None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic(
     image: ExecutableImage,
     dynamic: RuntimeDynamicProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, None, &[])
+    map_runtime_program_headers_impl(image, Some(dynamic), None, None, &[], None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_and_stack(
@@ -60,7 +68,7 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_stack(
     dynamic: RuntimeDynamicProgramHeader,
     stack: RuntimeStackProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, Some(stack), &[])
+    map_runtime_program_headers_impl(image, Some(dynamic), None, Some(stack), &[], None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_and_relros(
@@ -68,7 +76,7 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_relros(
     dynamic: RuntimeDynamicProgramHeader,
     relro: &[RuntimeRelroProgramHeader],
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, None, relro)
+    map_runtime_program_headers_impl(image, Some(dynamic), None, None, relro, None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_stack_and_relros(
@@ -77,7 +85,7 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_stack_and_relros(
     stack: RuntimeStackProgramHeader,
     relro: &[RuntimeRelroProgramHeader],
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, Some(stack), relro)
+    map_runtime_program_headers_impl(image, Some(dynamic), None, Some(stack), relro, None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_and_interp(
@@ -85,7 +93,7 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_interp(
     dynamic: RuntimeDynamicProgramHeader,
     interp: RuntimeInterpProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), Some(interp), None, &[])
+    map_runtime_program_headers_impl(image, Some(dynamic), Some(interp), None, &[], None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_interp_and_relros(
@@ -94,7 +102,31 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_interp_and_relros(
     interp: RuntimeInterpProgramHeader,
     relro: &[RuntimeRelroProgramHeader],
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), Some(interp), None, relro)
+    map_runtime_program_headers_impl(image, Some(dynamic), Some(interp), None, relro, None)
+}
+
+pub(crate) fn map_runtime_program_headers_with_dynamic_and_gnu_property(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+    property: RuntimeGnuPropertyProgramHeader,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(image, Some(dynamic), None, None, &[], Some(property))
+}
+
+pub(crate) fn map_runtime_program_headers_with_dynamic_relros_and_gnu_property(
+    image: ExecutableImage,
+    dynamic: RuntimeDynamicProgramHeader,
+    relro: &[RuntimeRelroProgramHeader],
+    property: RuntimeGnuPropertyProgramHeader,
+) -> Result<ExecutableImage, ExecutableWriteError> {
+    map_runtime_program_headers_impl(
+        image,
+        Some(dynamic),
+        None,
+        None,
+        relro,
+        Some(property),
+    )
 }
 
 fn map_runtime_program_headers_impl(
@@ -103,6 +135,7 @@ fn map_runtime_program_headers_impl(
     interp: Option<RuntimeInterpProgramHeader>,
     stack: Option<RuntimeStackProgramHeader>,
     relro: &[RuntimeRelroProgramHeader],
+    property: Option<RuntimeGnuPropertyProgramHeader>,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
     if image.load_segments.is_empty() {
         return Err(ExecutableWriteError::NoLoadSegments);
@@ -141,6 +174,7 @@ fn map_runtime_program_headers_impl(
         .checked_add(usize::from(interp.is_some()))
         .and_then(|count| count.checked_add(usize::from(dynamic.is_some())))
         .and_then(|count| count.checked_add(relro.len()))
+        .and_then(|count| count.checked_add(usize::from(property.is_some()) * 2))
         .and_then(|count| count.checked_add(usize::from(stack.is_some())))
         .ok_or(ExecutableWriteError::TooManyLoadSegments { count: usize::MAX })?;
     if old_phnum > u16::MAX as usize - extra_headers {
@@ -329,6 +363,40 @@ fn map_runtime_program_headers_impl(
         })
         .collect::<Result<Vec<_>, ExecutableWriteError>>()?;
 
+    let property_file_offset = if let Some(property) = property {
+        let property_end = property.address.checked_add(property.size).ok_or(
+            ExecutableWriteError::MetadataRangeOutsideLoadSegments {
+                address: property.address,
+                size: property.size,
+            },
+        )?;
+        let segment = new_segments
+            .iter()
+            .find(|segment| {
+                segment
+                    .virtual_address
+                    .checked_add(segment.file_size)
+                    .is_some_and(|file_end| {
+                        property.address >= segment.virtual_address && property_end <= file_end
+                    })
+            })
+            .ok_or(ExecutableWriteError::MetadataRangeOutsideLoadSegments {
+                address: property.address,
+                size: property.size,
+            })?;
+        Some(
+            segment
+                .file_offset
+                .checked_add(property.address - segment.virtual_address)
+                .ok_or(ExecutableWriteError::FileOffsetOverflow {
+                    metadata_end: segment.file_offset,
+                    alignment: 1,
+                })?,
+        )
+    } else {
+        None
+    };
+
     let mut table = vec![0_u8; new_table_size];
     write_phdr_program_header(
         &mut table[..ELF64_PHDR_SIZE],
@@ -369,6 +437,23 @@ fn map_runtime_program_headers_impl(
         write_gnu_relro_program_header(
             &mut table[start..start + ELF64_PHDR_SIZE],
             relro,
+            file_offset,
+        );
+        next_extra_index += 1;
+    }
+    if let (Some(property), Some(file_offset)) = (property, property_file_offset) {
+        let note_start = next_extra_index * ELF64_PHDR_SIZE;
+        write_note_program_header(
+            &mut table[note_start..note_start + ELF64_PHDR_SIZE],
+            property,
+            file_offset,
+        );
+        next_extra_index += 1;
+
+        let property_start = next_extra_index * ELF64_PHDR_SIZE;
+        write_gnu_property_program_header(
+            &mut table[property_start..property_start + ELF64_PHDR_SIZE],
+            property,
             file_offset,
         );
         next_extra_index += 1;
@@ -445,6 +530,36 @@ fn write_gnu_relro_program_header(
     put_u64(out, 32, relro.size);
     put_u64(out, 40, relro.size);
     put_u64(out, 48, 1);
+}
+
+fn write_note_program_header(
+    out: &mut [u8],
+    property: RuntimeGnuPropertyProgramHeader,
+    file_offset: u64,
+) {
+    put_u32(out, 0, PT_NOTE);
+    put_u32(out, 4, PF_R);
+    put_u64(out, 8, file_offset);
+    put_u64(out, 16, property.address);
+    put_u64(out, 24, property.address);
+    put_u64(out, 32, property.size);
+    put_u64(out, 40, property.size);
+    put_u64(out, 48, 8);
+}
+
+fn write_gnu_property_program_header(
+    out: &mut [u8],
+    property: RuntimeGnuPropertyProgramHeader,
+    file_offset: u64,
+) {
+    put_u32(out, 0, PT_GNU_PROPERTY);
+    put_u32(out, 4, PF_R);
+    put_u64(out, 8, file_offset);
+    put_u64(out, 16, property.address);
+    put_u64(out, 24, property.address);
+    put_u64(out, 32, property.size);
+    put_u64(out, 40, property.size);
+    put_u64(out, 48, 8);
 }
 
 fn write_gnu_stack_program_header(out: &mut [u8], stack: RuntimeStackProgramHeader) {
