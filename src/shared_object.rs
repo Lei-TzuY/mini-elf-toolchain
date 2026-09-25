@@ -16,8 +16,9 @@ use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
 use crate::permission_layout::SHF_TLS;
 use crate::pie_runtime::{build_relative_relocation_table, PieRuntimeError};
 use crate::program_headers::{
-    map_runtime_program_headers_with_dynamic, map_runtime_program_headers_with_dynamic_and_interp,
+    map_runtime_program_headers_with_dynamic,
     map_runtime_program_headers_with_dynamic_and_gnu_property,
+    map_runtime_program_headers_with_dynamic_and_interp,
     map_runtime_program_headers_with_dynamic_and_relros,
     map_runtime_program_headers_with_dynamic_interp_and_relros,
     map_runtime_program_headers_with_dynamic_relros_and_gnu_property, RuntimeDynamicProgramHeader,
@@ -2316,10 +2317,7 @@ fn link_loader_image(
                 .map_err(SharedObjectError::Write)
         } else {
             map_runtime_program_headers_with_dynamic_relros_and_gnu_property(
-                image,
-                dynamic,
-                &relro,
-                property,
+                image, dynamic, &relro, property,
             )
             .map_err(SharedObjectError::Write)
         };
