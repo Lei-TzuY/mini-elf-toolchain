@@ -24,7 +24,8 @@ use mini_elf_toolchain::shared_object::{
     SharedObjectLinkOptions, SharedVersionRequirement,
 };
 use mini_elf_toolchain::static_link::{
-    link_static_executable_with_map, link_static_position_independent_executable_with_map,
+    link_static_executable_with_map, link_static_position_independent_executable_with_map_and_options,
+    StaticPieLinkOptions,
 };
 use mini_elf_toolchain::version_script::VersionScript;
 use std::env;
@@ -202,9 +203,9 @@ where
         }
         let (pack_relative_relocs, raw_remaining) =
             extract_pack_relative_relocs_argument(&raw_remaining)?;
-        if pack_relative_relocs && !(shared_object || dynamic_pie) {
+        if pack_relative_relocs && !(position_independent || shared_object || dynamic_pie) {
             return Err(CliError::Usage(
-                "-z pack-relative-relocs is only supported with --shared or --dynamic-pie"
+                "-z pack-relative-relocs is only supported with --pie, --shared or --dynamic-pie"
                     .to_owned(),
             ));
         }
@@ -1669,10 +1670,13 @@ fn link_files(
 
     let entry_symbol = options.entry_symbol.to_string_lossy();
     let linked = if options.position_independent {
-        link_static_position_independent_executable_with_map(
+        link_static_position_independent_executable_with_map_and_options(
             &prepared.objects,
             DEFAULT_PAGE_ALIGNMENT,
             entry_symbol.as_bytes(),
+            StaticPieLinkOptions {
+                pack_relative_relocs: options.pack_relative_relocs,
+            },
         )
     } else {
         link_static_executable_with_map(
