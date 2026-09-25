@@ -4017,8 +4017,8 @@ fn dynamic_pie_lifecycle_layout_tail_order(
                 if section.section_type != section_type || section.size == 0 {
                     continue;
                 }
-                let section_index =
-                    u16::try_from(section_index).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+                let section_index = u16::try_from(section_index)
+                    .map_err(|_| SharedObjectError::MetadataTooLarge)?;
                 let name = section_name(input, section_index).map_err(|source| {
                     SharedObjectError::DynamicLifecycleSectionName {
                         object_index: input.object_index,
@@ -4039,10 +4039,7 @@ fn dynamic_pie_lifecycle_layout_tail_order(
     Ok(order)
 }
 
-fn dynamic_lifecycle_priority(
-    name: Option<&[u8]>,
-    prefix: &[u8],
-) -> DynamicLifecyclePriority {
+fn dynamic_lifecycle_priority(name: Option<&[u8]>, prefix: &[u8]) -> DynamicLifecyclePriority {
     let Some(name) = name else {
         return DynamicLifecyclePriority::Base;
     };
