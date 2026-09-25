@@ -238,10 +238,7 @@ fn static_pie_pack_relative_relocs_decodes_relr_then_runs_irelative() {
         gnu_relocations.contains("'RELR' relocation section"),
         "{gnu_relocations}"
     );
-    assert!(
-        gnu_relocations.contains("3 offsets"),
-        "{gnu_relocations}"
-    );
+    assert!(gnu_relocations.contains("3 offsets"), "{gnu_relocations}");
     assert!(
         gnu_relocations.contains("R_X86_64_IRELATIVE"),
         "{gnu_relocations}"
