@@ -1535,6 +1535,8 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
             checked_version_providers,
             version_script: None,
             symbolic: false,
+            init_symbol: None,
+            fini_symbol: None,
         },
     )
 }
@@ -1548,6 +1550,8 @@ pub struct SharedObjectLinkOptions<'a> {
     pub checked_version_providers: &'a [Vec<u8>],
     pub version_script: Option<&'a VersionScript>,
     pub symbolic: bool,
+    pub init_symbol: Option<&'a [u8]>,
+    pub fini_symbol: Option<&'a [u8]>,
 }
 
 pub fn link_shared_object_with_version_script_and_checked_providers(
@@ -1562,8 +1566,8 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
             shared: options,
             entry_symbol: None,
             interpreter: None,
-            init_symbol: None,
-            fini_symbol: None,
+            init_symbol: options.init_symbol,
+            fini_symbol: options.fini_symbol,
             copy_relocations: None,
         },
     )
@@ -1599,6 +1603,8 @@ pub fn link_dynamic_pie_with_checked_providers(
                 checked_version_providers: options.checked_version_providers,
                 version_script: None,
                 symbolic: false,
+                init_symbol: None,
+                fini_symbol: None,
             },
             entry_symbol: Some(options.entry_symbol),
             interpreter: Some(options.interpreter),
@@ -1640,6 +1646,8 @@ fn link_loader_image(
         checked_version_providers,
         version_script,
         symbolic,
+        init_symbol: _,
+        fini_symbol: _,
     } = shared;
     validate_needed_names(needed)?;
     validate_needed_names(checked_version_providers)?;
@@ -1816,24 +1824,24 @@ fn link_loader_image(
         tls_layout,
         &layout,
     )?;
+    let init_hook = resolve_dynamic_lifecycle_hook(
+        "DT_INIT",
+        init_symbol,
+        &resolved.definitions,
+        &relocated,
+        &layout,
+    )?;
+    let fini_hook = resolve_dynamic_lifecycle_hook(
+        "DT_FINI",
+        fini_symbol,
+        &resolved.definitions,
+        &relocated,
+        &layout,
+    )?;
     let lifecycle = if dynamic_pie {
-        let init_hook = resolve_dynamic_lifecycle_hook(
-            "DT_INIT",
-            init_symbol,
-            &resolved.definitions,
-            &relocated,
-            &layout,
-        )?;
-        let fini_hook = resolve_dynamic_lifecycle_hook(
-            "DT_FINI",
-            fini_symbol,
-            &resolved.definitions,
-            &relocated,
-            &layout,
-        )?;
         collect_dynamic_pie_lifecycle(inputs, &relocated, init_hook, fini_hook)?
     } else {
-        collect_shared_object_lifecycle(inputs, &relocated)?
+        collect_shared_object_lifecycle(inputs, &relocated, init_hook, fini_hook)?
     };
 
     let mut matched_script_symbols = BTreeSet::new();
@@ -4132,6 +4140,8 @@ fn compare_lifecycle_priority(left: &LifecyclePriority, right: &LifecyclePriorit
 fn collect_shared_object_lifecycle(
     inputs: &[LinkerInputObject<'_>],
     relocated: &[RelocatedSectionImage],
+    init_hook: Option<u64>,
+    fini_hook: Option<u64>,
 ) -> Result<DynamicLifecycle, SharedObjectError> {
     let init = collect_lifecycle_kind(inputs, relocated, SHT_INIT_ARRAY)?;
     let fini = collect_lifecycle_kind(inputs, relocated, SHT_FINI_ARRAY)?;
@@ -4139,8 +4149,8 @@ fn collect_shared_object_lifecycle(
         preinit: None,
         init,
         fini,
-        init_hook: None,
-        fini_hook: None,
+        init_hook,
+        fini_hook,
     })
 }
 
