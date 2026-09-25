@@ -45,7 +45,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--dynamic-pie|--shared] [-Bsymbolic] [-z ibtplt|-z ibt|-z now] [--dynamic-linker <path>|--dynamic-linker=<path>] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [-init <symbol>|-init=<symbol>] [-fini <symbol>|-fini=<symbol>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--dynamic-pie|--shared] [-Bsymbolic] [-z ibtplt|-z ibt|-z now|-z pack-relative-relocs] [--dynamic-linker <path>|--dynamic-linker=<path>] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [-init <symbol>|-init=<symbol>] [-fini <symbol>|-fini=<symbol>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -198,6 +198,13 @@ where
         if bind_now && !(shared_object || dynamic_pie) {
             return Err(CliError::Usage(
                 "-z now is only supported with --shared or --dynamic-pie".to_owned(),
+            ));
+        }
+        let (pack_relative_relocs, raw_remaining) =
+            extract_pack_relative_relocs_argument(&raw_remaining)?;
+        if pack_relative_relocs && !dynamic_pie {
+            return Err(CliError::Usage(
+                "-z pack-relative-relocs is only supported with --dynamic-pie".to_owned(),
             ));
         }
         let soname = extract_soname_argument(&raw_remaining)?;
@@ -377,6 +384,7 @@ where
             ibt_plt,
             ibt,
             bind_now,
+            pack_relative_relocs,
             soname: soname.soname.as_deref(),
             runpath: runpath.runpath.as_deref(),
             needed: &needed.specs,
@@ -714,6 +722,35 @@ fn extract_bind_now_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsStri
     }
 
     Ok((bind_now, remaining))
+}
+
+fn extract_pack_relative_relocs_argument(
+    arguments: &[OsString],
+) -> Result<(bool, Vec<OsString>), CliError> {
+    let mut pack_relative_relocs = false;
+    let mut remaining = Vec::with_capacity(arguments.len());
+    let mut index = 0usize;
+
+    while index < arguments.len() {
+        if arguments[index] == "-z"
+            && arguments
+                .get(index + 1)
+                .is_some_and(|keyword| keyword == "pack-relative-relocs")
+        {
+            if pack_relative_relocs {
+                return Err(CliError::Usage(
+                    "duplicate -z pack-relative-relocs option".to_owned(),
+                ));
+            }
+            pack_relative_relocs = true;
+            index += 2;
+            continue;
+        }
+        remaining.push(arguments[index].clone());
+        index += 1;
+    }
+
+    Ok((pack_relative_relocs, remaining))
 }
 
 struct SonameArguments {
@@ -1188,6 +1225,7 @@ struct LinkFilesOptions<'a> {
     ibt_plt: bool,
     ibt: bool,
     bind_now: bool,
+    pack_relative_relocs: bool,
     soname: Option<&'a [u8]>,
     runpath: Option<&'a [u8]>,
     needed: &'a [NeededSpec],
@@ -1584,6 +1622,7 @@ fn link_files(
                     ibt_plt: options.ibt_plt,
                     gnu_property_ibt: options.ibt,
                     bind_now: options.bind_now,
+                    pack_relative_relocs: options.pack_relative_relocs,
                     copy_relocations: &needed.copy_relocations,
                 },
             )
