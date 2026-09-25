@@ -102,6 +102,18 @@ pub fn layout_sections_by_permissions<I>(
 where
     I: IntoIterator<Item = PermissionLayoutInput>,
 {
+    layout_sections_by_permissions_with_tail(start_address, page_alignment, sections, &[])
+}
+
+pub(crate) fn layout_sections_by_permissions_with_tail<I>(
+    start_address: u64,
+    page_alignment: u64,
+    sections: I,
+    post_tls_tail: &[(usize, u16)],
+) -> Result<Vec<LaidOutSection>, PermissionLayoutError>
+where
+    I: IntoIterator<Item = PermissionLayoutInput>,
+{
     if page_alignment == 0 || !page_alignment.is_power_of_two() {
         return Err(PermissionLayoutError::InvalidPageAlignment {
             alignment: page_alignment,
@@ -110,19 +122,30 @@ where
 
     let mut regular = Vec::new();
     let mut tls = Vec::new();
+    let mut tail = Vec::new();
     for section in sections {
-        if section.flags & SHF_TLS == 0 {
+        if let Some(rank) = post_tls_tail
+            .iter()
+            .position(|identity| *identity == (section.object_index, section.section_index))
+        {
+            tail.push((rank, section));
+        } else if section.flags & SHF_TLS == 0 {
             regular.push(section);
         } else {
             tls.push(section);
         }
     }
+    tail.sort_by_key(|(rank, _)| *rank);
 
     let mut cursor = start_address;
     let mut previous_permissions = None;
     let mut laid_out = Vec::new();
 
-    for section in regular.into_iter().chain(tls) {
+    for section in regular
+        .into_iter()
+        .chain(tls)
+        .chain(tail.into_iter().map(|(_, section)| section))
+    {
         if section.alignment != 0 && !section.alignment.is_power_of_two() {
             return Err(PermissionLayoutError::InvalidSectionAlignment {
                 object_index: section.object_index,

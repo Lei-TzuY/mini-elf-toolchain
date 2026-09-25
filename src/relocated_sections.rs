@@ -13,7 +13,7 @@ use crate::linker_input::{LinkerInputError, LinkerInputObject, LinkerInputSectio
 use crate::load_segments::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE};
 use crate::object_symbols::named_symbols_from_table;
 use crate::permission_layout::{
-    layout_sections_by_permissions, PermissionLayoutError, PermissionLayoutInput,
+    layout_sections_by_permissions_with_tail, PermissionLayoutError, PermissionLayoutInput,
 };
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, SHN_UNDEF, STB_GLOBAL, STB_WEAK};
@@ -41,6 +41,10 @@ const PLT_GOT_RESERVED_SIZE: u64 = 24;
 const PLT_GOT_ENTRY_SIZE: u64 = 8;
 const PLT_GOT_ALIGNMENT: u64 = 8;
 const STT_TLS: u8 = 6;
+const BIND_NOW_POST_TLS_ORDER: [(usize, u16); 2] = [
+    (PLT_GOT_OBJECT_INDEX, PLT_GOT_SECTION_INDEX),
+    (GOT_OBJECT_INDEX, GOT_SECTION_INDEX),
+];
 
 #[derive(Debug, Clone, Copy)]
 pub struct TlsSyntheticRequests<'a> {
@@ -48,6 +52,12 @@ pub struct TlsSyntheticRequests<'a> {
     pub tls_ld_enabled: bool,
     pub tls_desc_symbols: &'a BTreeSet<Vec<u8>>,
     pub external_tls_got_symbols: &'a BTreeSet<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BindNowRelocationLayout<'a> {
+    pub tail_order: &'a [(usize, u16)],
+    pub ibt_plt: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -73,14 +83,18 @@ impl SyntheticGotLayoutPolicy {
 #[derive(Debug, Clone, Copy)]
 struct RelocationLayoutPolicy<'a> {
     got: SyntheticGotLayoutPolicy,
+    plt_got_page_alignment: Option<u64>,
     tail_order: &'a [(usize, u16)],
+    post_tls_tail: &'a [(usize, u16)],
     ibt_plt: bool,
 }
 
 impl RelocationLayoutPolicy<'_> {
     const INLINE: Self = Self {
         got: SyntheticGotLayoutPolicy::INLINE,
+        plt_got_page_alignment: None,
         tail_order: &[],
+        post_tls_tail: &[],
         ibt_plt: false,
     };
 }
@@ -129,6 +143,7 @@ pub struct RelocatedSectionsOutput {
     pub plt_got_entries: BTreeMap<Vec<u8>, u64>,
     pub plt_got_base: Option<u64>,
     pub(crate) got_region: Option<SyntheticGotRegion>,
+    pub(crate) plt_got_region: Option<SyntheticGotRegion>,
 }
 
 #[derive(Debug)]
@@ -392,6 +407,8 @@ pub(crate) fn relocate_allocatable_sections_with_metadata_isolated_got(
         },
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::isolated(page_alignment, false),
+            plt_got_page_alignment: None,
+            post_tls_tail: &[],
             tail_order: &[],
             ibt_plt: false,
         },
@@ -510,6 +527,8 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         tls,
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::INLINE,
+            plt_got_page_alignment: None,
+            post_tls_tail: &[],
             tail_order: layout_tail_order,
             ibt_plt: false,
         },
@@ -534,6 +553,8 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         tls,
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::INLINE,
+            plt_got_page_alignment: None,
+            post_tls_tail: &[],
             tail_order: layout_tail_order,
             ibt_plt: true,
         },
@@ -558,8 +579,36 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         tls,
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::isolated(page_alignment, true),
+            plt_got_page_alignment: None,
+            post_tls_tail: &[],
             tail_order: layout_tail_order,
             ibt_plt: false,
+        },
+    )
+}
+
+pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_bind_now(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    external_got_symbols: &BTreeSet<Vec<u8>>,
+    external_plt_symbols: &BTreeSet<Vec<u8>>,
+    tls: TlsSyntheticRequests<'_>,
+    layout: BindNowRelocationLayout<'_>,
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
+        inputs,
+        start_address,
+        page_alignment,
+        external_got_symbols,
+        external_plt_symbols,
+        tls,
+        RelocationLayoutPolicy {
+            got: SyntheticGotLayoutPolicy::isolated(page_alignment, true),
+            plt_got_page_alignment: Some(page_alignment),
+            tail_order: layout.tail_order,
+            post_tls_tail: &BIND_NOW_POST_TLS_ORDER,
+            ibt_plt: layout.ibt_plt,
         },
     )
 }
@@ -607,7 +656,9 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
     layout_policy: RelocationLayoutPolicy<'_>,
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     let got_layout_policy = layout_policy.got;
+    let plt_got_page_alignment = layout_policy.plt_got_page_alignment;
     let layout_tail_order = layout_policy.tail_order;
+    let post_tls_tail = layout_policy.post_tls_tail;
     let ibt_plt = layout_policy.ibt_plt;
     let tls_gd_symbols = tls.tls_gd_symbols;
     let tls_ld_enabled = tls.tls_ld_enabled;
@@ -744,6 +795,28 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         PLT_GOT_ENTRY_SIZE,
         PLT_GOT_RESERVED_SIZE,
     )?;
+    let (plt_got_layout_size, plt_got_layout_alignment) =
+        if let (nonzero_size, Some(alignment)) = (plt_got_size, plt_got_page_alignment) {
+            if nonzero_size == 0 {
+                (plt_got_size, PLT_GOT_ALIGNMENT)
+            } else {
+                if alignment == 0 || !alignment.is_power_of_two() {
+                    return Err(RelocatedSectionError::Layout(
+                        PermissionLayoutError::InvalidPageAlignment { alignment },
+                    ));
+                }
+                let mask = alignment - 1;
+                let size = plt_got_size
+                    .checked_add(mask)
+                    .map(|sum| sum & !mask)
+                    .ok_or(RelocatedSectionError::PltSizeOverflow {
+                        symbol_count: external_plt_symbols.len(),
+                    })?;
+                (size, alignment)
+            }
+        } else {
+            (plt_got_size, PLT_GOT_ALIGNMENT)
+        };
 
     let mut layout_inputs = sections
         .iter()
@@ -778,8 +851,8 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         layout_inputs.push(PermissionLayoutInput {
             object_index: PLT_GOT_OBJECT_INDEX,
             section_index: PLT_GOT_SECTION_INDEX,
-            size: plt_got_size,
-            alignment: PLT_GOT_ALIGNMENT,
+            size: plt_got_layout_size,
+            alignment: plt_got_layout_alignment,
             flags: SHF_ALLOC | SHF_WRITE,
         });
     }
@@ -793,8 +866,13 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         });
     }
 
-    let layout = layout_sections_by_permissions(start_address, page_alignment, layout_inputs)
-        .map_err(RelocatedSectionError::Layout)?;
+    let layout = layout_sections_by_permissions_with_tail(
+        start_address,
+        page_alignment,
+        layout_inputs,
+        post_tls_tail,
+    )
+    .map_err(RelocatedSectionError::Layout)?;
     let got_region = if got_size != 0 && got_layout_policy.page_alignment.is_some() {
         let got_layout = matching_layout(&layout, GOT_OBJECT_INDEX, GOT_SECTION_INDEX).ok_or(
             RelocatedSectionError::MissingLayout {
@@ -805,6 +883,19 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         Some(SyntheticGotRegion {
             address: got_layout.address,
             size: got_layout.size,
+        })
+    } else {
+        None
+    };
+    let plt_got_region = if plt_got_size != 0 && plt_got_page_alignment.is_some() {
+        let plt_got_layout = matching_layout(&layout, PLT_GOT_OBJECT_INDEX, PLT_GOT_SECTION_INDEX)
+            .ok_or(RelocatedSectionError::MissingLayout {
+                object_index: PLT_GOT_OBJECT_INDEX,
+                section_index: PLT_GOT_SECTION_INDEX,
+            })?;
+        Some(SyntheticGotRegion {
+            address: plt_got_layout.address,
+            size: plt_got_layout.size,
         })
     } else {
         None
@@ -1140,6 +1231,12 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
 
         debug_assert_eq!(plt_bytes.len(), plt_size as usize);
         debug_assert_eq!(plt_got_bytes.len(), plt_got_size as usize);
+        let plt_got_capacity = usize::try_from(plt_got_layout_size).map_err(|_| {
+            RelocatedSectionError::PltSizeOverflow {
+                symbol_count: external_plt_symbols.len(),
+            }
+        })?;
+        plt_got_bytes.resize(plt_got_capacity, 0);
         relocated.push(RelocatedSectionImage {
             object_index: PLT_OBJECT_INDEX,
             section_index: PLT_SECTION_INDEX,
@@ -1156,8 +1253,8 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
             section_type: SHT_PROGBITS,
             flags: SHF_ALLOC | SHF_WRITE,
             address: plt_got_layout.address,
-            size: plt_got_size,
-            alignment: PLT_GOT_ALIGNMENT,
+            size: plt_got_layout_size,
+            alignment: plt_got_layout_alignment,
             bytes: plt_got_bytes,
         });
         Some(plt_got_layout.address)
@@ -1176,6 +1273,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         plt_got_entries: plt_got_entries_output,
         plt_got_base,
         got_region,
+        plt_got_region,
     })
 }
 
