@@ -30,7 +30,7 @@ use crate::relocated_sections::{
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got,
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order,
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order_and_ibt_plt,
-    RelocatedSectionError, RelocatedSectionImage, TlsSyntheticRequests,
+    BindNowRelocationLayout, RelocatedSectionError, RelocatedSectionImage, TlsSyntheticRequests,
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
 use crate::section_names::section_name;
@@ -1755,8 +1755,10 @@ fn link_loader_image(
             &imports.got_symbols,
             &imports.plt_symbols,
             tls_requests,
-            &lifecycle_layout_tail_order,
-            ibt_plt,
+            BindNowRelocationLayout {
+                tail_order: &lifecycle_layout_tail_order,
+                ibt_plt,
+            },
         )
     } else if dynamic_pie_got_relro {
         relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got(
