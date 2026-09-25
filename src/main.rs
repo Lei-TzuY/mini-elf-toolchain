@@ -45,7 +45,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--dynamic-pie|--shared] [-Bsymbolic] [--dynamic-linker <path>|--dynamic-linker=<path>] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--dynamic-pie|--shared] [-Bsymbolic] [--dynamic-linker <path>|--dynamic-linker=<path>] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [-init <symbol>|-init=<symbol>] [-fini <symbol>|-fini=<symbol>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -157,7 +157,8 @@ where
         let (dynamic_pie, raw_remaining) = extract_dynamic_pie_argument(&raw_remaining)?;
         let (shared_object, raw_remaining) = extract_shared_argument(&raw_remaining)?;
         let dynamic_linker = extract_dynamic_linker_argument(&raw_remaining)?;
-        let raw_remaining = dynamic_linker.arguments;
+        let lifecycle_hooks = extract_dynamic_lifecycle_hook_arguments(&dynamic_linker.arguments)?;
+        let raw_remaining = lifecycle_hooks.arguments;
         if dynamic_pie && dynamic_linker.path.is_none() {
             return Err(CliError::Usage(
                 "--dynamic-pie requires --dynamic-linker <absolute-path>".to_owned(),
@@ -166,6 +167,11 @@ where
         if !dynamic_pie && dynamic_linker.path.is_some() {
             return Err(CliError::Usage(
                 "--dynamic-linker is only supported with --dynamic-pie".to_owned(),
+            ));
+        }
+        if !dynamic_pie && (lifecycle_hooks.init.is_some() || lifecycle_hooks.fini.is_some()) {
+            return Err(CliError::Usage(
+                "-init/-fini are only supported with --dynamic-pie".to_owned(),
             ));
         }
         let (symbolic, raw_remaining) = extract_symbolic_argument(&raw_remaining)?;
@@ -344,6 +350,8 @@ where
             position_independent,
             dynamic_pie,
             dynamic_linker: dynamic_linker.path.as_deref(),
+            init_symbol: lifecycle_hooks.init.as_deref(),
+            fini_symbol: lifecycle_hooks.fini.as_deref(),
             shared_object,
             symbolic,
             soname: soname.soname.as_deref(),
@@ -487,6 +495,75 @@ fn extract_dynamic_linker_argument(
 
     Ok(DynamicLinkerArguments {
         path,
+        arguments: remaining,
+    })
+}
+
+struct DynamicLifecycleHookArguments {
+    init: Option<Vec<u8>>,
+    fini: Option<Vec<u8>>,
+    arguments: Vec<OsString>,
+}
+
+fn extract_dynamic_lifecycle_hook_arguments(
+    arguments: &[OsString],
+) -> Result<DynamicLifecycleHookArguments, CliError> {
+    let mut init = None;
+    let mut fini = None;
+    let mut remaining = Vec::with_capacity(arguments.len());
+    let mut index = 0usize;
+
+    while index < arguments.len() {
+        let argument = &arguments[index];
+        let (kind, value) = if argument == "-init" || argument == "-fini" {
+            let kind = if argument == "-init" { "init" } else { "fini" };
+            index += 1;
+            let value = arguments
+                .get(index)
+                .ok_or_else(|| CliError::Usage(format!("missing symbol after -{kind}")))?
+                .to_str()
+                .ok_or_else(|| {
+                    CliError::Usage(format!("symbol after -{kind} must be valid UTF-8"))
+                })?
+                .to_owned();
+            (Some(kind), Some(value))
+        } else if let Some(value) = argument
+            .to_str()
+            .and_then(|argument| argument.strip_prefix("-init="))
+        {
+            (Some("init"), Some(value.to_owned()))
+        } else if let Some(value) = argument
+            .to_str()
+            .and_then(|argument| argument.strip_prefix("-fini="))
+        {
+            (Some("fini"), Some(value.to_owned()))
+        } else {
+            (None, None)
+        };
+
+        if let (Some(kind), Some(value)) = (kind, value) {
+            let slot = if kind == "init" { &mut init } else { &mut fini };
+            if slot.is_some() {
+                return Err(CliError::Usage(format!("duplicate -{kind} option")));
+            }
+            if value.is_empty() {
+                return Err(CliError::Usage(format!("-{kind} symbol cannot be empty")));
+            }
+            if value.as_bytes().contains(&0) {
+                return Err(CliError::Usage(format!(
+                    "-{kind} symbol cannot contain NUL"
+                )));
+            }
+            *slot = Some(value.into_bytes());
+        } else {
+            remaining.push(argument.clone());
+        }
+        index += 1;
+    }
+
+    Ok(DynamicLifecycleHookArguments {
+        init,
+        fini,
         arguments: remaining,
     })
 }
@@ -1006,6 +1083,8 @@ struct LinkFilesOptions<'a> {
     position_independent: bool,
     dynamic_pie: bool,
     dynamic_linker: Option<&'a [u8]>,
+    init_symbol: Option<&'a [u8]>,
+    fini_symbol: Option<&'a [u8]>,
     shared_object: bool,
     symbolic: bool,
     soname: Option<&'a [u8]>,
@@ -1399,6 +1478,8 @@ fn link_files(
                     checked_version_providers: &needed.checked_version_providers,
                     entry_symbol: options.entry_symbol.to_string_lossy().as_bytes(),
                     interpreter,
+                    init_symbol: options.init_symbol,
+                    fini_symbol: options.fini_symbol,
                     copy_relocations: &needed.copy_relocations,
                 },
             )

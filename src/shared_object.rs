@@ -73,6 +73,8 @@ const DT_STRTAB: i64 = 5;
 const DT_SYMTAB: i64 = 6;
 const DT_STRSZ: i64 = 10;
 const DT_SYMENT: i64 = 11;
+const DT_INIT: i64 = 12;
+const DT_FINI: i64 = 13;
 const DT_SONAME: i64 = 14;
 const DT_SYMBOLIC: i64 = 16;
 const DT_RELA: i64 = 7;
@@ -373,6 +375,28 @@ pub enum SharedObjectError {
         section_type: u32,
         previous_end: u64,
         next_address: u64,
+    },
+    DynamicLifecycleHookMissing {
+        hook: &'static str,
+        name: Vec<u8>,
+    },
+    DynamicLifecycleHookType {
+        hook: &'static str,
+        name: Vec<u8>,
+        symbol_type: u8,
+    },
+    DynamicLifecycleHookNotImageBacked {
+        hook: &'static str,
+        name: Vec<u8>,
+        object_index: usize,
+        section_index: u16,
+    },
+    DynamicLifecycleHookNotExecutable {
+        hook: &'static str,
+        name: Vec<u8>,
+        object_index: usize,
+        section_index: u16,
+        flags: u64,
     },
     EmptyNeededName {
         dependency_index: usize,
@@ -843,6 +867,41 @@ impl fmt::Display for SharedObjectError {
                 f,
                 "dynamic PIE lifecycle section type {section_type} is split into non-contiguous output ranges ending at {previous_end:#x} and restarting at {next_address:#x}; bounded DT_*ARRAY emission requires one exact contiguous range"
             ),
+            Self::DynamicLifecycleHookMissing { hook, name } => write!(
+                f,
+                "dynamic PIE lifecycle hook {hook} symbol {:?} is not defined",
+                String::from_utf8_lossy(name)
+            ),
+            Self::DynamicLifecycleHookType {
+                hook,
+                name,
+                symbol_type,
+            } => write!(
+                f,
+                "dynamic PIE lifecycle hook {hook} symbol {:?} has ELF symbol type {symbol_type}; lifecycle hooks must be STT_FUNC",
+                String::from_utf8_lossy(name)
+            ),
+            Self::DynamicLifecycleHookNotImageBacked {
+                hook,
+                name,
+                object_index,
+                section_index,
+            } => write!(
+                f,
+                "dynamic PIE lifecycle hook {hook} symbol {:?} resolves to object {object_index} section {section_index}, which is not backed by a relocated image section",
+                String::from_utf8_lossy(name)
+            ),
+            Self::DynamicLifecycleHookNotExecutable {
+                hook,
+                name,
+                object_index,
+                section_index,
+                flags,
+            } => write!(
+                f,
+                "dynamic PIE lifecycle hook {hook} symbol {:?} resolves to object {object_index} section {section_index} with flags {flags:#x}; lifecycle hooks require an allocated executable section",
+                String::from_utf8_lossy(name)
+            ),
             Self::EmptyNeededName { dependency_index } => write!(
                 f,
                 "shared object DT_NEEDED dependency {dependency_index} has an empty name"
@@ -997,6 +1056,10 @@ impl std::error::Error for SharedObjectError {
             | Self::DynamicLifecycleSectionSize { .. }
             | Self::DynamicLifecycleMissingRelocatedSection { .. }
             | Self::DynamicLifecycleNonContiguous { .. }
+            | Self::DynamicLifecycleHookMissing { .. }
+            | Self::DynamicLifecycleHookType { .. }
+            | Self::DynamicLifecycleHookNotImageBacked { .. }
+            | Self::DynamicLifecycleHookNotExecutable { .. }
             | Self::EmptyNeededName { .. }
             | Self::NeededNameContainsNul { .. }
             | Self::EmptySoname
@@ -1290,6 +1353,8 @@ struct DynamicLifecycle {
     preinit: Option<DynamicLifecycleArray>,
     init: Option<DynamicLifecycleArray>,
     fini: Option<DynamicLifecycleArray>,
+    init_hook: Option<u64>,
+    fini_hook: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -1460,6 +1525,8 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
             shared: options,
             entry_symbol: None,
             interpreter: None,
+            init_symbol: None,
+            fini_symbol: None,
             copy_relocations: None,
         },
     )
@@ -1473,6 +1540,8 @@ pub struct DynamicPieLinkOptions<'a> {
     pub checked_version_providers: &'a [Vec<u8>],
     pub entry_symbol: &'a [u8],
     pub interpreter: &'a [u8],
+    pub init_symbol: Option<&'a [u8]>,
+    pub fini_symbol: Option<&'a [u8]>,
     pub copy_relocations: &'a [DynamicPieCopyRelocation],
 }
 
@@ -1496,6 +1565,8 @@ pub fn link_dynamic_pie_with_checked_providers(
             },
             entry_symbol: Some(options.entry_symbol),
             interpreter: Some(options.interpreter),
+            init_symbol: options.init_symbol,
+            fini_symbol: options.fini_symbol,
             copy_relocations: Some(options.copy_relocations),
         },
     )
@@ -1506,6 +1577,8 @@ struct LoaderImageLinkOptions<'a> {
     shared: SharedObjectLinkOptions<'a>,
     entry_symbol: Option<&'a [u8]>,
     interpreter: Option<&'a [u8]>,
+    init_symbol: Option<&'a [u8]>,
+    fini_symbol: Option<&'a [u8]>,
     copy_relocations: Option<&'a [DynamicPieCopyRelocation]>,
 }
 
@@ -1518,6 +1591,8 @@ fn link_loader_image(
         shared,
         entry_symbol,
         interpreter,
+        init_symbol,
+        fini_symbol,
         copy_relocations,
     } = options;
     let SharedObjectLinkOptions {
@@ -1690,7 +1765,21 @@ fn link_loader_image(
         &layout,
     )?;
     let lifecycle = if dynamic_pie {
-        collect_dynamic_pie_lifecycle(inputs, &relocated)?
+        let init_hook = resolve_dynamic_lifecycle_hook(
+            "DT_INIT",
+            init_symbol,
+            &resolved.definitions,
+            &relocated,
+            &layout,
+        )?;
+        let fini_hook = resolve_dynamic_lifecycle_hook(
+            "DT_FINI",
+            fini_symbol,
+            &resolved.definitions,
+            &relocated,
+            &layout,
+        )?;
+        collect_dynamic_pie_lifecycle(inputs, &relocated, init_hook, fini_hook)?
     } else {
         DynamicLifecycle::default()
     };
@@ -3877,6 +3966,8 @@ fn build_version_metadata(
 fn collect_dynamic_pie_lifecycle(
     inputs: &[LinkerInputObject<'_>],
     relocated: &[RelocatedSectionImage],
+    init_hook: Option<u64>,
+    fini_hook: Option<u64>,
 ) -> Result<DynamicLifecycle, SharedObjectError> {
     let preinit = collect_dynamic_pie_lifecycle_kind(inputs, relocated, SHT_PREINIT_ARRAY)?;
     let init = collect_dynamic_pie_lifecycle_kind(inputs, relocated, SHT_INIT_ARRAY)?;
@@ -3885,7 +3976,68 @@ fn collect_dynamic_pie_lifecycle(
         preinit,
         init,
         fini,
+        init_hook,
+        fini_hook,
     })
+}
+
+fn resolve_dynamic_lifecycle_hook(
+    hook: &'static str,
+    name: Option<&[u8]>,
+    definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
+    relocated: &[RelocatedSectionImage],
+    layout: &[LaidOutSection],
+) -> Result<Option<u64>, SharedObjectError> {
+    let Some(name) = name else {
+        return Ok(None);
+    };
+    let definition =
+        definitions
+            .get(name)
+            .ok_or_else(|| SharedObjectError::DynamicLifecycleHookMissing {
+                hook,
+                name: name.to_vec(),
+            })?;
+    let symbol_type = definition.symbol.info & 0x0f;
+    if symbol_type != STT_FUNC {
+        return Err(SharedObjectError::DynamicLifecycleHookType {
+            hook,
+            name: name.to_vec(),
+            symbol_type,
+        });
+    }
+    if definition.symbol.section_index == SHN_ABS {
+        return Err(SharedObjectError::DynamicLifecycleHookNotImageBacked {
+            hook,
+            name: name.to_vec(),
+            object_index: definition.object_index,
+            section_index: definition.symbol.section_index,
+        });
+    }
+    let section = relocated
+        .iter()
+        .find(|section| {
+            section.object_index == definition.object_index
+                && section.section_index == definition.symbol.section_index
+        })
+        .ok_or_else(|| SharedObjectError::DynamicLifecycleHookNotImageBacked {
+            hook,
+            name: name.to_vec(),
+            object_index: definition.object_index,
+            section_index: definition.symbol.section_index,
+        })?;
+    if section.flags & SHF_ALLOC == 0 || section.flags & SHF_EXECINSTR == 0 {
+        return Err(SharedObjectError::DynamicLifecycleHookNotExecutable {
+            hook,
+            name: name.to_vec(),
+            object_index: definition.object_index,
+            section_index: definition.symbol.section_index,
+            flags: section.flags,
+        });
+    }
+    let address =
+        final_symbol_address(definition, layout).map_err(SharedObjectError::SymbolAddress)?;
+    Ok(Some(address))
 }
 
 fn collect_dynamic_pie_lifecycle_kind(
@@ -4128,6 +4280,8 @@ fn build_dynamic_metadata(
         })
         .and_then(|count| count.checked_add(usize::from(symbolic)))
         .and_then(|count| count.checked_add(usize::from(dynamic_flags != 0)))
+        .and_then(|count| count.checked_add(usize::from(lifecycle.init_hook.is_some())))
+        .and_then(|count| count.checked_add(usize::from(lifecycle.fini_hook.is_some())))
         .and_then(|count| count.checked_add(2 * usize::from(lifecycle.preinit.is_some())))
         .and_then(|count| count.checked_add(2 * usize::from(lifecycle.init.is_some())))
         .and_then(|count| count.checked_add(2 * usize::from(lifecycle.fini.is_some())))
@@ -4263,6 +4417,12 @@ fn build_dynamic_metadata(
             (DT_PLTRELSZ, jmprel_size),
             (DT_PLTREL, DT_RELA as u64),
         ]);
+    }
+    if let Some(address) = lifecycle.init_hook {
+        entries.push((DT_INIT, address));
+    }
+    if let Some(address) = lifecycle.fini_hook {
+        entries.push((DT_FINI, address));
     }
     if let Some(array) = lifecycle.preinit {
         entries.extend_from_slice(&[
