@@ -329,3 +329,43 @@ fn dynamic_pie_default_policy_remains_rela_only() {
 
     let _ = fs::remove_dir_all(dir);
 }
+
+#[test]
+fn pack_relative_relocs_rejects_unsupported_modes_and_duplicates_before_io() {
+    let binary = env!("CARGO_BIN_EXE_mini-elf-toolchain");
+
+    for mode in [None, Some("--shared"), Some("--pie")] {
+        let output = PathBuf::from("/tmp/mini-elf-toolchain-relr-should-not-exist");
+        let mut command = Command::new(binary);
+        command.args(["link", "-o"]).arg(&output);
+        if let Some(mode) = mode {
+            command.arg(mode);
+        }
+        let result = command
+            .args(["-z", "pack-relative-relocs", "definitely-missing-input.o"])
+            .output()
+            .unwrap();
+        assert_eq!(result.status.code(), Some(2));
+        assert!(result.stdout.is_empty());
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(
+            stderr.contains("-z pack-relative-relocs is only supported with --dynamic-pie"),
+            "{stderr}"
+        );
+        assert!(!output.exists());
+    }
+
+    let duplicate = Command::new(binary)
+        .args(["link", "-o", "unused-output", "--dynamic-pie"])
+        .args(["--dynamic-linker", "/definitely/not/opened"])
+        .args(["-z", "pack-relative-relocs", "-z", "pack-relative-relocs"])
+        .arg("definitely-missing-input.o")
+        .output()
+        .unwrap();
+    assert_eq!(duplicate.status.code(), Some(2));
+    assert!(duplicate.stdout.is_empty());
+    assert!(
+        String::from_utf8_lossy(&duplicate.stderr)
+            .contains("duplicate -z pack-relative-relocs option")
+    );
+}
