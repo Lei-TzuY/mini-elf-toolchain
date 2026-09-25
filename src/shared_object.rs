@@ -1621,6 +1621,7 @@ pub fn link_dynamic_pie_with_checked_providers(
                 symbolic: false,
                 ibt_plt: false,
                 gnu_property_ibt: false,
+                bind_now: false,
                 init_symbol: None,
                 fini_symbol: None,
             },
