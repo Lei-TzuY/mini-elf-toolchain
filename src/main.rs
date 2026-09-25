@@ -202,9 +202,10 @@ where
         }
         let (pack_relative_relocs, raw_remaining) =
             extract_pack_relative_relocs_argument(&raw_remaining)?;
-        if pack_relative_relocs && !dynamic_pie {
+        if pack_relative_relocs && !(shared_object || dynamic_pie) {
             return Err(CliError::Usage(
-                "-z pack-relative-relocs is only supported with --dynamic-pie".to_owned(),
+                "-z pack-relative-relocs is only supported with --shared or --dynamic-pie"
+                    .to_owned(),
             ));
         }
         let soname = extract_soname_argument(&raw_remaining)?;
@@ -1641,6 +1642,7 @@ fn link_files(
                     ibt_plt: options.ibt_plt,
                     gnu_property_ibt: options.ibt,
                     bind_now: options.bind_now,
+                    pack_relative_relocs: options.pack_relative_relocs,
                     init_symbol: options.init_symbol,
                     fini_symbol: options.fini_symbol,
                 },
