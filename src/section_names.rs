@@ -176,3 +176,76 @@ pub(crate) fn section_name<'file>(
     )?;
     Ok(Some(&tail[..end]))
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::elf64::{Elf64Header, Elf64SectionHeader};
+    use crate::input_object::RelocatableObject;
+
+    fn section(name_offset: u32, section_type: u32, offset: u64, size: u64) -> Elf64SectionHeader {
+        Elf64SectionHeader {
+            name_offset,
+            section_type,
+            flags: 0,
+            address: 0,
+            offset,
+            size,
+            link: 0,
+            info: 0,
+            address_alignment: 1,
+            entry_size: 0,
+        }
+    }
+
+    fn input<'a>(file: &'a [u8], name_offset: u32) -> LinkerInputObject<'a> {
+        LinkerInputObject {
+            object_index: 3,
+            file,
+            object: RelocatableObject {
+                header: Elf64Header {
+                    elf_type: 1,
+                    machine: 62,
+                    entry: 0,
+                    program_header_offset: 0,
+                    section_header_offset: 0,
+                    flags: 0,
+                    header_size: 64,
+                    program_header_entry_size: 0,
+                    program_header_count: 0,
+                    section_header_entry_size: 64,
+                    section_header_count: 2,
+                    section_name_string_table_index: 1,
+                },
+                sections: vec![
+                    section(name_offset, 1, 0, 0),
+                    section(0, SHT_STRTAB, 0, file.len() as u64),
+                ],
+                symbol_tables: Vec::new(),
+                rela_tables: Vec::new(),
+            },
+        }
+    }
+
+    #[test]
+    fn reads_checked_section_name() {
+        let file = b"\0.init_array.100\0";
+        let input = input(file, 1);
+        assert_eq!(section_name(&input, 0).unwrap(), Some(b".init_array.100".as_slice()));
+    }
+
+    #[test]
+    fn rejects_out_of_bounds_section_name_offsets() {
+        let file = b"\0.text\0";
+        let input = input(file, 99);
+        assert!(matches!(
+            section_name(&input, 0),
+            Err(SectionNameError::SectionNameOffsetOutOfBounds {
+                object_index: 3,
+                section_index: 0,
+                ..
+            })
+        ));
+    }
+}
