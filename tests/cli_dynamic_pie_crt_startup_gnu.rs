@@ -370,3 +370,45 @@ helper:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+
+#[test]
+fn crt_startup_rejects_invalid_mode_and_explicit_entry_before_io() {
+    let dir = temp_dir("invalid-options");
+    let missing = dir.join("missing.o");
+    let output = dir.join("must-not-exist");
+
+    let wrong_mode = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--crt-startup")
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert_eq!(wrong_mode.status.code(), Some(2));
+    assert!(!output.exists());
+    let stderr = String::from_utf8_lossy(&wrong_mode.stderr);
+    assert!(
+        stderr.contains("--crt-startup is only supported with --dynamic-pie"),
+        "{stderr}"
+    );
+
+    let explicit_entry = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--dynamic-pie")
+        .arg("--crt-startup")
+        .args(["--entry", "custom_start"])
+        .arg(&missing)
+        .output()
+        .unwrap();
+    assert_eq!(explicit_entry.status.code(), Some(2));
+    assert!(!output.exists());
+    let stderr = String::from_utf8_lossy(&explicit_entry.stderr);
+    assert!(
+        stderr.contains("--crt-startup cannot be combined with --entry"),
+        "{stderr}"
+    );
+
+    let _ = fs::remove_dir_all(dir);
+}
