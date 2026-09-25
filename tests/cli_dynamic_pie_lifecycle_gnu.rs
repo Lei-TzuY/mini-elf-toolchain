@@ -334,3 +334,279 @@ _start:
 
     let _ = fs::remove_dir_all(dir);
 }
+
+
+fn link_mini_hooks(
+    dir: &Path,
+    object: &Path,
+    interpreter: &Path,
+    libc: &Path,
+) -> PathBuf {
+    let output = dir.join("mini-lifecycle-hooks");
+    let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+        .args(["link", "-o"])
+        .arg(&output)
+        .arg("--dynamic-pie")
+        .arg("--dynamic-linker")
+        .arg(interpreter)
+        .arg("--needed-from")
+        .arg(libc)
+        .args(["-init", "legacy_init", "-fini", "legacy_fini"])
+        .arg(object)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    output
+}
+
+fn link_gnu_hooks(
+    dir: &Path,
+    object: &Path,
+    interpreter: &Path,
+    libc: &Path,
+) -> PathBuf {
+    let output = dir.join("gnu-lifecycle-hooks");
+    let linked = Command::new("ld")
+        .arg("-pie")
+        .arg("--dynamic-linker")
+        .arg(interpreter)
+        .args(["-init", "legacy_init", "-fini", "legacy_fini"])
+        .arg("-o")
+        .arg(&output)
+        .arg(object)
+        .arg(libc)
+        .output()
+        .unwrap();
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
+    output
+}
+
+fn lifecycle_hook_fixture() -> &'static str {
+    r#".data
+.align 8
+state:
+    .quad 0
+
+.text
+.globl preinit_array_hook
+.type preinit_array_hook,@function
+preinit_array_hook:
+    cmpq $0, state(%rip)
+    jne .Lpreinit_bad
+    movq $1, state(%rip)
+    ret
+.Lpreinit_bad:
+    movq $99, state(%rip)
+    ret
+.size preinit_array_hook, .-preinit_array_hook
+
+.globl legacy_init
+.type legacy_init,@function
+legacy_init:
+    cmpq $1, state(%rip)
+    jne .Llegacy_init_bad
+    movq $2, state(%rip)
+    ret
+.Llegacy_init_bad:
+    movq $99, state(%rip)
+    ret
+.size legacy_init, .-legacy_init
+
+.globl init_array_hook
+.type init_array_hook,@function
+init_array_hook:
+    cmpq $2, state(%rip)
+    jne .Linit_array_bad
+    movq $3, state(%rip)
+    ret
+.Linit_array_bad:
+    movq $99, state(%rip)
+    ret
+.size init_array_hook, .-init_array_hook
+
+.globl fini_array_hook
+.type fini_array_hook,@function
+fini_array_hook:
+    cmpq $3, state(%rip)
+    jne .Lfini_array_bad
+    movq $4, state(%rip)
+    ret
+.Lfini_array_bad:
+    movq $99, state(%rip)
+    ret
+.size fini_array_hook, .-fini_array_hook
+
+.globl legacy_fini
+.type legacy_fini,@function
+legacy_fini:
+    cmpq $4, state(%rip)
+    jne .Llegacy_fini_bad
+    mov $231, %rax
+    mov $47, %rdi
+    syscall
+.Llegacy_fini_bad:
+    mov $231, %rax
+    mov $99, %rdi
+    syscall
+.size legacy_fini, .-legacy_fini
+
+.type main,@function
+main:
+    cmpq $3, state(%rip)
+    jne .Lmain_bad_hooks
+    mov $42, %eax
+    ret
+.Lmain_bad_hooks:
+    mov $10, %eax
+    ret
+.size main, .-main
+
+.globl __libc_start_main
+.type __libc_start_main,@function
+.globl _start
+.type _start,@function
+_start:
+    xor %ebp, %ebp
+    mov %rdx, %r9
+    pop %rsi
+    mov %rsp, %rdx
+    and $-16, %rsp
+    push %rax
+    push %rsp
+    xor %r8d, %r8d
+    xor %ecx, %ecx
+    lea main(%rip), %rdi
+    call __libc_start_main@PLT
+    hlt
+.size _start, .-_start
+
+.section .preinit_array,"aw",@preinit_array
+.quad preinit_array_hook
+.section .init_array,"aw",@init_array
+.quad init_array_hook
+.section .fini_array,"aw",@fini_array
+.quad fini_array_hook
+
+.section .note.GNU-stack,"",@progbits
+"#
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn dynamic_pie_init_fini_hooks_match_gnu_metadata_and_execution_order() {
+    if !have_tools() {
+        return;
+    }
+    let Some(interpreter) = dynamic_linker() else {
+        return;
+    };
+    let Some(libc) = libc_path() else {
+        return;
+    };
+
+    let dir = temp_dir("hooks");
+    let object = assemble(&dir, "hooks", lifecycle_hook_fixture());
+    let ours = link_mini_hooks(&dir, &object, &interpreter, &libc);
+    let gnu = link_gnu_hooks(&dir, &object, &interpreter, &libc);
+
+    for image in [&ours, &gnu] {
+        let dynamic = readelf(image, &["-dW"]);
+        assert!(dynamic.contains("(INIT)"), "{dynamic}");
+        assert!(dynamic.contains("(FINI)"), "{dynamic}");
+        assert!(dynamic.contains("PREINIT_ARRAY"), "{dynamic}");
+        assert!(dynamic.contains("INIT_ARRAY"), "{dynamic}");
+        assert!(dynamic.contains("FINI_ARRAY"), "{dynamic}");
+
+        let inspected = Command::new(env!("CARGO_BIN_EXE_mini-elf-dyninit"))
+            .arg(image)
+            .output()
+            .unwrap();
+        assert!(
+            inspected.status.success(),
+            "{}",
+            String::from_utf8_lossy(&inspected.stderr)
+        );
+        let inspected = String::from_utf8_lossy(&inspected.stdout);
+        assert!(inspected.contains("DT_INIT: address="), "{inspected}");
+        assert!(inspected.contains("DT_FINI: address="), "{inspected}");
+
+        let status = Command::new(image).status().unwrap();
+        assert_eq!(
+            status.code(),
+            Some(47),
+            "{} must execute preinit-array -> DT_INIT -> init-array -> main -> fini-array -> DT_FINI; status={status}",
+            image.display()
+        );
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
+
+#[test]
+fn dynamic_pie_lifecycle_hook_symbol_must_be_defined_function() {
+    if !have_tools() {
+        return;
+    }
+    let Some(interpreter) = dynamic_linker() else {
+        return;
+    };
+
+    let dir = temp_dir("invalid-hook");
+    let object = assemble(
+        &dir,
+        "invalid-hook",
+        r#".data
+.globl not_a_function
+.type not_a_function,@object
+not_a_function:
+    .quad 0
+.size not_a_function, .-not_a_function
+
+.text
+.globl _start
+.type _start,@function
+_start:
+    mov $60, %eax
+    xor %edi, %edi
+    syscall
+.size _start, .-_start
+
+.section .note.GNU-stack,"",@progbits
+"#,
+    );
+
+    for (symbol, expected) in [
+        ("missing_hook", "dynamic PIE lifecycle hook"),
+        ("not_a_function", "must be STT_FUNC"),
+    ] {
+        let output = dir.join(format!("reject-{symbol}"));
+        let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
+            .args(["link", "-o"])
+            .arg(&output)
+            .arg("--dynamic-pie")
+            .arg("--dynamic-linker")
+            .arg(&interpreter)
+            .arg("-init")
+            .arg(symbol)
+            .arg(&object)
+            .output()
+            .unwrap();
+        assert!(!linked.status.success(), "{symbol} was unexpectedly accepted");
+        assert!(
+            String::from_utf8_lossy(&linked.stderr).contains(expected),
+            "{}",
+            String::from_utf8_lossy(&linked.stderr)
+        );
+        assert!(!output.exists());
+    }
+
+    let _ = fs::remove_dir_all(dir);
+}
