@@ -1,4 +1,4 @@
-use core::fmt;
+use core::{cmp::Ordering, fmt};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::executable_writer::{
@@ -24,9 +24,11 @@ use crate::program_headers::{
 use crate::relocated_sections::{
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests,
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got,
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order,
     RelocatedSectionError, RelocatedSectionImage, TlsSyntheticRequests,
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
+use crate::section_names::section_name;
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
 use crate::synthetic_ids::{
     DYNAMIC_COPY_OBJECT_INDEX, DYNAMIC_INTERP_OBJECT_INDEX, SHARED_METADATA_OBJECT_INDEX,
@@ -354,6 +356,11 @@ pub enum SharedObjectError {
     TlsInput(LinkerInputError),
     TlsLayout(StaticTlsLayoutError),
     TlsProgramHeader(StaticTlsProgramHeaderError),
+    DynamicLifecycleSectionName {
+        object_index: usize,
+        section_index: u16,
+        reason: String,
+    },
     DynamicLifecycleSectionFlags {
         object_index: usize,
         section_index: u16,
@@ -833,6 +840,14 @@ impl fmt::Display for SharedObjectError {
             Self::TlsProgramHeader(source) => {
                 write!(f, "cannot emit shared PT_TLS program header: {source}")
             },
+            Self::DynamicLifecycleSectionName {
+                object_index,
+                section_index,
+                reason,
+            } => write!(
+                f,
+                "dynamic PIE lifecycle section name at object {object_index} section {section_index} is malformed: {reason}"
+            ),
             Self::DynamicLifecycleSectionFlags {
                 object_index,
                 section_index,
@@ -1052,6 +1067,7 @@ impl std::error::Error for SharedObjectError {
             | Self::DynamicExecutableTlsModelUnsupported { .. }
             | Self::TlsImportUnsupported { .. }
             | Self::TlsSymbolOutsideImage { .. }
+            | Self::DynamicLifecycleSectionName { .. }
             | Self::DynamicLifecycleSectionFlags { .. }
             | Self::DynamicLifecycleSectionSize { .. }
             | Self::DynamicLifecycleMissingRelocatedSection { .. }
@@ -1357,6 +1373,13 @@ struct DynamicLifecycle {
     fini_hook: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DynamicLifecyclePriority {
+    Numeric(Vec<u8>),
+    Named(Vec<u8>),
+    Base,
+}
+
 #[derive(Debug)]
 struct DynamicMetadata {
     bytes: Vec<u8>,
@@ -1657,6 +1680,11 @@ fn link_loader_image(
     masked_sites.extend(imports.tls_ld_dtpoff_sites.iter().copied());
     masked_sites.extend(imports.tls_desc_call_sites.iter().copied());
     let relocation_inputs = mask_deferred_relocations(inputs, &masked_sites);
+    let lifecycle_layout_tail_order = if dynamic_pie {
+        dynamic_pie_lifecycle_layout_tail_order(inputs)?
+    } else {
+        Vec::new()
+    };
 
     // Dynamic-executable partial RELRO: isolate the synthetic GOT whenever
     // it carries ordinary or TLS loader state. The loader applies GLOB_DAT,
@@ -1683,6 +1711,17 @@ fn link_loader_image(
             &imports.got_symbols,
             &imports.plt_symbols,
             tls_requests,
+            &lifecycle_layout_tail_order,
+        )
+    } else if dynamic_pie {
+        relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order(
+            &relocation_inputs,
+            page_alignment,
+            page_alignment,
+            &imports.got_symbols,
+            &imports.plt_symbols,
+            tls_requests,
+            &lifecycle_layout_tail_order,
         )
     } else {
         relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
@@ -3961,6 +4000,95 @@ fn build_version_metadata(
         verneed,
         provider_count,
     })
+}
+
+fn dynamic_pie_lifecycle_layout_tail_order(
+    inputs: &[LinkerInputObject<'_>],
+) -> Result<Vec<(usize, u16)>, SharedObjectError> {
+    let mut order = Vec::new();
+
+    for (section_type, prefix) in [
+        (SHT_INIT_ARRAY, b".init_array".as_slice()),
+        (SHT_FINI_ARRAY, b".fini_array".as_slice()),
+    ] {
+        let mut entries = Vec::new();
+        for input in inputs {
+            for (section_index, section) in input.object.sections.iter().enumerate() {
+                if section.section_type != section_type || section.size == 0 {
+                    continue;
+                }
+                let section_index =
+                    u16::try_from(section_index).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+                let name = section_name(input, section_index).map_err(|source| {
+                    SharedObjectError::DynamicLifecycleSectionName {
+                        object_index: input.object_index,
+                        section_index,
+                        reason: source.to_string(),
+                    }
+                })?;
+                entries.push((
+                    dynamic_lifecycle_priority(name, prefix),
+                    (input.object_index, section_index),
+                ));
+            }
+        }
+        entries.sort_by(|(left, _), (right, _)| compare_dynamic_lifecycle_priority(left, right));
+        order.extend(entries.into_iter().map(|(_, identity)| identity));
+    }
+
+    Ok(order)
+}
+
+fn dynamic_lifecycle_priority(
+    name: Option<&[u8]>,
+    prefix: &[u8],
+) -> DynamicLifecyclePriority {
+    let Some(name) = name else {
+        return DynamicLifecyclePriority::Base;
+    };
+    if name == prefix {
+        return DynamicLifecyclePriority::Base;
+    }
+    let Some(suffix) = name
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix(b"."))
+    else {
+        return DynamicLifecyclePriority::Base;
+    };
+
+    if !suffix.is_empty() && suffix.iter().all(u8::is_ascii_digit) {
+        let canonical = suffix
+            .iter()
+            .skip_while(|byte| **byte == b'0')
+            .copied()
+            .collect::<Vec<_>>();
+        DynamicLifecyclePriority::Numeric(if canonical.is_empty() {
+            vec![b'0']
+        } else {
+            canonical
+        })
+    } else {
+        DynamicLifecyclePriority::Named(suffix.to_vec())
+    }
+}
+
+fn compare_dynamic_lifecycle_priority(
+    left: &DynamicLifecyclePriority,
+    right: &DynamicLifecyclePriority,
+) -> Ordering {
+    match (left, right) {
+        (DynamicLifecyclePriority::Numeric(left), DynamicLifecyclePriority::Numeric(right)) => {
+            left.len().cmp(&right.len()).then_with(|| left.cmp(right))
+        }
+        (DynamicLifecyclePriority::Numeric(_), _) => Ordering::Less,
+        (_, DynamicLifecyclePriority::Numeric(_)) => Ordering::Greater,
+        (DynamicLifecyclePriority::Named(left), DynamicLifecyclePriority::Named(right)) => {
+            left.cmp(right)
+        }
+        (DynamicLifecyclePriority::Named(_), DynamicLifecyclePriority::Base) => Ordering::Less,
+        (DynamicLifecyclePriority::Base, DynamicLifecyclePriority::Named(_)) => Ordering::Greater,
+        (DynamicLifecyclePriority::Base, DynamicLifecyclePriority::Base) => Ordering::Equal,
+    }
 }
 
 fn collect_dynamic_pie_lifecycle(
