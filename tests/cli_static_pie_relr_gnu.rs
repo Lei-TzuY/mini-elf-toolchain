@@ -51,7 +51,11 @@ fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
         .arg(&asm)
         .output()
         .unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     object
 }
 
@@ -136,12 +140,24 @@ fn link_mini(output: &Path, object: &Path, packed: bool) {
         command.args(["-z", "pack-relative-relocs"]);
     }
     let linked = command.arg(object).output().unwrap();
-    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    assert!(
+        linked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&linked.stderr)
+    );
 }
 
 fn readelf(path: &Path, args: &[&str]) -> String {
-    let output = Command::new("readelf").args(args).arg(path).output().unwrap();
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let output = Command::new("readelf")
+        .args(args)
+        .arg(path)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     String::from_utf8(output.stdout).unwrap()
 }
 
@@ -167,7 +183,11 @@ fn static_pie_pack_relative_relocs_decodes_relr_then_runs_irelative() {
         .arg(&ours)
         .output()
         .unwrap();
-    assert!(relr.status.success(), "{}", String::from_utf8_lossy(&relr.stderr));
+    assert!(
+        relr.status.success(),
+        "{}",
+        String::from_utf8_lossy(&relr.stderr)
+    );
     let relr = String::from_utf8_lossy(&relr.stdout);
     assert!(
         relr.contains("DT_RELR contains 2 encoded entries, 3 relocations"),
@@ -178,17 +198,31 @@ fn static_pie_pack_relative_relocs_decodes_relr_then_runs_irelative() {
         .arg(&ours)
         .output()
         .unwrap();
-    assert!(rela.status.success(), "{}", String::from_utf8_lossy(&rela.stderr));
+    assert!(
+        rela.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rela.stderr)
+    );
     let rela = String::from_utf8_lossy(&rela.stdout);
     assert!(rela.contains("R_X86_64_IRELATIVE"), "{rela}");
     assert!(!rela.contains("R_X86_64_RELATIVE"), "{rela}");
 
     let status = Command::new(&ours).status().unwrap();
-    assert_eq!(status.code(), Some(0), "mini packed static PIE status={status}");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "mini packed static PIE status={status}"
+    );
 
     let gnu = dir.join("gnu-packed");
     let linked = Command::new("ld")
-        .args(["-pie", "--no-dynamic-linker", "-z", "pack-relative-relocs", "-o"])
+        .args([
+            "-pie",
+            "--no-dynamic-linker",
+            "-z",
+            "pack-relative-relocs",
+            "-o",
+        ])
         .arg(&gnu)
         .arg(&object)
         .output()
@@ -196,7 +230,11 @@ fn static_pie_pack_relative_relocs_decodes_relr_then_runs_irelative() {
     assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
     assert!(readelf(&gnu, &["-dW"]).contains("RELR"));
     let status = Command::new(&gnu).status().unwrap();
-    assert_eq!(status.code(), Some(0), "GNU packed static PIE status={status}");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "GNU packed static PIE status={status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
@@ -227,7 +265,11 @@ fn static_pie_default_policy_remains_rela_only() {
     assert!(rela.contains("R_X86_64_IRELATIVE"), "{rela}");
 
     let status = Command::new(&ours).status().unwrap();
-    assert_eq!(status.code(), Some(0), "default static PIE status={status}");
+    assert_eq!(
+        status.code(),
+        Some(0),
+        "default static PIE status={status}"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
