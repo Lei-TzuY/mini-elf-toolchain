@@ -393,6 +393,7 @@ pub(crate) fn relocate_allocatable_sections_with_metadata_isolated_got(
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::isolated(page_alignment, false),
             tail_order: &[],
+            ibt_plt: false,
         },
     )
 }
