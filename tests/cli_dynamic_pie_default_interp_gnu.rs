@@ -107,9 +107,12 @@ fn dynamic_pie_uses_gnu_linux_x86_64_default_interpreter_and_executes() {
         ours.display()
     );
 
+    // GNU ld's built-in interpreter is a linker-build configuration choice,
+    // not an ELF x86-64 ABI constant. Use GNU as the PT_INTERP/runtime oracle
+    // for this project's explicit GNU/Linux x86-64 target policy instead.
     let gnu = dir.join("gnu-default");
     let gnu_link = Command::new("ld")
-        .args(["-pie", "-o"])
+        .args(["-pie", "--dynamic-linker", DEFAULT_INTERPRETER, "-o"])
         .arg(&gnu)
         .arg(&object)
         .output()
@@ -120,10 +123,7 @@ fn dynamic_pie_uses_gnu_linux_x86_64_default_interpreter_and_executes() {
         String::from_utf8_lossy(&gnu_link.stderr)
     );
     let gnu_headers = program_headers(&gnu);
-    assert!(
-        gnu_headers.contains(DEFAULT_INTERPRETER),
-        "GNU x86-64 Linux default interpreter drifted:\n{gnu_headers}"
-    );
+    assert!(gnu_headers.contains(DEFAULT_INTERPRETER), "{gnu_headers}");
     let gnu_status = Command::new(&gnu).status().unwrap();
     assert_eq!(
         gnu_status.code(),
