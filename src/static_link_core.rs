@@ -12,7 +12,8 @@ use crate::linker_input::LinkerInputObject;
 use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableSectionInput};
 use crate::object_symbols::named_symbols_from_table;
 use crate::pie_runtime::{
-    add_runtime_relative_relocations, PieDynamicSegment, PieRelroSegment, PieRuntimeError,
+    add_runtime_relative_relocations_with_options, PieDynamicSegment, PieRelroSegment,
+    PieRuntimeError, PieRuntimeOptions,
 };
 use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
 use crate::resolve::{SHN_UNDEF, STB_LOCAL, STB_WEAK};
@@ -172,17 +173,32 @@ pub fn link_static_executable_with_map(
     page_alignment: u64,
     entry_symbol: &[u8],
 ) -> Result<StaticLinkOutput, StaticLinkError> {
-    link_static_image_artifact(inputs, start_address, page_alignment, entry_symbol, false)
-        .map(|artifact| artifact.output)
+    link_static_image_artifact(
+        inputs,
+        start_address,
+        page_alignment,
+        entry_symbol,
+        false,
+        false,
+    )
+    .map(|artifact| artifact.output)
 }
 
-pub(crate) fn link_static_position_independent_artifact_with_map(
+pub(crate) fn link_static_position_independent_artifact_with_map_and_options(
     inputs: &[LinkerInputObject<'_>],
     page_alignment: u64,
     entry_symbol: &[u8],
+    pack_relative_relocs: bool,
 ) -> Result<StaticPositionIndependentArtifact, StaticLinkError> {
     validate_position_independent_inputs(inputs)?;
-    link_static_image_artifact(inputs, 0, page_alignment, entry_symbol, true)
+    link_static_image_artifact(
+        inputs,
+        0,
+        page_alignment,
+        entry_symbol,
+        true,
+        pack_relative_relocs,
+    )
 }
 
 fn validate_position_independent_inputs(
@@ -270,6 +286,7 @@ fn link_static_image_artifact(
     page_alignment: u64,
     entry_symbol: &[u8],
     position_independent: bool,
+    pack_relative_relocs: bool,
 ) -> Result<StaticPositionIndependentArtifact, StaticLinkError> {
     let relocated_output = if position_independent {
         relocate_allocatable_sections_with_static_tls_isolated_got(
@@ -311,17 +328,20 @@ fn link_static_image_artifact(
     let user_entry_address =
         final_symbol_address(entry_definition, &layout).map_err(StaticLinkError::EntryAddress)?;
     let (relocated, runtime_entry_address, dynamic, relro) = if position_independent {
-        let runtime = add_runtime_relative_relocations(
+        let runtime = add_runtime_relative_relocations_with_options(
             inputs,
             relocated,
             &definitions,
             &got_entries,
-            got_region.map(|region| PieRelroSegment {
-                address: region.address,
-                size: region.size,
-            }),
-            user_entry_address,
-            page_alignment,
+            PieRuntimeOptions {
+                got_relro: got_region.map(|region| PieRelroSegment {
+                    address: region.address,
+                    size: region.size,
+                }),
+                user_entry_address,
+                page_alignment,
+                pack_relative_relocs,
+            },
         )
         .map_err(StaticLinkError::PieRuntime)?;
         (
