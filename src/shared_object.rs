@@ -4669,4 +4669,24 @@ mod lifecycle_priority_tests {
         assert_eq!(key(b".init_array.000100"), key(b".init_array.100"));
         assert_eq!(key(b".init_array.000"), key(b".init_array.0"));
     }
+
+    #[test]
+    fn lifecycle_priority_stable_sort_preserves_link_order_for_equal_keys() {
+        let mut priorities = vec![
+            (key(b".init_array.000100"), 0usize),
+            (key(b".init_array.100"), 1usize),
+            (key(b".init_array.0100"), 2usize),
+        ];
+        priorities.sort_by(|(left, _), (right, _)| {
+            compare_dynamic_lifecycle_priority(left, right)
+        });
+
+        assert_eq!(
+            priorities
+                .into_iter()
+                .map(|(_, link_order)| link_order)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
 }
