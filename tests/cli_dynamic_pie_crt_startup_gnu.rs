@@ -371,7 +371,6 @@ helper:
     let _ = fs::remove_dir_all(dir);
 }
 
-
 #[test]
 fn crt_startup_rejects_invalid_mode_and_explicit_entry_before_io() {
     let dir = temp_dir("invalid-options");
