@@ -618,73 +618,57 @@ fail_now:
     syscall
 .size fail_now, .-fail_now
 
-.type preinit_100,@function
-preinit_100:
+.type preinit_default,@function
+preinit_default:
     cmpq $0, state(%rip)
     jne fail_now
     movq $1, state(%rip)
-    ret
-.size preinit_100, .-preinit_100
-
-.type preinit_300,@function
-preinit_300:
-    cmpq $1, state(%rip)
-    jne fail_now
-    movq $2, state(%rip)
-    ret
-.size preinit_300, .-preinit_300
-
-.type preinit_default,@function
-preinit_default:
-    cmpq $2, state(%rip)
-    jne fail_now
-    movq $3, state(%rip)
     ret
 .size preinit_default, .-preinit_default
 
 .type init_100,@function
 init_100:
-    cmpq $3, state(%rip)
+    cmpq $1, state(%rip)
     jne fail_now
-    movq $4, state(%rip)
+    movq $2, state(%rip)
     ret
 .size init_100, .-init_100
 
 .type init_300,@function
 init_300:
-    cmpq $4, state(%rip)
+    cmpq $2, state(%rip)
     jne fail_now
-    movq $5, state(%rip)
+    movq $3, state(%rip)
     ret
 .size init_300, .-init_300
 
 .type init_default,@function
 init_default:
-    cmpq $5, state(%rip)
+    cmpq $3, state(%rip)
     jne fail_now
-    movq $6, state(%rip)
+    movq $4, state(%rip)
     ret
 .size init_default, .-init_default
 
 .type fini_default,@function
 fini_default:
-    cmpq $6, state(%rip)
+    cmpq $4, state(%rip)
     jne fail_now
-    movq $7, state(%rip)
+    movq $5, state(%rip)
     ret
 .size fini_default, .-fini_default
 
 .type fini_300,@function
 fini_300:
-    cmpq $7, state(%rip)
+    cmpq $5, state(%rip)
     jne fail_now
-    movq $8, state(%rip)
+    movq $6, state(%rip)
     ret
 .size fini_300, .-fini_300
 
 .type fini_100,@function
 fini_100:
-    cmpq $8, state(%rip)
+    cmpq $6, state(%rip)
     jne fail_now
     mov $231, %rax
     mov $61, %rdi
@@ -693,7 +677,7 @@ fini_100:
 
 .type main,@function
 main:
-    cmpq $6, state(%rip)
+    cmpq $4, state(%rip)
     jne fail_now
     mov $42, %eax
     ret
@@ -718,14 +702,11 @@ _start:
     hlt
 .size _start, .-_start
 
-# Deliberately emit each lifecycle family out of GNU priority order.
-.section .preinit_array.300,"aw",@preinit_array
-.quad preinit_300
+# PREINIT has no GNU priority-suffix aggregation; keep one canonical section.
 .section .preinit_array,"aw",@preinit_array
 .quad preinit_default
-.section .preinit_array.100,"aw",@preinit_array
-.quad preinit_100
 
+# Deliberately emit INIT/FINI fragments out of GNU priority order.
 .section .init_array.300,"aw",@init_array
 .quad init_300
 .section .init_array,"aw",@init_array
@@ -789,7 +770,11 @@ fn dynamic_pie_lifecycle_priority_matches_gnu_execution_order() {
             String::from_utf8_lossy(&inspected.stderr)
         );
         let inspected = String::from_utf8_lossy(&inspected.stdout);
-        assert_eq!(inspected.matches("entries=3").count(), 3, "{inspected}");
+        assert!(
+            inspected.contains("DT_PREINIT_ARRAY: address=") && inspected.contains("entries=1"),
+            "{inspected}"
+        );
+        assert_eq!(inspected.matches("entries=3").count(), 2, "{inspected}");
 
         let status = Command::new(image).status().unwrap();
         assert_eq!(
