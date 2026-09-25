@@ -13,7 +13,7 @@ use crate::load_segments::{build_load_segments, LoadSegmentBuildError, LoadableS
 use crate::object_symbols::named_symbols_from_table;
 use crate::pie_runtime::{
     add_runtime_relative_relocations_with_options, PieDynamicSegment, PieRelroSegment,
-    PieRuntimeError,
+    PieRuntimeError, PieRuntimeOptions,
 };
 use crate::relocated_sections::{RelocatedSectionError, RelocatedSectionImage};
 use crate::resolve::{SHN_UNDEF, STB_LOCAL, STB_WEAK};
@@ -184,19 +184,6 @@ pub fn link_static_executable_with_map(
     .map(|artifact| artifact.output)
 }
 
-pub(crate) fn link_static_position_independent_artifact_with_map(
-    inputs: &[LinkerInputObject<'_>],
-    page_alignment: u64,
-    entry_symbol: &[u8],
-) -> Result<StaticPositionIndependentArtifact, StaticLinkError> {
-    link_static_position_independent_artifact_with_map_and_options(
-        inputs,
-        page_alignment,
-        entry_symbol,
-        false,
-    )
-}
-
 pub(crate) fn link_static_position_independent_artifact_with_map_and_options(
     inputs: &[LinkerInputObject<'_>],
     page_alignment: u64,
@@ -346,13 +333,15 @@ fn link_static_image_artifact(
             relocated,
             &definitions,
             &got_entries,
-            got_region.map(|region| PieRelroSegment {
-                address: region.address,
-                size: region.size,
-            }),
-            user_entry_address,
-            page_alignment,
-            pack_relative_relocs,
+            PieRuntimeOptions {
+                got_relro: got_region.map(|region| PieRelroSegment {
+                    address: region.address,
+                    size: region.size,
+                }),
+                user_entry_address,
+                page_alignment,
+                pack_relative_relocs,
+            },
         )
         .map_err(StaticLinkError::PieRuntime)?;
         (
