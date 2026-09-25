@@ -1169,33 +1169,27 @@ fn partial_files(
     }
 
     let loaded = load_link_input_sequence(paths)?;
-    let crt_startup_file = options
-        .crt_startup
-        .then(build_dynamic_pie_crt_startup_object);
-    let mut ordered_inputs = Vec::new();
-    let mut expanded_paths = Vec::new();
-    if let Some(file) = crt_startup_file.as_deref() {
-        ordered_inputs.push(OrderedLinkInput::Object(file));
-        expanded_paths.push(OsString::from("<synthetic-crt-startup>"));
-    }
-    ordered_inputs.extend(loaded.sequence.iter().map(|input| {
-        let file = &loaded.files[input.file_index];
-        if file.starts_with(ARCHIVE_MAGIC) {
-            if input.whole_archive {
-                OrderedLinkInput::WholeArchive(file)
+    let ordered_inputs = loaded
+        .sequence
+        .iter()
+        .map(|input| {
+            let file = &loaded.files[input.file_index];
+            if file.starts_with(ARCHIVE_MAGIC) {
+                if input.whole_archive {
+                    OrderedLinkInput::WholeArchive(file)
+                } else {
+                    OrderedLinkInput::Archive(file)
+                }
             } else {
-                OrderedLinkInput::Archive(file)
+                OrderedLinkInput::Object(file)
             }
-        } else {
-            OrderedLinkInput::Object(file)
-        }
-    }));
-    expanded_paths.extend(
-        loaded
-            .sequence
-            .iter()
-            .map(|input| loaded.paths[input.file_index].clone()),
-    );
+        })
+        .collect::<Vec<_>>();
+    let expanded_paths = loaded
+        .sequence
+        .iter()
+        .map(|input| loaded.paths[input.file_index].clone())
+        .collect::<Vec<_>>();
     let prepared =
         prepare_ordered_link_inputs_with_forced_undefined(&ordered_inputs, forced_undefined)
             .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
@@ -1617,27 +1611,33 @@ fn link_files(
     paths: &[OsString],
 ) -> Result<String, CliError> {
     let loaded = load_link_input_sequence(paths)?;
-    let ordered_inputs = loaded
-        .sequence
-        .iter()
-        .map(|input| {
-            let file = &loaded.files[input.file_index];
-            if file.starts_with(ARCHIVE_MAGIC) {
-                if input.whole_archive {
-                    OrderedLinkInput::WholeArchive(file)
-                } else {
-                    OrderedLinkInput::Archive(file)
-                }
+    let crt_startup_file = options
+        .crt_startup
+        .then(build_dynamic_pie_crt_startup_object);
+    let mut ordered_inputs = Vec::new();
+    let mut expanded_paths = Vec::new();
+    if let Some(file) = crt_startup_file.as_deref() {
+        ordered_inputs.push(OrderedLinkInput::Object(file));
+        expanded_paths.push(OsString::from("<synthetic-crt-startup>"));
+    }
+    ordered_inputs.extend(loaded.sequence.iter().map(|input| {
+        let file = &loaded.files[input.file_index];
+        if file.starts_with(ARCHIVE_MAGIC) {
+            if input.whole_archive {
+                OrderedLinkInput::WholeArchive(file)
             } else {
-                OrderedLinkInput::Object(file)
+                OrderedLinkInput::Archive(file)
             }
-        })
-        .collect::<Vec<_>>();
-    let expanded_paths = loaded
-        .sequence
-        .iter()
-        .map(|input| loaded.paths[input.file_index].clone())
-        .collect::<Vec<_>>();
+        } else {
+            OrderedLinkInput::Object(file)
+        }
+    }));
+    expanded_paths.extend(
+        loaded
+            .sequence
+            .iter()
+            .map(|input| loaded.paths[input.file_index].clone()),
+    );
     let prepared = prepare_ordered_link_inputs_with_forced_undefined(
         &ordered_inputs,
         options.forced_undefined,
