@@ -181,6 +181,22 @@ _start:
     assert!(dynamic.contains("libprovider.so"), "{dynamic}");
     assert!(dynamic.contains("RUNPATH"), "{dynamic}");
     assert!(dynamic.contains("$ORIGIN"), "{dynamic}");
+    assert!(dynamic.contains("GNU_HASH"), "{dynamic}");
+
+    let gnu_hash = Command::new(env!("CARGO_BIN_EXE_mini-elf-gnuhash"))
+        .arg(&ours)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_hash.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_hash.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&gnu_hash.stdout).contains("GNU DT_GNU_HASH"),
+        "{}",
+        String::from_utf8_lossy(&gnu_hash.stdout)
+    );
 
     let relocations = readelf(&ours, &["-rW", "--use-dynamic"]);
     assert!(relocations.contains("R_X86_64_JUMP_SLOT"), "{relocations}");

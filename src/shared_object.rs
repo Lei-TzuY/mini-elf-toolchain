@@ -82,6 +82,7 @@ const DT_NEEDED: i64 = 1;
 const DT_PLTRELSZ: i64 = 2;
 const DT_PLTGOT: i64 = 3;
 const DT_HASH: i64 = 4;
+const DT_GNU_HASH: i64 = 0x6fff_fef5;
 const DT_STRTAB: i64 = 5;
 const DT_SYMTAB: i64 = 6;
 const DT_STRSZ: i64 = 10;
@@ -4523,7 +4524,24 @@ fn build_dynamic_metadata(
         .checked_mul(4)
         .ok_or(SharedObjectError::MetadataTooLarge)?;
 
-    let dynsym_offset = align_up_usize(hash_size, 8).ok_or(SharedObjectError::MetadataTooLarge)?;
+    let gnu_hash_offset =
+        align_up_usize(hash_size, 8).ok_or(SharedObjectError::MetadataTooLarge)?;
+    let gnu_hash_chain_count = symbol_count.saturating_sub(1);
+    let gnu_hash_size = 28usize
+        .checked_add(
+            gnu_hash_chain_count
+                .checked_mul(4)
+                .ok_or(SharedObjectError::MetadataTooLarge)?,
+        )
+        .ok_or(SharedObjectError::MetadataTooLarge)?;
+
+    let dynsym_offset = align_up_usize(
+        gnu_hash_offset
+            .checked_add(gnu_hash_size)
+            .ok_or(SharedObjectError::MetadataTooLarge)?,
+        8,
+    )
+    .ok_or(SharedObjectError::MetadataTooLarge)?;
     let dynsym_size = symbol_count
         .checked_mul(ELF64_SYMBOL_SIZE)
         .ok_or(SharedObjectError::MetadataTooLarge)?;
@@ -4545,6 +4563,31 @@ fn build_dynamic_metadata(
         dynstr.extend_from_slice(&import.dynamic_name);
         dynstr.push(0);
     }
+    let gnu_hash = |name: &[u8]| {
+        let mut hash = 5381u32;
+        for byte in name {
+            hash = hash.wrapping_mul(33).wrapping_add(u32::from(*byte));
+        }
+        hash
+    };
+    let mut gnu_hashes = Vec::with_capacity(gnu_hash_chain_count);
+    let mut gnu_bloom = 0u64;
+    for name in exports
+        .iter()
+        .map(|export| export.dynamic_name.as_slice())
+        .chain(
+            imports
+                .values()
+                .map(|import| import.dynamic_name.as_slice()),
+        )
+    {
+        let hash = gnu_hash(name);
+        gnu_bloom |= 1u64 << (hash % 64);
+        gnu_bloom |= 1u64 << ((hash >> 5) % 64);
+        gnu_hashes.push(hash);
+    }
+    debug_assert_eq!(gnu_hashes.len(), gnu_hash_chain_count);
+
     let mut needed_name_offsets = Vec::with_capacity(names.needed.len());
     for name in names.needed {
         let offset =
@@ -4629,7 +4672,7 @@ fn build_dynamic_metadata(
     let has_plt_relocations = !jmprel_bytes.is_empty();
     let symbolic = dynamic_flags & DF_SYMBOLIC != 0;
     debug_assert_eq!(has_plt_relocations, plt_got_address.is_some());
-    let dynamic_entry_count = 5usize
+    let dynamic_entry_count = 6usize
         .checked_add(names.needed.len())
         .and_then(|count| count.checked_add(usize::from(soname_offset.is_some())))
         .and_then(|count| count.checked_add(usize::from(runpath_offset.is_some())))
@@ -4685,6 +4728,25 @@ fn build_dynamic_metadata(
         put_u32(&mut bytes, hash_offset + 12 + symbol_index * 4, value);
     }
 
+    put_u32(&mut bytes, gnu_hash_offset, 1);
+    put_u32(&mut bytes, gnu_hash_offset + 4, 1);
+    put_u32(&mut bytes, gnu_hash_offset + 8, 1);
+    put_u32(&mut bytes, gnu_hash_offset + 12, 5);
+    put_u64(&mut bytes, gnu_hash_offset + 16, gnu_bloom);
+    put_u32(
+        &mut bytes,
+        gnu_hash_offset + 24,
+        if gnu_hashes.is_empty() { 0 } else { 1 },
+    );
+    for (index, hash) in gnu_hashes.iter().copied().enumerate() {
+        let terminator = u32::from(index + 1 == gnu_hashes.len());
+        put_u32(
+            &mut bytes,
+            gnu_hash_offset + 28 + index * 4,
+            (hash & !1) | terminator,
+        );
+    }
+
     for (index, export) in exports.iter().enumerate() {
         let offset = dynsym_offset + (index + 1) * ELF64_SYMBOL_SIZE;
         put_u32(&mut bytes, offset, export_name_offsets[index]);
@@ -4715,6 +4777,7 @@ fn build_dynamic_metadata(
     bytes[jmprel_offset..jmprel_offset + jmprel_bytes.len()].copy_from_slice(jmprel_bytes);
 
     let hash_address = checked_metadata_address(base_address, hash_offset)?;
+    let gnu_hash_address = checked_metadata_address(base_address, gnu_hash_offset)?;
     let dynsym_address = checked_metadata_address(base_address, dynsym_offset)?;
     let dynstr_address = checked_metadata_address(base_address, dynstr_offset)?;
     let mut entries = Vec::with_capacity(dynamic_entry_count);
@@ -4729,6 +4792,7 @@ fn build_dynamic_metadata(
     }
     entries.extend_from_slice(&[
         (DT_HASH, hash_address),
+        (DT_GNU_HASH, gnu_hash_address),
         (DT_STRTAB, dynstr_address),
         (DT_SYMTAB, dynsym_address),
         (DT_STRSZ, dynstr.len() as u64),

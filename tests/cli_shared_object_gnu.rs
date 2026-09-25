@@ -146,10 +146,26 @@ exported_value:
         String::from_utf8_lossy(&dynamic.stderr)
     );
     let dynamic_text = String::from_utf8_lossy(&dynamic.stdout);
-    for tag in ["HASH", "STRTAB", "SYMTAB", "STRSZ", "SYMENT"] {
+    for tag in ["HASH", "GNU_HASH", "STRTAB", "SYMTAB", "STRSZ", "SYMENT"] {
         assert!(dynamic_text.contains(tag), "missing {tag}: {dynamic_text}");
     }
     assert!(!dynamic_text.contains("NEEDED"));
+
+    let gnu_hash = Command::new(env!("CARGO_BIN_EXE_mini-elf-gnuhash"))
+        .arg(&shared)
+        .output()
+        .unwrap();
+    assert!(
+        gnu_hash.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gnu_hash.stderr)
+    );
+    let gnu_hash_text = String::from_utf8_lossy(&gnu_hash.stdout);
+    assert!(gnu_hash_text.contains("GNU DT_GNU_HASH"), "{gnu_hash_text}");
+    assert!(
+        gnu_hash_text.contains("dynamic symbols through 3"),
+        "GNU hash should cover the null-excluded two-export dynsym extent: {gnu_hash_text}"
+    );
 
     let dynamic_symbols = Command::new("readelf")
         .arg("-sDW")
