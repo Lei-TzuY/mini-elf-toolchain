@@ -25,6 +25,7 @@ use crate::relocated_sections::{
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests,
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got,
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order,
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order_and_ibt_plt,
     RelocatedSectionError, RelocatedSectionImage, TlsSyntheticRequests,
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
@@ -1535,6 +1536,7 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
             checked_version_providers,
             version_script: None,
             symbolic: false,
+            ibt_plt: false,
             init_symbol: None,
             fini_symbol: None,
         },
@@ -1550,6 +1552,7 @@ pub struct SharedObjectLinkOptions<'a> {
     pub checked_version_providers: &'a [Vec<u8>],
     pub version_script: Option<&'a VersionScript>,
     pub symbolic: bool,
+    pub ibt_plt: bool,
     pub init_symbol: Option<&'a [u8]>,
     pub fini_symbol: Option<&'a [u8]>,
 }
@@ -1603,6 +1606,7 @@ pub fn link_dynamic_pie_with_checked_providers(
                 checked_version_providers: options.checked_version_providers,
                 version_script: None,
                 symbolic: false,
+                ibt_plt: false,
                 init_symbol: None,
                 fini_symbol: None,
             },
@@ -1646,6 +1650,7 @@ fn link_loader_image(
         checked_version_providers,
         version_script,
         symbolic,
+        ibt_plt,
         init_symbol: _,
         fini_symbol: _,
     } = shared;
@@ -1726,6 +1731,16 @@ fn link_loader_image(
     };
     let relocated_output = if dynamic_pie_got_relro {
         relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got(
+            &relocation_inputs,
+            page_alignment,
+            page_alignment,
+            &imports.got_symbols,
+            &imports.plt_symbols,
+            tls_requests,
+            &lifecycle_layout_tail_order,
+        )
+    } else if ibt_plt {
+        relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order_and_ibt_plt(
             &relocation_inputs,
             page_alignment,
             page_alignment,

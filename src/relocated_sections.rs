@@ -34,7 +34,9 @@ const PLT_SECTION_INDEX: u16 = 1;
 const PLT_GOT_SECTION_INDEX: u16 = 1;
 const PLT0_SIZE: u64 = 16;
 const PLT_ENTRY_SIZE: u64 = 16;
+const IBT_PLT_ENTRY_SIZE: u64 = 32;
 const PLT_ALIGNMENT: u64 = 16;
+const ENDBR64: [u8; 4] = [0xf3, 0x0f, 0x1e, 0xfa];
 const PLT_GOT_RESERVED_SIZE: u64 = 24;
 const PLT_GOT_ENTRY_SIZE: u64 = 8;
 const PLT_GOT_ALIGNMENT: u64 = 8;
@@ -72,12 +74,14 @@ impl SyntheticGotLayoutPolicy {
 struct RelocationLayoutPolicy<'a> {
     got: SyntheticGotLayoutPolicy,
     tail_order: &'a [(usize, u16)],
+    ibt_plt: bool,
 }
 
 impl RelocationLayoutPolicy<'_> {
     const INLINE: Self = Self {
         got: SyntheticGotLayoutPolicy::INLINE,
         tail_order: &[],
+        ibt_plt: false,
     };
 }
 
@@ -389,6 +393,7 @@ pub(crate) fn relocate_allocatable_sections_with_metadata_isolated_got(
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::isolated(page_alignment, false),
             tail_order: &[],
+            ibt_plt: false,
         },
     )
 }
@@ -506,6 +511,31 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::INLINE,
             tail_order: layout_tail_order,
+            ibt_plt: false,
+        },
+    )
+}
+
+pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order_and_ibt_plt(
+    inputs: &[LinkerInputObject<'_>],
+    start_address: u64,
+    page_alignment: u64,
+    external_got_symbols: &BTreeSet<Vec<u8>>,
+    external_plt_symbols: &BTreeSet<Vec<u8>>,
+    tls: TlsSyntheticRequests<'_>,
+    layout_tail_order: &[(usize, u16)],
+) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
+        inputs,
+        start_address,
+        page_alignment,
+        external_got_symbols,
+        external_plt_symbols,
+        tls,
+        RelocationLayoutPolicy {
+            got: SyntheticGotLayoutPolicy::INLINE,
+            tail_order: layout_tail_order,
+            ibt_plt: true,
         },
     )
 }
@@ -529,6 +559,7 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::isolated(page_alignment, true),
             tail_order: layout_tail_order,
+            ibt_plt: false,
         },
     )
 }
@@ -577,6 +608,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
 ) -> Result<RelocatedSectionsOutput, RelocatedSectionError> {
     let got_layout_policy = layout_policy.got;
     let layout_tail_order = layout_policy.tail_order;
+    let ibt_plt = layout_policy.ibt_plt;
     let tls_gd_symbols = tls.tls_gd_symbols;
     let tls_ld_enabled = tls.tls_ld_enabled;
     let tls_desc_symbols = tls.tls_desc_symbols;
@@ -700,8 +732,13 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         };
 
     validate_external_plt_symbols(inputs, external_plt_symbols)?;
+    let plt_entry_size = if ibt_plt {
+        IBT_PLT_ENTRY_SIZE
+    } else {
+        PLT_ENTRY_SIZE
+    };
     let plt_size =
-        synthetic_table_size_with_prefix(external_plt_symbols.len(), PLT_ENTRY_SIZE, PLT0_SIZE)?;
+        synthetic_table_size_with_prefix(external_plt_symbols.len(), plt_entry_size, PLT0_SIZE)?;
     let plt_got_size = synthetic_table_size_with_prefix(
         external_plt_symbols.len(),
         PLT_GOT_ENTRY_SIZE,
@@ -810,7 +847,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         PLT_OBJECT_INDEX,
         PLT_SECTION_INDEX,
         external_plt_symbols,
-        PLT_ENTRY_SIZE,
+        plt_entry_size,
         PLT0_SIZE,
     )?;
     let plt_got_entries = synthetic_entry_addresses(
@@ -1014,46 +1051,90 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         for (relocation_index, name) in external_plt_symbols.iter().enumerate() {
             let stub_address = plt_entries_output[name];
             let slot_address = plt_got_entries_output[name];
-            append_rip_indirect(
-                &mut plt_bytes,
-                [0xff, 0x25],
-                stub_address,
-                slot_address,
-                name,
-            )?;
-
             let relocation_index = u32::try_from(relocation_index).map_err(|_| {
                 RelocatedSectionError::PltSizeOverflow {
                     symbol_count: external_plt_symbols.len(),
                 }
             })?;
-            plt_bytes.push(0x68);
-            plt_bytes.extend_from_slice(&relocation_index.to_le_bytes());
 
-            let jump_next_ip = stub_address.checked_add(PLT_ENTRY_SIZE).ok_or(
-                RelocatedSectionError::PltDisplacementOutOfRange {
-                    name: name.clone(),
-                    stub_address,
-                    slot_address: plt_layout.address,
-                },
-            )?;
-            let displacement = i128::from(plt_layout.address) - i128::from(jump_next_ip);
-            let displacement = i32::try_from(displacement).map_err(|_| {
-                RelocatedSectionError::PltDisplacementOutOfRange {
-                    name: name.clone(),
-                    stub_address,
-                    slot_address: plt_layout.address,
-                }
-            })?;
-            plt_bytes.push(0xe9);
-            plt_bytes.extend_from_slice(&displacement.to_le_bytes());
+            let lazy_target = if ibt_plt {
+                plt_bytes.extend_from_slice(&ENDBR64);
+                append_rip_indirect(
+                    &mut plt_bytes,
+                    [0xff, 0x25],
+                    stub_address
+                        .checked_add(4)
+                        .ok_or(RelocatedSectionError::PltSizeOverflow {
+                            symbol_count: external_plt_symbols.len(),
+                        })?,
+                    slot_address,
+                    name,
+                )?;
+                plt_bytes.extend_from_slice(&[0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00]);
 
-            let lazy_target =
+                let lazy_address = stub_address.checked_add(PLT_ENTRY_SIZE).ok_or(
+                    RelocatedSectionError::PltSizeOverflow {
+                        symbol_count: external_plt_symbols.len(),
+                    },
+                )?;
+                plt_bytes.extend_from_slice(&ENDBR64);
+                plt_bytes.push(0x68);
+                plt_bytes.extend_from_slice(&relocation_index.to_le_bytes());
+
+                let jump_next_ip = lazy_address.checked_add(14).ok_or(
+                    RelocatedSectionError::PltDisplacementOutOfRange {
+                        name: name.clone(),
+                        stub_address: lazy_address,
+                        slot_address: plt_layout.address,
+                    },
+                )?;
+                let displacement = i128::from(plt_layout.address) - i128::from(jump_next_ip);
+                let displacement = i32::try_from(displacement).map_err(|_| {
+                    RelocatedSectionError::PltDisplacementOutOfRange {
+                        name: name.clone(),
+                        stub_address: lazy_address,
+                        slot_address: plt_layout.address,
+                    }
+                })?;
+                plt_bytes.push(0xe9);
+                plt_bytes.extend_from_slice(&displacement.to_le_bytes());
+                plt_bytes.extend_from_slice(&[0x66, 0x90]);
+                lazy_address
+            } else {
+                append_rip_indirect(
+                    &mut plt_bytes,
+                    [0xff, 0x25],
+                    stub_address,
+                    slot_address,
+                    name,
+                )?;
+                plt_bytes.push(0x68);
+                plt_bytes.extend_from_slice(&relocation_index.to_le_bytes());
+
+                let jump_next_ip = stub_address.checked_add(PLT_ENTRY_SIZE).ok_or(
+                    RelocatedSectionError::PltDisplacementOutOfRange {
+                        name: name.clone(),
+                        stub_address,
+                        slot_address: plt_layout.address,
+                    },
+                )?;
+                let displacement = i128::from(plt_layout.address) - i128::from(jump_next_ip);
+                let displacement = i32::try_from(displacement).map_err(|_| {
+                    RelocatedSectionError::PltDisplacementOutOfRange {
+                        name: name.clone(),
+                        stub_address,
+                        slot_address: plt_layout.address,
+                    }
+                })?;
+                plt_bytes.push(0xe9);
+                plt_bytes.extend_from_slice(&displacement.to_le_bytes());
+
                 stub_address
                     .checked_add(6)
                     .ok_or(RelocatedSectionError::PltSizeOverflow {
                         symbol_count: external_plt_symbols.len(),
-                    })?;
+                    })?
+            };
             plt_got_bytes.extend_from_slice(&lazy_target.to_le_bytes());
         }
 

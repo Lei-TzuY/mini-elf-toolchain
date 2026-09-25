@@ -45,7 +45,7 @@ const NO_WHOLE_ARCHIVE: &str = "--no-whole-archive";
 const PUSH_STATE: &str = "--push-state";
 const POP_STATE: &str = "--pop-state";
 
-const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--dynamic-pie|--shared] [-Bsymbolic] [--dynamic-linker <path>|--dynamic-linker=<path>] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [-init <symbol>|-init=<symbol>] [-fini <symbol>|-fini=<symbol>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
+const USAGE: &str = "usage: mini-elf-toolchain validate <input>\n       mini-elf-toolchain validate-rel <input>...\n       mini-elf-toolchain partial <-o <output>|--output=<output>> [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive>...\n       mini-elf-toolchain link <-o <output>|--output=<output>> [--pie|--dynamic-pie|--shared] [-Bsymbolic] [-z ibtplt] [--dynamic-linker <path>|--dynamic-linker=<path>] [--soname <name>|--soname=<name>] [--runpath <path>|--runpath=<path>] [-init <symbol>|-init=<symbol>] [-fini <symbol>|-fini=<symbol>] [--version-script <file>|--version-script=<file>] [--needed <soname>|--needed=<soname>|--needed-from <provider>|--needed-from=<provider>] [--map <map-file>|-Map <map-file>|-Map=<map-file>] [--entry <symbol>] [--image-base <address>] [-u <symbol>|-u<symbol>|--undefined <symbol>] [-L <dir>|-L<dir>] <input|-l<name>|-l <name>|--start-group|--end-group|--whole-archive|--no-whole-archive|--push-state|--pop-state>...";
 
 fn main() -> ExitCode {
     match run(env::args_os().skip(1)) {
@@ -180,6 +180,12 @@ where
         if symbolic && !shared_object {
             return Err(CliError::Usage(
                 "-Bsymbolic is only supported with --shared".to_owned(),
+            ));
+        }
+        let (ibt_plt, raw_remaining) = extract_ibt_plt_argument(&raw_remaining)?;
+        if ibt_plt && !shared_object {
+            return Err(CliError::Usage(
+                "-z ibtplt is only supported with --shared".to_owned(),
             ));
         }
         let soname = extract_soname_argument(&raw_remaining)?;
@@ -356,6 +362,7 @@ where
             fini_symbol: lifecycle_hooks.fini.as_deref(),
             shared_object,
             symbolic,
+            ibt_plt,
             soname: soname.soname.as_deref(),
             runpath: runpath.runpath.as_deref(),
             needed: &needed.specs,
@@ -618,6 +625,31 @@ fn extract_symbolic_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsStri
     }
 
     Ok((symbolic, remaining))
+}
+
+fn extract_ibt_plt_argument(arguments: &[OsString]) -> Result<(bool, Vec<OsString>), CliError> {
+    let mut ibt_plt = false;
+    let mut remaining = Vec::with_capacity(arguments.len());
+    let mut index = 0usize;
+
+    while index < arguments.len() {
+        if arguments[index] == "-z"
+            && arguments
+                .get(index + 1)
+                .is_some_and(|keyword| keyword == "ibtplt")
+        {
+            if ibt_plt {
+                return Err(CliError::Usage("duplicate -z ibtplt option".to_owned()));
+            }
+            ibt_plt = true;
+            index += 2;
+            continue;
+        }
+        remaining.push(arguments[index].clone());
+        index += 1;
+    }
+
+    Ok((ibt_plt, remaining))
 }
 
 struct SonameArguments {
@@ -1089,6 +1121,7 @@ struct LinkFilesOptions<'a> {
     fini_symbol: Option<&'a [u8]>,
     shared_object: bool,
     symbolic: bool,
+    ibt_plt: bool,
     soname: Option<&'a [u8]>,
     runpath: Option<&'a [u8]>,
     needed: &'a [NeededSpec],
@@ -1497,6 +1530,7 @@ fn link_files(
                     checked_version_providers: &needed.checked_version_providers,
                     version_script: options.version_script,
                     symbolic: options.symbolic,
+                    ibt_plt: options.ibt_plt,
                     init_symbol: options.init_symbol,
                     fini_symbol: options.fini_symbol,
                 },
