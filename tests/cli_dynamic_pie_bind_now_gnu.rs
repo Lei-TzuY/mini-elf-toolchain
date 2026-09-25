@@ -141,12 +141,7 @@ _start:
 "#
 }
 
-fn link_mini(
-    dir: &Path,
-    object: &Path,
-    provider: &Path,
-    interpreter: &Path,
-) -> PathBuf {
+fn link_mini(dir: &Path, object: &Path, provider: &Path, interpreter: &Path) -> PathBuf {
     let output = dir.join("mini-pie");
     let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
