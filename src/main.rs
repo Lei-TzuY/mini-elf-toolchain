@@ -7,6 +7,9 @@ use mini_elf_toolchain::forced_undefined::{
 };
 use mini_elf_toolchain::image_base::{extract_image_base_argument, ImageBaseArgumentError};
 use mini_elf_toolchain::input_object::RelocatableObject;
+use mini_elf_toolchain::link_symbols::resolve_validated_objects;
+use mini_elf_toolchain::linker_input::LinkerInputObject;
+use mini_elf_toolchain::load_segments::SHF_EXECINSTR;
 use mini_elf_toolchain::library_search::{
     resolve_shared_library_arguments, resolve_static_library_arguments, LibrarySearchError,
 };
@@ -38,6 +41,7 @@ use std::process::ExitCode;
 const DEFAULT_PAGE_ALIGNMENT: u64 = 0x1000;
 const DEFAULT_ENTRY_SYMBOL: &str = "_start";
 const DEFAULT_DYNAMIC_INTERPRETER: &[u8] = b"/lib64/ld-linux-x86-64.so.2";
+const STB_GLOBAL: u8 = 1;
 const STT_FUNC: u8 = 2;
 const STT_GNU_IFUNC: u8 = 10;
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
@@ -1639,6 +1643,9 @@ fn link_files(
         options.forced_undefined,
     )
     .map_err(|error| ordered_input_failure(&expanded_paths, error))?;
+    if options.crt_startup {
+        validate_crt_startup_main(&prepared.objects)?;
+    }
     if options.shared_object || options.dynamic_pie {
         let imports = if options.dynamic_pie {
             dynamic_pie_import_requirements(&prepared.objects)
@@ -1753,6 +1760,46 @@ fn link_files(
         linked.image.bytes.len(),
         linked.image.entry_address
     ))
+}
+
+fn validate_crt_startup_main(objects: &[LinkerInputObject<'_>]) -> Result<(), CliError> {
+    let validated = objects
+        .iter()
+        .map(LinkerInputObject::validated_object)
+        .collect::<Vec<_>>();
+    let definitions = resolve_validated_objects(&validated).map_err(|error| {
+        CliError::Failure(format!("CRT startup symbol resolution failed: {error}"))
+    })?;
+    let main = definitions.get(b"main".as_slice()).ok_or_else(|| {
+        CliError::Failure(
+            "CRT startup requires a defined global STT_FUNC symbol named main".to_owned(),
+        )
+    })?;
+    let binding = main.symbol.info >> 4;
+    let symbol_type = main.symbol.info & 0x0f;
+    if binding != STB_GLOBAL || symbol_type != STT_FUNC {
+        return Err(CliError::Failure(format!(
+            "CRT startup main must be a global STT_FUNC definition, got binding {binding} type {symbol_type}"
+        )));
+    }
+    let input = objects.get(main.object_index).ok_or_else(|| {
+        CliError::Failure("CRT startup main resolves outside the linked input set".to_owned())
+    })?;
+    let section = input
+        .object
+        .sections
+        .get(usize::from(main.symbol.section_index))
+        .ok_or_else(|| {
+            CliError::Failure(
+                "CRT startup main must be backed by an ordinary executable section".to_owned(),
+            )
+        })?;
+    if section.flags & SHF_EXECINSTR == 0 {
+        return Err(CliError::Failure(
+            "CRT startup main must be backed by an executable section".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn load_link_input_sequence(paths: &[OsString]) -> Result<LoadedLinkInputSequence, CliError> {
