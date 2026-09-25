@@ -336,7 +336,7 @@ fn dynamic_pie_default_policy_remains_rela_only() {
 fn pack_relative_relocs_rejects_unsupported_modes_and_duplicates_before_io() {
     let binary = env!("CARGO_BIN_EXE_mini-elf-toolchain");
 
-    for mode in [None, Some("--shared"), Some("--pie")] {
+    for mode in [None, Some("--pie")] {
         let output = PathBuf::from("/tmp/mini-elf-toolchain-relr-should-not-exist");
         let mut command = Command::new(binary);
         command.args(["link", "-o"]).arg(&output);
@@ -351,7 +351,9 @@ fn pack_relative_relocs_rejects_unsupported_modes_and_duplicates_before_io() {
         assert!(result.stdout.is_empty());
         let stderr = String::from_utf8_lossy(&result.stderr);
         assert!(
-            stderr.contains("-z pack-relative-relocs is only supported with --dynamic-pie"),
+            stderr.contains(
+                "-z pack-relative-relocs is only supported with --shared or --dynamic-pie"
+            ),
             "{stderr}"
         );
         assert!(!output.exists());
