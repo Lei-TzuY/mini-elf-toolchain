@@ -1561,6 +1561,7 @@ pub fn link_shared_object_with_needed_soname_runpath_versions_and_checked_provid
             ibt_plt: false,
             gnu_property_ibt: false,
             bind_now: false,
+            pack_relative_relocs: false,
             init_symbol: None,
             fini_symbol: None,
         },
@@ -1579,6 +1580,7 @@ pub struct SharedObjectLinkOptions<'a> {
     pub ibt_plt: bool,
     pub gnu_property_ibt: bool,
     pub bind_now: bool,
+    pub pack_relative_relocs: bool,
     pub init_symbol: Option<&'a [u8]>,
     pub fini_symbol: Option<&'a [u8]>,
 }
@@ -1598,7 +1600,6 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
             init_symbol: options.init_symbol,
             fini_symbol: options.fini_symbol,
             copy_relocations: None,
-            pack_relative_relocs: false,
         },
     )
 }
@@ -1640,6 +1641,7 @@ pub fn link_dynamic_pie_with_checked_providers(
                 ibt_plt: options.ibt_plt,
                 gnu_property_ibt: options.gnu_property_ibt,
                 bind_now: options.bind_now,
+                pack_relative_relocs: options.pack_relative_relocs,
                 init_symbol: None,
                 fini_symbol: None,
             },
@@ -1648,7 +1650,6 @@ pub fn link_dynamic_pie_with_checked_providers(
             init_symbol: options.init_symbol,
             fini_symbol: options.fini_symbol,
             copy_relocations: Some(options.copy_relocations),
-            pack_relative_relocs: options.pack_relative_relocs,
         },
     )
 }
@@ -1661,7 +1662,6 @@ struct LoaderImageLinkOptions<'a> {
     init_symbol: Option<&'a [u8]>,
     fini_symbol: Option<&'a [u8]>,
     copy_relocations: Option<&'a [DynamicPieCopyRelocation]>,
-    pack_relative_relocs: bool,
 }
 
 fn link_loader_image(
@@ -1676,7 +1676,6 @@ fn link_loader_image(
         init_symbol,
         fini_symbol,
         copy_relocations,
-        pack_relative_relocs,
     } = options;
     let SharedObjectLinkOptions {
         needed,
@@ -1689,6 +1688,7 @@ fn link_loader_image(
         ibt_plt,
         gnu_property_ibt,
         bind_now,
+        pack_relative_relocs,
         init_symbol: _,
         fini_symbol: _,
     } = shared;
@@ -2044,7 +2044,7 @@ fn link_loader_image(
     }
     let import_dynamic_indices = import_dynamic_symbol_indices(exports.len(), &dynamic_imports)?;
     let (mut rela_bytes, relative_relocation_count, relr_bytes) =
-        if dynamic_pie && pack_relative_relocs {
+        if pack_relative_relocs {
             let relr = build_relr_relocation_table(
                 &relocation_inputs,
                 &mut relocated,
