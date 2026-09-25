@@ -113,6 +113,17 @@ int main(int argc, char **argv) {
         String::from_utf8_lossy(&compiled.stderr)
     );
 
+    let input_symbols = readelf(&object, &["-sW"]);
+    assert!(
+        input_symbols.lines().any(|line| {
+            line.contains("NOTYPE")
+                && line.contains("GLOBAL")
+                && line.contains("UND")
+                && line.ends_with(" puts")
+        }),
+        "compiler fixture must expose puts as an undefined GLOBAL STT_NOTYPE symbol:\n{input_symbols}"
+    );
+
     let input_relocations = readelf(&object, &["-rW"]);
     assert!(
         input_relocations
