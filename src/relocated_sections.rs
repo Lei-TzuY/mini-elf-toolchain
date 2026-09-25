@@ -13,7 +13,7 @@ use crate::linker_input::{LinkerInputError, LinkerInputObject, LinkerInputSectio
 use crate::load_segments::{SHF_ALLOC, SHF_EXECINSTR, SHF_WRITE};
 use crate::object_symbols::named_symbols_from_table;
 use crate::permission_layout::{
-    layout_sections_by_permissions, PermissionLayoutError, PermissionLayoutInput,
+    layout_sections_by_permissions_with_tail, PermissionLayoutError, PermissionLayoutInput,
 };
 use crate::relocations::Elf64RelaTable;
 use crate::resolve::{COMMON_OBJECT_INDEX, COMMON_SECTION_INDEX, SHN_UNDEF, STB_GLOBAL, STB_WEAK};
@@ -41,6 +41,10 @@ const PLT_GOT_RESERVED_SIZE: u64 = 24;
 const PLT_GOT_ENTRY_SIZE: u64 = 8;
 const PLT_GOT_ALIGNMENT: u64 = 8;
 const STT_TLS: u8 = 6;
+const BIND_NOW_POST_TLS_ORDER: [(usize, u16); 2] = [
+    (PLT_GOT_OBJECT_INDEX, PLT_GOT_SECTION_INDEX),
+    (GOT_OBJECT_INDEX, GOT_SECTION_INDEX),
+];
 
 #[derive(Debug, Clone, Copy)]
 pub struct TlsSyntheticRequests<'a> {
@@ -81,6 +85,7 @@ struct RelocationLayoutPolicy<'a> {
     got: SyntheticGotLayoutPolicy,
     plt_got_page_alignment: Option<u64>,
     tail_order: &'a [(usize, u16)],
+    post_tls_tail: &'a [(usize, u16)],
     ibt_plt: bool,
 }
 
@@ -89,6 +94,7 @@ impl RelocationLayoutPolicy<'_> {
         got: SyntheticGotLayoutPolicy::INLINE,
         plt_got_page_alignment: None,
         tail_order: &[],
+        post_tls_tail: &[],
         ibt_plt: false,
     };
 }
@@ -402,6 +408,7 @@ pub(crate) fn relocate_allocatable_sections_with_metadata_isolated_got(
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::isolated(page_alignment, false),
             plt_got_page_alignment: None,
+            post_tls_tail: &[],
             tail_order: &[],
             ibt_plt: false,
         },
@@ -521,6 +528,7 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::INLINE,
             plt_got_page_alignment: None,
+            post_tls_tail: &[],
             tail_order: layout_tail_order,
             ibt_plt: false,
         },
@@ -546,6 +554,7 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::INLINE,
             plt_got_page_alignment: None,
+            post_tls_tail: &[],
             tail_order: layout_tail_order,
             ibt_plt: true,
         },
@@ -571,6 +580,7 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
         RelocationLayoutPolicy {
             got: SyntheticGotLayoutPolicy::isolated(page_alignment, true),
             plt_got_page_alignment: None,
+            post_tls_tail: &[],
             tail_order: layout_tail_order,
             ibt_plt: false,
         },
@@ -597,6 +607,7 @@ pub(crate) fn relocate_allocatable_sections_with_external_got_plt_and_tls_reques
             got: SyntheticGotLayoutPolicy::isolated(page_alignment, true),
             plt_got_page_alignment: Some(page_alignment),
             tail_order: layout.tail_order,
+            post_tls_tail: &BIND_NOW_POST_TLS_ORDER,
             ibt_plt: layout.ibt_plt,
         },
     )
@@ -647,6 +658,7 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
     let got_layout_policy = layout_policy.got;
     let plt_got_page_alignment = layout_policy.plt_got_page_alignment;
     let layout_tail_order = layout_policy.tail_order;
+    let post_tls_tail = layout_policy.post_tls_tail;
     let ibt_plt = layout_policy.ibt_plt;
     let tls_gd_symbols = tls.tls_gd_symbols;
     let tls_ld_enabled = tls.tls_ld_enabled;
@@ -854,8 +866,13 @@ fn relocate_allocatable_sections_with_external_got_plt_and_tls_requests_impl(
         });
     }
 
-    let layout = layout_sections_by_permissions(start_address, page_alignment, layout_inputs)
-        .map_err(RelocatedSectionError::Layout)?;
+    let layout = layout_sections_by_permissions_with_tail(
+        start_address,
+        page_alignment,
+        layout_inputs,
+        post_tls_tail,
+    )
+    .map_err(RelocatedSectionError::Layout)?;
     let got_region = if got_size != 0 && got_layout_policy.page_alignment.is_some() {
         let got_layout = matching_layout(&layout, GOT_OBJECT_INDEX, GOT_SECTION_INDEX).ok_or(
             RelocatedSectionError::MissingLayout {
