@@ -24,8 +24,8 @@ use mini_elf_toolchain::shared_object::{
     SharedObjectLinkOptions, SharedVersionRequirement,
 };
 use mini_elf_toolchain::static_link::{
-    link_static_executable_with_map, link_static_position_independent_executable_with_map_and_options,
-    StaticPieLinkOptions,
+    link_static_executable_with_map,
+    link_static_position_independent_executable_with_map_and_options, StaticPieLinkOptions,
 };
 use mini_elf_toolchain::version_script::VersionScript;
 use std::env;
