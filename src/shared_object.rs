@@ -4633,7 +4633,6 @@ fn put_i64(bytes: &mut [u8], offset: usize, value: i64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
-
 #[cfg(test)]
 mod lifecycle_priority_tests {
     use super::*;
