@@ -1354,6 +1354,7 @@ fn dynamic_pie_tls_reference_supported(symbol_info: u8, symbol_other: u8, symbol
 struct InputValidationOptions {
     allow_copy_relocations: bool,
     allow_explicit_ifunc_imports: bool,
+    allow_defined_pc32: bool,
     tls_policy: LoaderTlsPolicy,
 }
 
@@ -1432,6 +1433,7 @@ pub fn shared_import_requirements(
         InputValidationOptions {
             allow_copy_relocations: false,
             allow_explicit_ifunc_imports: false,
+            allow_defined_pc32: false,
             tls_policy: LoaderTlsPolicy::SharedObject,
         },
     )
@@ -1445,6 +1447,7 @@ pub fn dynamic_pie_import_requirements(
         InputValidationOptions {
             allow_copy_relocations: true,
             allow_explicit_ifunc_imports: true,
+            allow_defined_pc32: true,
             tls_policy: LoaderTlsPolicy::DynamicPieGdIeDescLd,
         },
     )
@@ -1722,6 +1725,7 @@ fn link_loader_image(
         InputValidationOptions {
             allow_copy_relocations: dynamic_pie,
             allow_explicit_ifunc_imports: dynamic_pie,
+            allow_defined_pc32: dynamic_pie,
             tls_policy: if dynamic_pie {
                 LoaderTlsPolicy::DynamicPieGdIeDescLd
             } else {
@@ -3020,6 +3024,20 @@ fn validate_inputs(
                                 flags: target.flags,
                             });
                         }
+                        continue;
+                    }
+                    let image_backed_definition = definitions
+                        .get(symbol.name)
+                        .is_some_and(|definition| definition.symbol.section_index != SHN_ABS);
+                    if options.allow_defined_pc32
+                        && relocation.relocation_type == R_X86_64_PC32
+                        && target.flags & SHF_ALLOC != 0
+                        && image_backed_definition
+                        && (supported_definition || protected_definition)
+                    {
+                        // Definitions in the main executable are locally bound
+                        // for its own direct PC-relative references. Keep shared
+                        // objects on the existing interposition-aware path.
                         continue;
                     }
                     if relocation.relocation_type == R_X86_64_64
