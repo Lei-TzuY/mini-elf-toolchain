@@ -34,6 +34,7 @@ pub mod rela_apply;
 pub mod relocated_sections;
 pub mod relocations;
 pub mod resolve;
+mod section_names;
 pub mod shared_object;
 pub mod static_link;
 mod static_link_core;

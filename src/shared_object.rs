@@ -1,4 +1,4 @@
-use core::fmt;
+use core::{cmp::Ordering, fmt};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::executable_writer::{
@@ -24,9 +24,11 @@ use crate::program_headers::{
 use crate::relocated_sections::{
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests,
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests_isolated_got,
+    relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order,
     RelocatedSectionError, RelocatedSectionImage, TlsSyntheticRequests,
 };
 use crate::resolve::{SymbolDefinition, SHN_UNDEF, STB_GLOBAL, STB_LOCAL, STB_WEAK};
+use crate::section_names::section_name;
 use crate::symbol_addresses::{final_symbol_address, FinalSymbolAddressError, SHN_ABS};
 use crate::synthetic_ids::{
     DYNAMIC_COPY_OBJECT_INDEX, DYNAMIC_INTERP_OBJECT_INDEX, SHARED_METADATA_OBJECT_INDEX,
@@ -354,6 +356,11 @@ pub enum SharedObjectError {
     TlsInput(LinkerInputError),
     TlsLayout(StaticTlsLayoutError),
     TlsProgramHeader(StaticTlsProgramHeaderError),
+    DynamicLifecycleSectionName {
+        object_index: usize,
+        section_index: u16,
+        reason: String,
+    },
     DynamicLifecycleSectionFlags {
         object_index: usize,
         section_index: u16,
@@ -833,6 +840,14 @@ impl fmt::Display for SharedObjectError {
             Self::TlsProgramHeader(source) => {
                 write!(f, "cannot emit shared PT_TLS program header: {source}")
             },
+            Self::DynamicLifecycleSectionName {
+                object_index,
+                section_index,
+                reason,
+            } => write!(
+                f,
+                "dynamic PIE lifecycle section name at object {object_index} section {section_index} is malformed: {reason}"
+            ),
             Self::DynamicLifecycleSectionFlags {
                 object_index,
                 section_index,
@@ -1052,6 +1067,7 @@ impl std::error::Error for SharedObjectError {
             | Self::DynamicExecutableTlsModelUnsupported { .. }
             | Self::TlsImportUnsupported { .. }
             | Self::TlsSymbolOutsideImage { .. }
+            | Self::DynamicLifecycleSectionName { .. }
             | Self::DynamicLifecycleSectionFlags { .. }
             | Self::DynamicLifecycleSectionSize { .. }
             | Self::DynamicLifecycleMissingRelocatedSection { .. }
@@ -1357,6 +1373,15 @@ struct DynamicLifecycle {
     fini_hook: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DynamicLifecyclePriority {
+    Suffixed {
+        numeric: Option<u32>,
+        suffix: Vec<u8>,
+    },
+    Base,
+}
+
 #[derive(Debug)]
 struct DynamicMetadata {
     bytes: Vec<u8>,
@@ -1657,6 +1682,11 @@ fn link_loader_image(
     masked_sites.extend(imports.tls_ld_dtpoff_sites.iter().copied());
     masked_sites.extend(imports.tls_desc_call_sites.iter().copied());
     let relocation_inputs = mask_deferred_relocations(inputs, &masked_sites);
+    let lifecycle_layout_tail_order = if dynamic_pie {
+        dynamic_pie_lifecycle_layout_tail_order(inputs)?
+    } else {
+        Vec::new()
+    };
 
     // Dynamic-executable partial RELRO: isolate the synthetic GOT whenever
     // it carries ordinary or TLS loader state. The loader applies GLOB_DAT,
@@ -1683,6 +1713,17 @@ fn link_loader_image(
             &imports.got_symbols,
             &imports.plt_symbols,
             tls_requests,
+            &lifecycle_layout_tail_order,
+        )
+    } else if dynamic_pie {
+        relocate_allocatable_sections_with_external_got_plt_and_tls_requests_with_layout_tail_order(
+            &relocation_inputs,
+            page_alignment,
+            page_alignment,
+            &imports.got_symbols,
+            &imports.plt_symbols,
+            tls_requests,
+            &lifecycle_layout_tail_order,
         )
     } else {
         relocate_allocatable_sections_with_external_got_plt_and_tls_requests(
@@ -3963,6 +4004,110 @@ fn build_version_metadata(
     })
 }
 
+fn dynamic_pie_lifecycle_layout_tail_order(
+    inputs: &[LinkerInputObject<'_>],
+) -> Result<Vec<(usize, u16)>, SharedObjectError> {
+    let mut order = Vec::new();
+
+    for (section_type, prefix) in [
+        (SHT_INIT_ARRAY, b".init_array".as_slice()),
+        (SHT_FINI_ARRAY, b".fini_array".as_slice()),
+    ] {
+        let mut entries = Vec::new();
+        for input in inputs {
+            for (section_index, section) in input.object.sections.iter().enumerate() {
+                if section.section_type != section_type || section.size == 0 {
+                    continue;
+                }
+                let section_index = u16::try_from(section_index)
+                    .map_err(|_| SharedObjectError::MetadataTooLarge)?;
+                let name = section_name(input, section_index).map_err(|source| {
+                    SharedObjectError::DynamicLifecycleSectionName {
+                        object_index: input.object_index,
+                        section_index,
+                        reason: source.to_string(),
+                    }
+                })?;
+                entries.push((
+                    dynamic_lifecycle_priority(name, prefix),
+                    (input.object_index, section_index),
+                ));
+            }
+        }
+        entries.sort_by(|(left, _), (right, _)| compare_dynamic_lifecycle_priority(left, right));
+        order.extend(entries.into_iter().map(|(_, identity)| identity));
+    }
+
+    Ok(order)
+}
+
+fn dynamic_lifecycle_priority(name: Option<&[u8]>, prefix: &[u8]) -> DynamicLifecyclePriority {
+    let Some(name) = name else {
+        return DynamicLifecyclePriority::Base;
+    };
+    if name == prefix {
+        return DynamicLifecyclePriority::Base;
+    }
+    let Some(suffix) = name
+        .strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix(b"."))
+    else {
+        return DynamicLifecyclePriority::Base;
+    };
+
+    DynamicLifecyclePriority::Suffixed {
+        numeric: parse_dynamic_lifecycle_numeric_priority(suffix),
+        suffix: suffix.to_vec(),
+    }
+}
+
+fn parse_dynamic_lifecycle_numeric_priority(suffix: &[u8]) -> Option<u32> {
+    if suffix.is_empty() || !suffix.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+
+    let mut value = 0u64;
+    for byte in suffix {
+        value = value
+            .checked_mul(10)?
+            .checked_add(u64::from(*byte - b'0'))?;
+        if value > i32::MAX as u64 {
+            return None;
+        }
+    }
+    Some(value as u32)
+}
+
+fn compare_dynamic_lifecycle_priority(
+    left: &DynamicLifecyclePriority,
+    right: &DynamicLifecyclePriority,
+) -> Ordering {
+    match (left, right) {
+        (
+            DynamicLifecyclePriority::Suffixed {
+                numeric: left_numeric,
+                suffix: left_suffix,
+            },
+            DynamicLifecyclePriority::Suffixed {
+                numeric: right_numeric,
+                suffix: right_suffix,
+            },
+        ) => match (left_numeric, right_numeric) {
+            (Some(left), Some(right)) => {
+                left.cmp(right).then_with(|| left_suffix.cmp(right_suffix))
+            }
+            _ => left_suffix.cmp(right_suffix),
+        },
+        (DynamicLifecyclePriority::Suffixed { .. }, DynamicLifecyclePriority::Base) => {
+            Ordering::Less
+        }
+        (DynamicLifecyclePriority::Base, DynamicLifecyclePriority::Suffixed { .. }) => {
+            Ordering::Greater
+        }
+        (DynamicLifecyclePriority::Base, DynamicLifecyclePriority::Base) => Ordering::Equal,
+    }
+}
+
 fn collect_dynamic_pie_lifecycle(
     inputs: &[LinkerInputObject<'_>],
     relocated: &[RelocatedSectionImage],
@@ -4506,4 +4651,94 @@ fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
 
 fn put_i64(bytes: &mut [u8], offset: usize, value: i64) {
     bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+#[cfg(test)]
+mod lifecycle_priority_tests {
+    use super::*;
+
+    fn key(name: &[u8]) -> DynamicLifecyclePriority {
+        dynamic_lifecycle_priority(Some(name), b".init_array")
+    }
+
+    fn sorted_names(names: &[&[u8]]) -> Vec<Vec<u8>> {
+        let mut entries = names
+            .iter()
+            .map(|name| (key(name), name.to_vec()))
+            .collect::<Vec<_>>();
+        entries.sort_by(|(left, _), (right, _)| compare_dynamic_lifecycle_priority(left, right));
+        entries.into_iter().map(|(_, name)| name).collect()
+    }
+
+    #[test]
+    fn lifecycle_priority_matches_gnu_numeric_and_name_fallback_order() {
+        assert_eq!(
+            sorted_names(&[
+                b".init_array",
+                b".init_array.zed",
+                b".init_array.99999",
+                b".init_array.100",
+                b".init_array.bar",
+                b".init_array.099foo",
+            ]),
+            vec![
+                b".init_array.099foo".to_vec(),
+                b".init_array.100".to_vec(),
+                b".init_array.99999".to_vec(),
+                b".init_array.bar".to_vec(),
+                b".init_array.zed".to_vec(),
+                b".init_array".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn lifecycle_priority_equal_numeric_values_fall_back_to_section_name() {
+        assert_eq!(
+            sorted_names(&[
+                b".init_array.100",
+                b".init_array.0100",
+                b".init_array.000100",
+            ]),
+            vec![
+                b".init_array.000100".to_vec(),
+                b".init_array.0100".to_vec(),
+                b".init_array.100".to_vec(),
+            ]
+        );
+    }
+
+    #[test]
+    fn lifecycle_priority_identical_names_preserve_link_order() {
+        let mut priorities = vec![
+            (key(b".init_array.100"), 0usize),
+            (key(b".init_array.100"), 1usize),
+            (key(b".init_array.100"), 2usize),
+        ];
+        priorities.sort_by(|(left, _), (right, _)| compare_dynamic_lifecycle_priority(left, right));
+
+        assert_eq!(
+            priorities
+                .into_iter()
+                .map(|(_, link_order)| link_order)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn lifecycle_priority_rejects_numeric_values_above_gnu_int_range() {
+        assert_eq!(
+            parse_dynamic_lifecycle_numeric_priority(b"2147483647"),
+            Some(2_147_483_647)
+        );
+        assert_eq!(
+            parse_dynamic_lifecycle_numeric_priority(b"2147483648"),
+            None
+        );
+        assert_eq!(
+            parse_dynamic_lifecycle_numeric_priority(b"999999999999999999999999999999"),
+            None
+        );
+    }
 }
