@@ -140,6 +140,12 @@ fn shared_init_fini_arrays_match_gnu_priority_and_glibc_lifecycle() {
 .extern record_event
 .type record_event,@function
 
+.globl lifecycle_anchor
+.type lifecycle_anchor,@function
+lifecycle_anchor:
+    ret
+.size lifecycle_anchor, .-lifecycle_anchor
+
 .local init_200
 .type init_200,@function
 init_200:
@@ -271,6 +277,12 @@ fn shared_preinit_array_is_rejected_like_gnu() {
         "preinit",
         r#".section .note.GNU-stack,"",@progbits
 .text
+.globl preinit_anchor
+.type preinit_anchor,@function
+preinit_anchor:
+    ret
+.size preinit_anchor, .-preinit_anchor
+
 .local preinit_hook
 .type preinit_hook,@function
 preinit_hook:
