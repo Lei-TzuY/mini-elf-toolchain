@@ -36,6 +36,7 @@ use std::process::ExitCode;
 
 const DEFAULT_PAGE_ALIGNMENT: u64 = 0x1000;
 const DEFAULT_ENTRY_SYMBOL: &str = "_start";
+const DEFAULT_DYNAMIC_INTERPRETER: &[u8] = b"/lib64/ld-linux-x86-64.so.2";
 const STT_FUNC: u8 = 2;
 const STT_GNU_IFUNC: u8 = 10;
 const ARCHIVE_MAGIC: &[u8] = b"!<arch>\n";
@@ -160,11 +161,6 @@ where
         let dynamic_linker = extract_dynamic_linker_argument(&raw_remaining)?;
         let lifecycle_hooks = extract_dynamic_lifecycle_hook_arguments(&dynamic_linker.arguments)?;
         let raw_remaining = lifecycle_hooks.arguments;
-        if dynamic_pie && dynamic_linker.path.is_none() {
-            return Err(CliError::Usage(
-                "--dynamic-pie requires --dynamic-linker <absolute-path>".to_owned(),
-            ));
-        }
         if !dynamic_pie && dynamic_linker.path.is_some() {
             return Err(CliError::Usage(
                 "--dynamic-linker is only supported with --dynamic-pie".to_owned(),
@@ -1606,9 +1602,9 @@ fn link_files(
         let needed =
             resolve_needed_dependencies(options.needed, &imports, options.provider_search_paths)?;
         let image = if options.dynamic_pie {
-            let interpreter = options.dynamic_linker.ok_or_else(|| {
-                CliError::Usage("--dynamic-pie requires --dynamic-linker".to_owned())
-            })?;
+            let interpreter = options
+                .dynamic_linker
+                .unwrap_or(DEFAULT_DYNAMIC_INTERPRETER);
             link_dynamic_pie_with_checked_providers(
                 &prepared.objects,
                 DEFAULT_PAGE_ALIGNMENT,
