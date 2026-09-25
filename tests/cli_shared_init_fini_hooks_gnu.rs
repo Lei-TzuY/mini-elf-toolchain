@@ -314,13 +314,19 @@ hook_anchor:
         .output()
         .unwrap();
 
-    assert!(!output.status.success(), "missing shared DT_INIT hook was accepted");
+    assert!(
+        !output.status.success(),
+        "missing shared DT_INIT hook was accepted"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("DT_INIT") && stderr.contains("missing_init"),
         "{stderr}"
     );
-    assert!(!shared.exists(), "failed hook validation left an output image");
+    assert!(
+        !shared.exists(),
+        "failed hook validation left an output image"
+    );
 
     let _ = fs::remove_dir_all(dir);
 }
