@@ -4015,9 +4015,7 @@ fn build_version_metadata(
     })
 }
 
-fn reject_shared_preinit_arrays(
-    inputs: &[LinkerInputObject<'_>],
-) -> Result<(), SharedObjectError> {
+fn reject_shared_preinit_arrays(inputs: &[LinkerInputObject<'_>]) -> Result<(), SharedObjectError> {
     for input in inputs {
         for (section_index, section) in input.object.sections.iter().enumerate() {
             if section.section_type != SHT_PREINIT_ARRAY {
@@ -4108,10 +4106,7 @@ fn parse_lifecycle_numeric_priority(suffix: &[u8]) -> Option<u32> {
     Some(value as u32)
 }
 
-fn compare_lifecycle_priority(
-    left: &LifecyclePriority,
-    right: &LifecyclePriority,
-) -> Ordering {
+fn compare_lifecycle_priority(left: &LifecyclePriority, right: &LifecyclePriority) -> Ordering {
     match (left, right) {
         (
             LifecyclePriority::Suffixed {
@@ -4128,12 +4123,8 @@ fn compare_lifecycle_priority(
             }
             _ => left_suffix.cmp(right_suffix),
         },
-        (LifecyclePriority::Suffixed { .. }, LifecyclePriority::Base) => {
-            Ordering::Less
-        }
-        (LifecyclePriority::Base, LifecyclePriority::Suffixed { .. }) => {
-            Ordering::Greater
-        }
+        (LifecyclePriority::Suffixed { .. }, LifecyclePriority::Base) => Ordering::Less,
+        (LifecyclePriority::Base, LifecyclePriority::Suffixed { .. }) => Ordering::Greater,
         (LifecyclePriority::Base, LifecyclePriority::Base) => Ordering::Equal,
     }
 }
@@ -4777,10 +4768,7 @@ mod lifecycle_priority_tests {
             parse_lifecycle_numeric_priority(b"2147483647"),
             Some(2_147_483_647)
         );
-        assert_eq!(
-            parse_lifecycle_numeric_priority(b"2147483648"),
-            None
-        );
+        assert_eq!(parse_lifecycle_numeric_priority(b"2147483648"), None);
         assert_eq!(
             parse_lifecycle_numeric_priority(b"999999999999999999999999999999"),
             None
