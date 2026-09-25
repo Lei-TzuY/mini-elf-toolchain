@@ -147,6 +147,15 @@ pub enum PieRuntimeError {
         size: u64,
         page_alignment: u64,
     },
+    RelrTargetUnaligned {
+        address: u64,
+    },
+    RelrDuplicateTarget {
+        address: u64,
+    },
+    RelrTargetNotWritableFileData {
+        address: u64,
+    },
     TrampolineBranchOutOfRange,
 }
 
@@ -277,6 +286,18 @@ impl fmt::Display for PieRuntimeError {
             } => write!(
                 f,
                 "PIE RELRO range {address:#x}..+{size:#x} must be non-empty and start on page alignment {page_alignment:#x}"
+            ),
+            Self::RelrTargetUnaligned { address } => write!(
+                f,
+                "RELR relocation target {address:#x} is not aligned to an ELF64 word"
+            ),
+            Self::RelrDuplicateTarget { address } => write!(
+                f,
+                "RELR relocation target {address:#x} appears more than once"
+            ),
+            Self::RelrTargetNotWritableFileData { address } => write!(
+                f,
+                "RELR relocation target {address:#x} is not backed by eight writable file bytes"
             ),
             Self::TrampolineBranchOutOfRange => {
                 write!(f, "PIE self-relocation trampoline branch exceeds rel8 range")
@@ -427,6 +448,119 @@ pub(crate) fn build_relative_relocation_table(
     debug_assert_eq!(relative_count, relocations.len());
     let bytes = serialize_runtime_relocations(&relocations)?;
     Ok((bytes, relative_count))
+}
+
+pub(crate) fn build_relr_relocation_table(
+    inputs: &[LinkerInputObject<'_>],
+    sections: &mut [RelocatedSectionImage],
+    definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
+    got_entries: &BTreeMap<Vec<u8>, u64>,
+) -> Result<Vec<u8>, PieRuntimeError> {
+    let (mut relocations, relative_count) =
+        collect_runtime_relocations(inputs, sections, definitions, got_entries, false)?;
+    debug_assert_eq!(relative_count, relocations.len());
+    debug_assert!(relocations
+        .iter()
+        .all(|relocation| relocation.kind == R_X86_64_RELATIVE));
+
+    relocations.sort_by_key(|relocation| relocation.offset);
+    let mut previous = None;
+    for relocation in &relocations {
+        if relocation.offset & 7 != 0 {
+            return Err(PieRuntimeError::RelrTargetUnaligned {
+                address: relocation.offset,
+            });
+        }
+        if previous == Some(relocation.offset) {
+            return Err(PieRuntimeError::RelrDuplicateTarget {
+                address: relocation.offset,
+            });
+        }
+        previous = Some(relocation.offset);
+
+        let target = sections
+            .iter_mut()
+            .find_map(|section| {
+                if section.flags & SHF_WRITE == 0 {
+                    return None;
+                }
+                let relative = relocation.offset.checked_sub(section.address)?;
+                let start = usize::try_from(relative).ok()?;
+                let end = start.checked_add(8)?;
+                (end <= section.bytes.len()).then_some((section, start..end))
+            })
+            .ok_or(PieRuntimeError::RelrTargetNotWritableFileData {
+                address: relocation.offset,
+            })?;
+        target.0.bytes[target.1].copy_from_slice(&relocation.addend.to_le_bytes());
+    }
+
+    serialize_relr_offsets(&relocations)
+}
+
+fn serialize_relr_offsets(
+    relocations: &[RuntimeRelocation],
+) -> Result<Vec<u8>, PieRuntimeError> {
+    let mut entries = Vec::<u64>::new();
+    let mut index = 0usize;
+
+    while index < relocations.len() {
+        let direct = relocations[index].offset;
+        entries.push(direct);
+        index += 1;
+        let mut bitmap_base = direct
+            .checked_add(8)
+            .ok_or(PieRuntimeError::RuntimeAddressOverflow)?;
+
+        while index < relocations.len() {
+            let next = relocations[index].offset;
+            if next < bitmap_base {
+                return Err(PieRuntimeError::RelrDuplicateTarget { address: next });
+            }
+            let delta = next - bitmap_base;
+            if delta >= 63 * 8 {
+                break;
+            }
+
+            let mut bitmap = 1u64;
+            while index < relocations.len() {
+                let address = relocations[index].offset;
+                if address < bitmap_base {
+                    return Err(PieRuntimeError::RelrDuplicateTarget { address });
+                }
+                let delta = address - bitmap_base;
+                if delta >= 63 * 8 {
+                    break;
+                }
+                if delta & 7 != 0 {
+                    return Err(PieRuntimeError::RelrTargetUnaligned { address });
+                }
+                let slot = delta / 8;
+                bitmap |= 1u64 << (slot + 1);
+                index += 1;
+            }
+            entries.push(bitmap);
+            if index == relocations.len() {
+                break;
+            }
+            bitmap_base = bitmap_base
+                .checked_add(63 * 8)
+                .ok_or(PieRuntimeError::RuntimeAddressOverflow)?;
+            if relocations[index].offset - bitmap_base >= 63 * 8 {
+                break;
+            }
+        }
+    }
+
+    let capacity = entries
+        .len()
+        .checked_mul(8)
+        .ok_or(PieRuntimeError::RuntimeSectionTooLarge)?;
+    let mut bytes = Vec::with_capacity(capacity);
+    for entry in entries {
+        bytes.extend_from_slice(&entry.to_le_bytes());
+    }
+    Ok(bytes)
 }
 
 fn build_pie_runtime_relocation_table(
