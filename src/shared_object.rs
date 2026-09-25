@@ -14,7 +14,9 @@ use crate::load_segments::{
 };
 use crate::object_symbols::{named_symbols_from_table, ObjectSymbolError};
 use crate::permission_layout::SHF_TLS;
-use crate::pie_runtime::{build_relative_relocation_table, PieRuntimeError};
+use crate::pie_runtime::{
+    build_relative_relocation_table, build_relr_relocation_table, PieRuntimeError,
+};
 use crate::program_headers::{
     map_runtime_program_headers_with_dynamic,
     map_runtime_program_headers_with_dynamic_and_gnu_property,
@@ -68,6 +70,7 @@ const GNU_PROPERTY_NOTE_SIZE: u64 = 32;
 const ELF64_SYMBOL_SIZE: usize = 24;
 const ELF64_DYNAMIC_SIZE: usize = 16;
 const ELF64_RELA_SIZE: usize = 24;
+const ELF64_RELR_SIZE: usize = 8;
 const R_X86_64_NONE: u32 = 0;
 const STT_NOTYPE: u8 = 0;
 const STT_OBJECT: u8 = 1;
@@ -108,6 +111,9 @@ const DT_RELASZ: i64 = 8;
 const DT_RELAENT: i64 = 9;
 const DT_VERSYM: i64 = 0x6fff_fff0;
 const DT_RELACOUNT: i64 = 0x6fff_fff9;
+const DT_RELRSZ: i64 = 35;
+const DT_RELR: i64 = 36;
+const DT_RELRENT: i64 = 37;
 const DT_VERDEF: i64 = 0x6fff_fffc;
 const DT_VERDEFNUM: i64 = 0x6fff_fffd;
 const DT_VERNEED: i64 = 0x6fff_fffe;
@@ -1381,6 +1387,7 @@ struct DynamicNames<'a> {
 struct DynamicRelocations<'a> {
     rela: &'a [u8],
     relative_count: usize,
+    relr: &'a [u8],
     jmprel: &'a [u8],
     plt_got_address: Option<u64>,
     flags: u64,
@@ -1591,6 +1598,7 @@ pub fn link_shared_object_with_version_script_and_checked_providers(
             init_symbol: options.init_symbol,
             fini_symbol: options.fini_symbol,
             copy_relocations: None,
+            pack_relative_relocs: false,
         },
     )
 }
@@ -1608,6 +1616,7 @@ pub struct DynamicPieLinkOptions<'a> {
     pub ibt_plt: bool,
     pub gnu_property_ibt: bool,
     pub bind_now: bool,
+    pub pack_relative_relocs: bool,
     pub copy_relocations: &'a [DynamicPieCopyRelocation],
 }
 
@@ -1639,6 +1648,7 @@ pub fn link_dynamic_pie_with_checked_providers(
             init_symbol: options.init_symbol,
             fini_symbol: options.fini_symbol,
             copy_relocations: Some(options.copy_relocations),
+            pack_relative_relocs: options.pack_relative_relocs,
         },
     )
 }
@@ -1651,6 +1661,7 @@ struct LoaderImageLinkOptions<'a> {
     init_symbol: Option<&'a [u8]>,
     fini_symbol: Option<&'a [u8]>,
     copy_relocations: Option<&'a [DynamicPieCopyRelocation]>,
+    pack_relative_relocs: bool,
 }
 
 fn link_loader_image(
@@ -1665,6 +1676,7 @@ fn link_loader_image(
         init_symbol,
         fini_symbol,
         copy_relocations,
+        pack_relative_relocs,
     } = options;
     let SharedObjectLinkOptions {
         needed,
@@ -2031,13 +2043,26 @@ fn link_loader_image(
         dynamic_imports.remove(name);
     }
     let import_dynamic_indices = import_dynamic_symbol_indices(exports.len(), &dynamic_imports)?;
-    let (mut rela_bytes, relative_relocation_count) = build_relative_relocation_table(
-        &relocation_inputs,
-        &relocated,
-        &resolved.definitions,
-        &relative_got_entries,
-    )
-    .map_err(SharedObjectError::RuntimeRelative)?;
+    let (mut rela_bytes, relative_relocation_count, relr_bytes) =
+        if dynamic_pie && pack_relative_relocs {
+            let relr = build_relr_relocation_table(
+                &relocation_inputs,
+                &mut relocated,
+                &resolved.definitions,
+                &relative_got_entries,
+            )
+            .map_err(SharedObjectError::RuntimeRelative)?;
+            (Vec::new(), 0, relr)
+        } else {
+            let (rela, relative_count) = build_relative_relocation_table(
+                &relocation_inputs,
+                &relocated,
+                &resolved.definitions,
+                &relative_got_entries,
+            )
+            .map_err(SharedObjectError::RuntimeRelative)?;
+            (rela, relative_count, Vec::new())
+        };
     let copy_rela_bytes = build_copy_relocation_table(
         &imports.copy_symbols,
         &copy_addresses,
@@ -2176,6 +2201,7 @@ fn link_loader_image(
         DynamicRelocations {
             rela: &rela_bytes,
             relative_count: relative_relocation_count,
+            relr: &relr_bytes,
             jmprel: &jmprel_bytes,
             plt_got_address: plt_got_base,
             flags: (if !dynamic_pie && !imports.tls_ie_symbols.is_empty() {
@@ -4504,6 +4530,7 @@ fn build_dynamic_metadata(
 ) -> Result<DynamicMetadata, SharedObjectError> {
     let rela_bytes = relocations.rela;
     let relative_relocation_count = relocations.relative_count;
+    let relr_bytes = relocations.relr;
     let jmprel_bytes = relocations.jmprel;
     let plt_got_address = relocations.plt_got_address;
     let dynamic_flags = relocations.flags;
@@ -4646,9 +4673,16 @@ fn build_dynamic_metadata(
         8,
     )
     .ok_or(SharedObjectError::MetadataTooLarge)?;
-    let rela_offset = align_up_usize(
+    let relr_offset = align_up_usize(
         verneed_offset
             .checked_add(version_metadata.verneed.len())
+            .ok_or(SharedObjectError::MetadataTooLarge)?,
+        8,
+    )
+    .ok_or(SharedObjectError::MetadataTooLarge)?;
+    let rela_offset = align_up_usize(
+        relr_offset
+            .checked_add(relr_bytes.len())
             .ok_or(SharedObjectError::MetadataTooLarge)?,
         8,
     )
@@ -4669,6 +4703,7 @@ fn build_dynamic_metadata(
     .ok_or(SharedObjectError::MetadataTooLarge)?;
 
     let has_relocations = !rela_bytes.is_empty();
+    let has_relr = !relr_bytes.is_empty();
     let has_plt_relocations = !jmprel_bytes.is_empty();
     let symbolic = dynamic_flags & DF_SYMBOLIC != 0;
     debug_assert_eq!(has_plt_relocations, plt_got_address.is_some());
@@ -4678,6 +4713,7 @@ fn build_dynamic_metadata(
         .and_then(|count| count.checked_add(usize::from(runpath_offset.is_some())))
         .and_then(|count| count.checked_add(if has_relocations { 3 } else { 0 }))
         .and_then(|count| count.checked_add(usize::from(relative_relocation_count != 0)))
+        .and_then(|count| count.checked_add(if has_relr { 3 } else { 0 }))
         .and_then(|count| count.checked_add(if has_plt_relocations { 4 } else { 0 }))
         .and_then(|count| {
             count.checked_add(usize::from(
@@ -4773,6 +4809,7 @@ fn build_dynamic_metadata(
         .copy_from_slice(&version_metadata.verdef);
     bytes[verneed_offset..verneed_offset + version_metadata.verneed.len()]
         .copy_from_slice(&version_metadata.verneed);
+    bytes[relr_offset..relr_offset + relr_bytes.len()].copy_from_slice(relr_bytes);
     bytes[rela_offset..rela_offset + rela_bytes.len()].copy_from_slice(rela_bytes);
     bytes[jmprel_offset..jmprel_offset + jmprel_bytes.len()].copy_from_slice(jmprel_bytes);
 
@@ -4822,6 +4859,17 @@ fn build_dynamic_metadata(
                 u64::try_from(version_metadata.provider_count)
                     .map_err(|_| SharedObjectError::MetadataTooLarge)?,
             ),
+        ]);
+    }
+    if has_relr {
+        debug_assert_eq!(relr_bytes.len() % ELF64_RELR_SIZE, 0);
+        let relr_address = checked_metadata_address(base_address, relr_offset)?;
+        let relr_size =
+            u64::try_from(relr_bytes.len()).map_err(|_| SharedObjectError::MetadataTooLarge)?;
+        entries.extend_from_slice(&[
+            (DT_RELR, relr_address),
+            (DT_RELRSZ, relr_size),
+            (DT_RELRENT, ELF64_RELR_SIZE as u64),
         ]);
     }
     if has_relocations {
