@@ -16,7 +16,10 @@ fn have_tools() -> bool {
     command_reports("as", "GNU assembler")
         && command_reports("ld", "GNU ld")
         && command_reports("readelf", "GNU readelf")
-        && Command::new("cc").arg("--version").output().is_ok_and(|out| out.status.success())
+        && Command::new("cc")
+            .arg("--version")
+            .output()
+            .is_ok_and(|out| out.status.success())
 }
 
 fn gnu_ld_supports_pack_relative_relocs() -> bool {
