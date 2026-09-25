@@ -336,12 +336,7 @@ _start:
 }
 
 
-fn link_mini_hooks(
-    dir: &Path,
-    object: &Path,
-    interpreter: &Path,
-    libc: &Path,
-) -> PathBuf {
+fn link_mini_hooks(dir: &Path, object: &Path, interpreter: &Path, libc: &Path) -> PathBuf {
     let output = dir.join("mini-lifecycle-hooks");
     let linked = Command::new(env!("CARGO_BIN_EXE_mini-elf-toolchain"))
         .args(["link", "-o"])
@@ -363,12 +358,7 @@ fn link_mini_hooks(
     output
 }
 
-fn link_gnu_hooks(
-    dir: &Path,
-    object: &Path,
-    interpreter: &Path,
-    libc: &Path,
-) -> PathBuf {
+fn link_gnu_hooks(dir: &Path, object: &Path, interpreter: &Path, libc: &Path) -> PathBuf {
     let output = dir.join("gnu-lifecycle-hooks");
     let linked = Command::new("ld")
         .arg("-pie")
@@ -599,7 +589,10 @@ _start:
             .arg(&object)
             .output()
             .unwrap();
-        assert!(!linked.status.success(), "{symbol} was unexpectedly accepted");
+        assert!(
+            !linked.status.success(),
+            "{symbol} was unexpectedly accepted"
+        );
         assert!(
             String::from_utf8_lossy(&linked.stderr).contains(expected),
             "{}",
