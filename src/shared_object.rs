@@ -3991,12 +3991,13 @@ fn resolve_dynamic_lifecycle_hook(
     let Some(name) = name else {
         return Ok(None);
     };
-    let definition = definitions
-        .get(name)
-        .ok_or_else(|| SharedObjectError::DynamicLifecycleHookMissing {
-            hook,
-            name: name.to_vec(),
-        })?;
+    let definition =
+        definitions
+            .get(name)
+            .ok_or_else(|| SharedObjectError::DynamicLifecycleHookMissing {
+                hook,
+                name: name.to_vec(),
+            })?;
     let symbol_type = definition.symbol.info & 0x0f;
     if symbol_type != STT_FUNC {
         return Err(SharedObjectError::DynamicLifecycleHookType {
