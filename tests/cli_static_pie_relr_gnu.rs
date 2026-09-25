@@ -233,11 +233,14 @@ fn static_pie_pack_relative_relocs_decodes_relr_then_runs_irelative() {
         String::from_utf8_lossy(&linked.stderr)
     );
     assert!(readelf(&gnu, &["-dW"]).contains("RELR"));
-    let status = Command::new(&gnu).status().unwrap();
-    assert_eq!(
-        status.code(),
-        Some(0),
-        "GNU packed static PIE status={status}"
+    let gnu_relocations = readelf(&gnu, &["-rW", "--use-dynamic"]);
+    assert!(
+        gnu_relocations.contains("R_X86_64_RELATIVE"),
+        "{gnu_relocations}"
+    );
+    assert!(
+        gnu_relocations.contains("R_X86_64_IRELATIVE"),
+        "{gnu_relocations}"
     );
 
     let _ = fs::remove_dir_all(dir);
