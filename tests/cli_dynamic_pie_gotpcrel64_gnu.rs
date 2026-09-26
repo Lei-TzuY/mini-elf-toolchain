@@ -132,7 +132,7 @@ got_disp: .quad provider_value@GOTPCREL
         .output()
         .unwrap();
     assert!(r.status.success(), "{}", String::from_utf8_lossy(&r.stderr));
-    let relocs = readelf(&mini, &["-rW"]);
+    let relocs = readelf(&mini, &["-rW", "--use-dynamic"]);
     assert!(
         relocs
             .lines()
