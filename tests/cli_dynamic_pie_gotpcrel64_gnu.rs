@@ -4,9 +4,12 @@ use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn have_tools() -> bool {
-    ["as", "ld", "readelf"]
-        .into_iter()
-        .all(|p| Command::new(p).arg("--version").output().is_ok_and(|o| o.status.success()))
+    ["as", "ld", "readelf"].into_iter().all(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    })
 }
 
 fn dynamic_linker() -> Option<PathBuf> {
