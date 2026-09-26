@@ -51,7 +51,7 @@ use crate::version_script::{VersionScript, VersionScriptMatchError};
 use crate::x86_64_relocations::{
     apply_relocation, RelocationApplyError, R_X86_64_64, R_X86_64_COPY, R_X86_64_DTPMOD64,
     R_X86_64_DTPOFF32, R_X86_64_DTPOFF64, R_X86_64_GLOB_DAT, R_X86_64_GOTPC32_TLSDESC,
-    R_X86_64_GOTPCREL, R_X86_64_GOTPCRELX, R_X86_64_GOTTPOFF, R_X86_64_JUMP_SLOT, R_X86_64_PC32,
+    R_X86_64_GOTPCREL, R_X86_64_GOTPCREL64, R_X86_64_GOTPCRELX, R_X86_64_GOTTPOFF, R_X86_64_JUMP_SLOT, R_X86_64_PC32,
     R_X86_64_PLT32, R_X86_64_REX_GOTPCRELX, R_X86_64_TLSDESC, R_X86_64_TLSDESC_CALL,
     R_X86_64_TLSGD, R_X86_64_TLSLD, R_X86_64_TPOFF64,
 };
@@ -1354,7 +1354,7 @@ fn dynamic_pie_tls_reference_supported(symbol_info: u8, symbol_other: u8, symbol
 fn is_loader_gotpcrel_type(relocation_type: u32) -> bool {
     matches!(
         relocation_type,
-        R_X86_64_GOTPCREL | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
+        R_X86_64_GOTPCREL | R_X86_64_GOTPCREL64 | R_X86_64_GOTPCRELX | R_X86_64_REX_GOTPCRELX
     )
 }
 
