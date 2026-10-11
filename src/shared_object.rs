@@ -5,6 +5,7 @@ use crate::executable_writer::{
     write_elf64_x86_64_position_independent_segments, write_elf64_x86_64_shared_segments,
     ExecutableImage, ExecutableWriteError, LoadSegmentInput,
 };
+use crate::gnu_stack::{gnu_stack_policy, GnuStackPolicyError};
 use crate::layout::LaidOutSection;
 use crate::link_symbols::{resolve_validated_objects_with_common, LinkSymbolError};
 use crate::linker_input::{LinkerInputError, LinkerInputObject};
@@ -18,15 +19,9 @@ use crate::pie_runtime::{
     build_relative_relocation_table, build_relr_relocation_table, PieRuntimeError,
 };
 use crate::program_headers::{
-    map_runtime_program_headers_with_dynamic,
-    map_runtime_program_headers_with_dynamic_and_gnu_property,
-    map_runtime_program_headers_with_dynamic_and_interp,
-    map_runtime_program_headers_with_dynamic_and_relros,
-    map_runtime_program_headers_with_dynamic_interp_and_gnu_property,
-    map_runtime_program_headers_with_dynamic_interp_and_relros,
-    map_runtime_program_headers_with_dynamic_interp_relros_and_gnu_property,
-    map_runtime_program_headers_with_dynamic_relros_and_gnu_property, RuntimeDynamicProgramHeader,
+    map_runtime_program_headers_with_metadata, RuntimeDynamicProgramHeader,
     RuntimeGnuPropertyProgramHeader, RuntimeInterpProgramHeader, RuntimeRelroProgramHeader,
+    RuntimeStackProgramHeader,
 };
 use crate::relocated_sections::{
     relocate_allocatable_sections_with_external_got_plt_and_tls_requests,
@@ -477,6 +472,7 @@ pub enum SharedObjectError {
     MetadataTooLarge,
     LoadSegments(LoadSegmentBuildError),
     Write(ExecutableWriteError),
+    GnuStack(GnuStackPolicyError),
 }
 
 impl fmt::Display for SharedObjectError {
@@ -1033,6 +1029,7 @@ impl fmt::Display for SharedObjectError {
                 write!(f, "cannot build shared object load segments: {source}")
             }
             Self::Write(source) => write!(f, "cannot emit shared object: {source}"),
+            Self::GnuStack(source) => write!(f, "cannot determine loader image stack policy: {source}"),
         }
     }
 }
@@ -1047,6 +1044,7 @@ impl std::error::Error for SharedObjectError {
             Self::SymbolAddress(source) => Some(source),
             Self::LoadSegments(source) => Some(source),
             Self::Write(source) => Some(source),
+            Self::GnuStack(source) => Some(source),
             Self::TlsInput(source) => Some(source),
             Self::TlsLayout(source) => Some(source),
             Self::TlsProgramHeader(source) => Some(source),
@@ -1707,6 +1705,7 @@ fn link_loader_image(
         fini_symbol: _,
     } = shared;
     let ibt_plt = ibt_plt || gnu_property_ibt;
+    let stack = gnu_stack_policy(inputs).map_err(SharedObjectError::GnuStack)?;
     validate_needed_names(needed)?;
     validate_needed_names(checked_version_providers)?;
     validate_soname(soname)?;
@@ -2431,83 +2430,31 @@ fn link_loader_image(
         });
     }
 
-    if let Some(address) = gnu_property_address {
-        let property = RuntimeGnuPropertyProgramHeader {
+    let interp = match (interpreter_address, interpreter) {
+        (Some(address), Some(path)) => Some(RuntimeInterpProgramHeader {
             address,
-            size: GNU_PROPERTY_NOTE_SIZE,
-        };
-        return match (interpreter_address, interpreter) {
-            (Some(interp_address), Some(path)) if !relro.is_empty() => {
-                map_runtime_program_headers_with_dynamic_interp_relros_and_gnu_property(
-                    image,
-                    dynamic,
-                    RuntimeInterpProgramHeader {
-                        address: interp_address,
-                        size: u64::try_from(path.len() + 1)
-                            .map_err(|_| SharedObjectError::MetadataTooLarge)?,
-                    },
-                    &relro,
-                    property,
-                )
-                .map_err(SharedObjectError::Write)
-            }
-            (Some(interp_address), Some(path)) => {
-                map_runtime_program_headers_with_dynamic_interp_and_gnu_property(
-                    image,
-                    dynamic,
-                    RuntimeInterpProgramHeader {
-                        address: interp_address,
-                        size: u64::try_from(path.len() + 1)
-                            .map_err(|_| SharedObjectError::MetadataTooLarge)?,
-                    },
-                    property,
-                )
-                .map_err(SharedObjectError::Write)
-            }
-            (None, None) if relro.is_empty() => {
-                map_runtime_program_headers_with_dynamic_and_gnu_property(image, dynamic, property)
-                    .map_err(SharedObjectError::Write)
-            }
-            (None, None) => map_runtime_program_headers_with_dynamic_relros_and_gnu_property(
-                image, dynamic, &relro, property,
-            )
-            .map_err(SharedObjectError::Write),
-            _ => unreachable!("interpreter payload and path are constructed together"),
-        };
-    }
-
-    match (interpreter_address, interpreter) {
-        (Some(address), Some(path)) if !relro.is_empty() => {
-            map_runtime_program_headers_with_dynamic_interp_and_relros(
-                image,
-                dynamic,
-                RuntimeInterpProgramHeader {
-                    address,
-                    size: u64::try_from(path.len() + 1)
-                        .map_err(|_| SharedObjectError::MetadataTooLarge)?,
-                },
-                &relro,
-            )
-            .map_err(SharedObjectError::Write)
-        }
-        (Some(address), Some(path)) => map_runtime_program_headers_with_dynamic_and_interp(
-            image,
-            dynamic,
-            RuntimeInterpProgramHeader {
-                address,
-                size: u64::try_from(path.len() + 1)
-                    .map_err(|_| SharedObjectError::MetadataTooLarge)?,
-            },
-        )
-        .map_err(SharedObjectError::Write),
-        (None, None) if !relro.is_empty() => {
-            map_runtime_program_headers_with_dynamic_and_relros(image, dynamic, &relro)
-                .map_err(SharedObjectError::Write)
-        }
-        (None, None) => map_runtime_program_headers_with_dynamic(image, dynamic)
-            .map_err(SharedObjectError::Write),
+            size: u64::try_from(path.len() + 1).map_err(|_| SharedObjectError::MetadataTooLarge)?,
+        }),
+        (None, None) => None,
         _ => unreachable!("interpreter payload and path are constructed together"),
-    }
+    };
+    let property = gnu_property_address.map(|address| RuntimeGnuPropertyProgramHeader {
+        address,
+        size: GNU_PROPERTY_NOTE_SIZE,
+    });
+    // Loader images must not implicitly ask dlopen to make the process stack
+    // executable. Only an explicit executable input note requests PF_X.
+    map_runtime_program_headers_with_metadata(
+        image,
+        Some(dynamic),
+        interp,
+        Some(RuntimeStackProgramHeader {
+            executable: stack.is_some_and(|policy| policy.executable),
+        }),
+        &relro,
+        property,
+    )
+    .map_err(SharedObjectError::Write)
 }
 
 fn tls_export_value(
@@ -2615,11 +2562,63 @@ fn validate_runpath(runpath: Option<&[u8]>) -> Result<(), SharedObjectError> {
     Ok(())
 }
 
+fn plt_function_import_names(
+    inputs: &[LinkerInputObject<'_>],
+    definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
+) -> Result<BTreeSet<Vec<u8>>, SharedObjectError> {
+    let mut names = BTreeSet::new();
+    for input in inputs {
+        for table in &input.object.rela_tables {
+            let target = &input.object.sections[usize::from(table.target_section_index)];
+            if target.flags & SHF_ALLOC == 0 || target.flags & SHF_EXECINSTR == 0 {
+                continue;
+            }
+            let symbol_table = input
+                .object
+                .symbol_tables
+                .iter()
+                .find(|candidate| candidate.section_index == table.symbol_table_index)
+                .expect("validated RELA table references validated symbol table");
+            let symbols = named_symbols_from_table(
+                input.file,
+                &input.object.sections,
+                symbol_table,
+                input.object_index,
+            )
+            .map_err(|source| SharedObjectError::ObjectSymbols {
+                object_index: input.object_index,
+                source,
+            })?;
+            for relocation in &table.relocations {
+                let symbol = &symbols[relocation.symbol_index as usize];
+                if relocation.relocation_type == R_X86_64_PLT32
+                    && symbol.symbol.section_index == SHN_UNDEF
+                    && !definitions.contains_key(symbol.name)
+                    && symbol.symbol.info >> 4 == STB_GLOBAL
+                    && matches!(symbol.symbol.info & 0x0f, STT_NOTYPE | STT_FUNC)
+                    && symbol.symbol.other == 0
+                    && !symbol.name.is_empty()
+                {
+                    names.insert(symbol.name.to_vec());
+                }
+            }
+        }
+    }
+    Ok(names)
+}
+
 fn validate_inputs(
     inputs: &[LinkerInputObject<'_>],
     definitions: &BTreeMap<Vec<u8>, SymbolDefinition>,
     options: InputValidationOptions,
 ) -> Result<ImportPlan, SharedObjectError> {
+    // Collect call evidence across all objects before visiting address references;
+    // compiler-emitted STT_NOTYPE function imports may appear on either plane first.
+    let plt_function_imports = if options.allow_plt_notype_function_imports {
+        plt_function_import_names(inputs, definitions)?
+    } else {
+        BTreeSet::new()
+    };
     let mut import_symbols = BTreeMap::<Vec<u8>, ImportSymbol>::new();
     let mut symbol_relocation_sites = BTreeSet::<DynamicSymbolRelocationSite>::new();
     let mut got_symbols = BTreeSet::<Vec<u8>>::new();
@@ -3175,7 +3174,11 @@ fn validate_inputs(
                         symbol_type,
                     });
                 }
+                let address_notype_function = symbol_type == STT_NOTYPE
+                    && (is_got_import || relocation.relocation_type == R_X86_64_64)
+                    && plt_function_imports.contains(symbol.name);
                 let supported_nonplt_import_type = matches!(symbol_type, STT_OBJECT | STT_FUNC)
+                    || address_notype_function
                     || (options.allow_explicit_ifunc_imports && symbol_type == STT_GNU_IFUNC);
                 if !is_plt_import && !supported_nonplt_import_type {
                     return Err(SharedObjectError::ExternalImportUnsupportedType {
@@ -3201,7 +3204,7 @@ fn validate_inputs(
                     });
                 }
                 noncopy_import_symbols.insert(symbol.name.to_vec());
-                let import_info = if plt_notype_function {
+                let import_info = if plt_notype_function || address_notype_function {
                     (binding << 4) | STT_FUNC
                 } else {
                     symbol.symbol.info
@@ -3327,7 +3330,7 @@ fn validate_inputs(
                         symbol.name == b"__tls_get_addr" && symbol_type == STT_NOTYPE;
                     let explicit_ifunc_import =
                         options.allow_explicit_ifunc_imports && symbol_type == STT_GNU_IFUNC;
-                    let normalized_plt_notype = symbol_type == STT_NOTYPE
+                    let normalized_notype_function = symbol_type == STT_NOTYPE
                         && import_symbols
                             .get(symbol.name)
                             .is_some_and(|import| import.info & 0x0f == STT_FUNC);
@@ -3335,11 +3338,11 @@ fn validate_inputs(
                         && (binding == STB_GLOBAL
                             || (binding == STB_WEAK
                                 && (matches!(symbol_type, STT_OBJECT | STT_FUNC)
-                                    || normalized_plt_notype)))
+                                    || normalized_notype_function)))
                         && (matches!(symbol_type, STT_OBJECT | STT_FUNC)
                             || explicit_ifunc_import
                             || tls_get_addr_notype
-                            || normalized_plt_notype);
+                            || normalized_notype_function);
                     if !supported_import {
                         return Err(SharedObjectError::UndefinedNonlocal {
                             object_index: input.object_index,
