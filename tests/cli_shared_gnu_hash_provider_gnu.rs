@@ -5,6 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 const PT_LOAD: u32 = 1;
 const PT_DYNAMIC: u32 = 2;
+const PT_GNU_STACK: u32 = 0x6474_e551;
 const DT_NULL: i64 = 0;
 const DT_GNU_HASH: i64 = 0x6fff_fef5;
 
@@ -81,6 +82,8 @@ provider_function:
     movabs $0x8877665544332211, %rax
     ret
 .size provider_function, .-provider_function
+
+.section .note.GNU-stack,"",@progbits
 "#,
     );
     let provider = dir.join("libgnuprovider.so");
@@ -113,6 +116,23 @@ provider_function:
     assert!(
         !dynamic.contains("(HASH)"),
         "fixture must be GNU-hash-only: {dynamic}"
+    );
+
+    // Keep the GNU provider loadable without requesting an executable stack.
+    let bytes = fs::read(&provider).unwrap();
+    let phoff = read_u64(&bytes, 32) as usize;
+    let phentsize = read_u16(&bytes, 54) as usize;
+    let phnum = read_u16(&bytes, 56) as usize;
+    let stack_flags: Vec<_> = (0..phnum)
+        .filter_map(|index| {
+            let offset = phoff + index * phentsize;
+            (read_u32(&bytes, offset) == PT_GNU_STACK).then(|| read_u32(&bytes, offset + 4))
+        })
+        .collect();
+    assert_eq!(
+        stack_flags,
+        [6],
+        "GNU provider fixture must declare one read/write, non-executable stack"
     );
 
     provider
