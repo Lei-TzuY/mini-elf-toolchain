@@ -46,21 +46,21 @@ pub(crate) struct RuntimeGnuPropertyProgramHeader {
 pub(crate) fn map_runtime_program_headers(
     image: ExecutableImage,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, None, None, None, &[], None)
+    map_runtime_program_headers_with_metadata(image, None, None, None, &[], None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_stack(
     image: ExecutableImage,
     stack: RuntimeStackProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, None, None, Some(stack), &[], None)
+    map_runtime_program_headers_with_metadata(image, None, None, Some(stack), &[], None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic(
     image: ExecutableImage,
     dynamic: RuntimeDynamicProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, None, &[], None)
+    map_runtime_program_headers_with_metadata(image, Some(dynamic), None, None, &[], None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_and_stack(
@@ -68,7 +68,7 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_stack(
     dynamic: RuntimeDynamicProgramHeader,
     stack: RuntimeStackProgramHeader,
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, Some(stack), &[], None)
+    map_runtime_program_headers_with_metadata(image, Some(dynamic), None, Some(stack), &[], None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_and_relros(
@@ -76,7 +76,7 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_and_relros(
     dynamic: RuntimeDynamicProgramHeader,
     relro: &[RuntimeRelroProgramHeader],
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, None, relro, None)
+    map_runtime_program_headers_with_metadata(image, Some(dynamic), None, None, relro, None)
 }
 
 pub(crate) fn map_runtime_program_headers_with_dynamic_stack_and_relros(
@@ -85,77 +85,10 @@ pub(crate) fn map_runtime_program_headers_with_dynamic_stack_and_relros(
     stack: RuntimeStackProgramHeader,
     relro: &[RuntimeRelroProgramHeader],
 ) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, Some(stack), relro, None)
+    map_runtime_program_headers_with_metadata(image, Some(dynamic), None, Some(stack), relro, None)
 }
 
-pub(crate) fn map_runtime_program_headers_with_dynamic_and_interp(
-    image: ExecutableImage,
-    dynamic: RuntimeDynamicProgramHeader,
-    interp: RuntimeInterpProgramHeader,
-) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), Some(interp), None, &[], None)
-}
-
-pub(crate) fn map_runtime_program_headers_with_dynamic_interp_and_relros(
-    image: ExecutableImage,
-    dynamic: RuntimeDynamicProgramHeader,
-    interp: RuntimeInterpProgramHeader,
-    relro: &[RuntimeRelroProgramHeader],
-) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), Some(interp), None, relro, None)
-}
-
-pub(crate) fn map_runtime_program_headers_with_dynamic_and_gnu_property(
-    image: ExecutableImage,
-    dynamic: RuntimeDynamicProgramHeader,
-    property: RuntimeGnuPropertyProgramHeader,
-) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, None, &[], Some(property))
-}
-
-pub(crate) fn map_runtime_program_headers_with_dynamic_interp_and_gnu_property(
-    image: ExecutableImage,
-    dynamic: RuntimeDynamicProgramHeader,
-    interp: RuntimeInterpProgramHeader,
-    property: RuntimeGnuPropertyProgramHeader,
-) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(
-        image,
-        Some(dynamic),
-        Some(interp),
-        None,
-        &[],
-        Some(property),
-    )
-}
-
-pub(crate) fn map_runtime_program_headers_with_dynamic_interp_relros_and_gnu_property(
-    image: ExecutableImage,
-    dynamic: RuntimeDynamicProgramHeader,
-    interp: RuntimeInterpProgramHeader,
-    relro: &[RuntimeRelroProgramHeader],
-    property: RuntimeGnuPropertyProgramHeader,
-) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(
-        image,
-        Some(dynamic),
-        Some(interp),
-        None,
-        relro,
-        Some(property),
-    )
-}
-
-pub(crate) fn map_runtime_program_headers_with_dynamic_relros_and_gnu_property(
-    image: ExecutableImage,
-    dynamic: RuntimeDynamicProgramHeader,
-    relro: &[RuntimeRelroProgramHeader],
-    property: RuntimeGnuPropertyProgramHeader,
-) -> Result<ExecutableImage, ExecutableWriteError> {
-    map_runtime_program_headers_impl(image, Some(dynamic), None, None, relro, Some(property))
-}
-
-fn map_runtime_program_headers_impl(
+pub(crate) fn map_runtime_program_headers_with_metadata(
     mut image: ExecutableImage,
     dynamic: Option<RuntimeDynamicProgramHeader>,
     interp: Option<RuntimeInterpProgramHeader>,

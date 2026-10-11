@@ -43,7 +43,11 @@ fn temp_dir(label: &str) -> PathBuf {
 fn assemble(dir: &Path, stem: &str, source: &str) -> PathBuf {
     let asm = dir.join(format!("{stem}.s"));
     let object = dir.join(format!("{stem}.o"));
-    fs::write(&asm, source).unwrap();
+    fs::write(
+        &asm,
+        format!("{source}\n.section .note.GNU-stack,\"\",@progbits\n"),
+    )
+    .unwrap();
     let output = Command::new("as")
         .args(["--64", "-o"])
         .arg(&object)
